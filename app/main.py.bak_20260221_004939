@@ -1,0 +1,21 @@
+# app/main.py
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# repo root
+ROOT = Path(__file__).resolve().parents[1]
+
+# Add repo root so `import app.*` works
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# Add src so `import careeragent.*` works
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from app.ui.dashboard import main
+
+main()

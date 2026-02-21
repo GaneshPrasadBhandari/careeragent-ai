@@ -1,0 +1,9 @@
+{
+  "submission_id": "de9ef008cbc94279ae7f6a02dcf0d37a",
+  "job_id": "job_001",
+  "channel": "simulated",
+  "resume_artifact_key": "extracted_resume_attempt_1",
+  "cover_letter_artifact_key": "cover_letter_job_001_attempt_2",
+  "submitted_at_utc": "2026-02-20T21:56:31Z",
+  "notes": "Simulated submit for integration test."
+}

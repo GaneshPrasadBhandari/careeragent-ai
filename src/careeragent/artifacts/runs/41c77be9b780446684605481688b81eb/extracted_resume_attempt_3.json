@@ -1,0 +1,19 @@
+{
+  "name": "Ganesh - Principal AI Solution Architect",
+  "contact": {
+    "email": null,
+    "phone": null,
+    "location": null,
+    "links": []
+  },
+  "skills": [
+    "python",
+    "pytorch",
+    "azure",
+    "langchain",
+    "rag",
+    "llm"
+  ],
+  "experience": [],
+  "education": []
+}

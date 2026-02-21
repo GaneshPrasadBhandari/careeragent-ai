@@ -1,0 +1,25 @@
+{
+  "job_id": "job_001",
+  "role_title": "Data Scientist (Insurance AI)",
+  "company": "InsureTech",
+  "country_code": "US",
+  "required_skills": [
+    "python",
+    "sql",
+    "mlflow",
+    "aws",
+    "model evaluation",
+    "fastapi",
+    "docker"
+  ],
+  "preferred_skills": [
+    "kubernetes",
+    "rag",
+    "langgraph"
+  ],
+  "responsibilities": [],
+  "requirements_text": "python sql aws mlflow model evaluation fastapi docker production ml",
+  "applicants_count": 250,
+  "market_competition_factor": null,
+  "meta": {}
+}

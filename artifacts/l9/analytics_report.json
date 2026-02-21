@@ -1,0 +1,21 @@
+{
+  "total_submissions": 1,
+  "outcomes_summary": {
+    "interviewing": 1
+  },
+  "mean_score_by_outcome": {
+    "interviewing": 0.2585
+  },
+  "interview_rate_by_score_bin": {
+    "0.0-0.3": 1.0
+  },
+  "dataset_rows": [
+    {
+      "submission_id": "de9ef008cbc94279ae7f6a02dcf0d37a",
+      "job_id": "job_001",
+      "predicted_interview_chance_score": 0.2585031546584749,
+      "actual_outcome": "interviewing",
+      "is_interview": 1
+    }
+  ]
+}

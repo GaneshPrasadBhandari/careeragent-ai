@@ -1,0 +1,1067 @@
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
+
+import httpx
+
+from careeragent.config import artifacts_root, get_settings
+from careeragent.orchestration.state import OrchestrationState
+from careeragent.services.db_service import SqliteStateStore
+from careeragent.services.notification_service import NotificationService
+from careeragent.services.health_service import HealthService
+
+from careeragent.agents.security_agent import SanitizeAgent
+
+# Optional (if present in your repo from previous batches)
+try:
+    from careeragent.agents.guardrail_service import OutputGuard  # type: ignore
+except Exception:
+    OutputGuard = None  # type: ignore
+
+from careeragent.agents.parser_agent_service import ParserAgentService, ExtractedResume
+from careeragent.agents.parser_evaluator_service import ParserEvaluatorService
+
+# If your existing matcher services exist, we use them. Otherwise we use local scoring.
+try:
+    from careeragent.agents.matcher_agent_schema import JobDescription  # type: ignore
+    from careeragent.agents.matcher_agent_service import MatcherAgentService  # type: ignore
+except Exception:
+    JobDescription = None  # type: ignore
+    MatcherAgentService = None  # type: ignore
+
+# Draft/apply/XAI are best-effort if available
+try:
+    from careeragent.agents.cover_letter_service import CoverLetterService  # type: ignore
+    from careeragent.agents.cover_letter_evaluator_service import CoverLetterEvaluatorService  # type: ignore
+except Exception:
+    CoverLetterService = None  # type: ignore
+    CoverLetterEvaluatorService = None  # type: ignore
+
+try:
+    from careeragent.agents.strategy_agent_service import StrategyAgentService  # type: ignore
+except Exception:
+    StrategyAgentService = None  # type: ignore
+
+try:
+    from careeragent.agents.apply_executor_service import ApplyExecutorService  # type: ignore
+except Exception:
+    ApplyExecutorService = None  # type: ignore
+
+try:
+    from careeragent.services.xai_service import XAIService  # type: ignore
+    from careeragent.services.exporter import CareerDossierExporter  # type: ignore
+except Exception:
+    XAIService = None  # type: ignore
+    CareerDossierExporter = None  # type: ignore
+
+
+@dataclass(frozen=True)
+class JobBoard:
+    name: str
+    domain: str
+
+
+DEFAULT_JOB_BOARDS: Tuple[JobBoard, ...] = (
+    JobBoard("LinkedIn Jobs", "linkedin.com/jobs"),
+    JobBoard("Indeed", "indeed.com"),
+    JobBoard("Glassdoor", "glassdoor.com"),
+    JobBoard("ZipRecruiter", "ziprecruiter.com"),
+    JobBoard("Monster", "monster.com"),
+    JobBoard("Dice", "dice.com"),
+    JobBoard("Lever", "jobs.lever.co"),
+    JobBoard("Greenhouse", "boards.greenhouse.io"),
+)
+
+
+VISA_NEGATIVE = (
+    "unable to sponsor",
+    "cannot sponsor",
+    "no sponsorship",
+    "do not sponsor",
+    "not sponsor",
+    "without sponsorship",
+    "must be authorized to work",
+    "no visa",
+    "cannot provide visa",
+)
+
+VISA_POSITIVE = (
+    "visa sponsorship",
+    "sponsorship available",
+    "h1b",
+    "opt",
+    "cpt",
+    "stem opt",
+    "work visa",
+)
+
+COMMON_SKILL_DICTIONARY = [
+    "python","sql","fastapi","docker","kubernetes","mlflow","dvc","azure","aws","gcp",
+    "pytorch","tensorflow","sklearn","pandas","numpy","spark","databricks","snowflake",
+    "llm","rag","langgraph","langchain","vector database","faiss","chroma","postgres","redis",
+    "etl","airflow","kafka","terraform","github actions","sagemaker","azure ml","openai"
+]
+
+
+def _run_dir(run_id: str) -> Path:
+    d = artifacts_root() / "runs" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_json(path: Path, obj: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+
+
+class LiveFeed:
+    """
+    Description: Live Agent Feed logger (UI consumes state.meta['live_feed']).
+    Layer: L1
+    """
+    @staticmethod
+    def emit(state: OrchestrationState, *, layer: str, agent: str, message: str) -> None:
+        state.meta.setdefault("live_feed", [])
+        state.meta["live_feed"].append({"layer": layer, "agent": agent, "message": message})
+        state.touch()
+
+
+class LocalResumeExtractor:
+    """
+    Description: Extract resume text from PDF/TXT/DOCX bytes.
+    Layer: L2
+    """
+    @staticmethod
+    def extract_text(*, filename: str, data: bytes) -> str:
+        name = (filename or "").lower()
+        if name.endswith(".txt"):
+            return data.decode("utf-8", errors="replace")
+
+        if name.endswith(".pdf"):
+            try:
+                from pypdf import PdfReader  # type: ignore
+            except Exception as e:
+                raise RuntimeError("PDF extraction needs pypdf. Install: uv add pypdf") from e
+            import io
+            reader = PdfReader(io.BytesIO(data))
+            return "\n".join([(pg.extract_text() or "") for pg in reader.pages])
+
+        if name.endswith(".docx"):
+            try:
+                import docx  # type: ignore
+            except Exception as e:
+                raise RuntimeError("DOCX extraction needs python-docx. Install: uv add python-docx") from e
+            import io
+            f = io.BytesIO(data)
+            d = docx.Document(f)
+            return "\n".join([p.text for p in d.paragraphs if p.text])
+
+        # fallback
+        return data.decode("utf-8", errors="replace")
+
+
+class OllamaClient:
+    """
+    Description: Optional local LLM used for query refinement + job summaries.
+    Layer: L4-L5
+    """
+    def __init__(self, base_url: Optional[str], model: str) -> None:
+        self._base = (base_url or "").strip().rstrip("/")
+        self._model = model
+
+    def available(self) -> bool:
+        return bool(self._base)
+
+    def generate(self, *, prompt: str, timeout: float = 45.0) -> str:
+        if not self.available():
+            return ""
+        try:
+            url = self._base + "/api/generate"
+            payload = {"model": self._model, "prompt": prompt, "stream": False}
+            with httpx.Client(timeout=timeout) as client:
+                r = client.post(url, json=payload)
+            if r.status_code >= 400:
+                return ""
+            return (r.json().get("response") or "").strip()
+        except Exception:
+            return ""
+
+
+class SerperDiscoveryService:
+    """
+    Description: Serper discovery across job boards with best-effort recency.
+    Layer: L3
+    """
+    SERPER_URL = "https://google.serper.dev/search"
+
+    def __init__(self, *, api_key: str, health: HealthService) -> None:
+        self._key = api_key
+        self._health = health
+
+    def search(self, *, state: OrchestrationState, step_id: str, query: str, num: int = 20, tbs: Optional[str] = None) -> List[Dict[str, Any]]:
+        headers = {"X-API-KEY": self._key, "Content-Type": "application/json"}
+        body: Dict[str, Any] = {"q": query, "num": num}
+        if tbs:
+            # Serper may accept tbs; if it doesn't, it will just ignore it (best-effort)
+            body["tbs"] = tbs
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                r = client.post(self.SERPER_URL, headers=headers, json=body)
+        except Exception as e:
+            state.status = "api_failure"
+            state.meta["run_failure_code"] = "API_FAILURE"
+            state.meta["run_failure_provider"] = "serper"
+            LiveFeed.emit(state, layer="L3", agent="DiscoveryService", message=f"Serper request failed: {e}")
+            return []
+
+        if self._health.quota.handle_serper_response(
+            state=state, step_id=step_id, status_code=r.status_code, tool_name="serper.search", error_detail=r.text[:200]
+        ):
+            return []
+
+        if r.status_code >= 400:
+            state.status = "api_failure"
+            state.meta["run_failure_code"] = "API_FAILURE"
+            state.meta["run_failure_provider"] = "serper"
+            LiveFeed.emit(state, layer="L3", agent="DiscoveryService", message=f"Serper error {r.status_code}: {r.text[:200]}")
+            return []
+
+        organic = (r.json().get("organic") or [])
+        out = []
+        for it in organic:
+            out.append({"title": it.get("title") or "", "link": it.get("link") or "", "snippet": it.get("snippet") or ""})
+        return out
+
+
+class ScraperService:
+    """
+    Description: Scrape job pages best-effort. Falls back to snippet.
+    Layer: L3-L4
+    """
+    @staticmethod
+    def fetch_text(*, url: str, snippet: str) -> str:
+        if not url:
+            return snippet or ""
+        try:
+            with httpx.Client(timeout=18.0, follow_redirects=True) as client:
+                r = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code >= 400:
+                return snippet or ""
+            html = r.text
+            txt = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+            txt = re.sub(r"<[^>]+>", " ", txt)
+            txt = re.sub(r"\s+", " ", txt).strip()
+            if not txt:
+                return snippet or ""
+            return txt[:16000]
+        except Exception:
+            return snippet or ""
+
+
+def _tokenize(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z][a-zA-Z0-9\+\#\.-]{1,}", (text or "").lower())
+
+
+def cosine_sim(a: Counter, b: Counter) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(a[t] * b.get(t, 0) for t in a)
+    na = sum(v*v for v in a.values()) ** 0.5
+    nb = sum(v*v for v in b.values()) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(dot / (na * nb))
+
+
+def parse_recency_hours(text: str) -> Optional[float]:
+    """
+    Best-effort parsing from snippets like "12 hours ago", "1 day ago", "yesterday", "today".
+    """
+    s = (text or "").lower()
+    if "today" in s:
+        return 6.0
+    if "yesterday" in s:
+        return 24.0
+    m = re.search(r"(\d+)\s*(hour|hours)\s*ago", s)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(\d+)\s*(day|days)\s*ago", s)
+    if m:
+        return float(m.group(1)) * 24.0
+    m = re.search(r"(\d+)\s*(minute|minutes)\s*ago", s)
+    if m:
+        return max(1.0, float(m.group(1)) / 60.0)
+    return None
+
+
+def ats_score_from_text(resume_text: str) -> float:
+    """
+    Lightweight ATS heuristic for the resume itself (0-1).
+    """
+    t = resume_text.lower()
+    score = 0.0
+    # contact signals
+    if re.search(r"[\w\.-]+@[\w\.-]+\.\w+", t):
+        score += 0.18
+    if re.search(r"\+?\d[\d\-\s\(\)]{8,}\d", t):
+        score += 0.10
+    # headings
+    for h in ["summary", "experience", "education", "skills", "projects"]:
+        if h in t:
+            score += 0.12
+    # bullets / structure
+    if "-" in resume_text or "•" in resume_text:
+        score += 0.12
+    # length (not too short)
+    if len(resume_text) > 1500:
+        score += 0.12
+    return max(0.0, min(1.0, score))
+
+
+def visa_ok(job_text: str) -> bool:
+    low = (job_text or "").lower()
+    return not any(x in low for x in VISA_NEGATIVE)
+
+
+def visa_positive(job_text: str) -> bool:
+    low = (job_text or "").lower()
+    return any(x in low for x in VISA_POSITIVE)
+
+
+def extract_job_skills(job_text: str, resume_skills: List[str]) -> List[str]:
+    low = (job_text or "").lower()
+    skills = []
+    pool = list(dict.fromkeys([*(resume_skills or []), *COMMON_SKILL_DICTIONARY]))
+    for s in pool:
+        s2 = str(s).lower().strip()
+        if not s2:
+            continue
+        if s2 in low:
+            skills.append(s2)
+    return list(dict.fromkeys(skills))[:30]
+
+
+def compute_interview_chance(*, skill_overlap: float, exp_align: float, ats: float, market: float) -> float:
+    market = max(1.0, float(market))
+    score = (0.45 * skill_overlap + 0.35 * exp_align + 0.20 * ats) / market
+    return max(0.0, min(1.0, float(score)))
+
+
+class DiscoveryEvaluatorAgent:
+    """
+    Description: L5 evaluator that gates discovery quality and triggers query refinement.
+    Layer: L5
+    """
+    def evaluate(self, *, top_score: float, avg_score: float, n: int, threshold: float) -> Tuple[float, List[str]]:
+        fb: List[str] = []
+        # Confidence model: top weighted more than avg.
+        conf = min(1.0, (0.65 * top_score) + (0.35 * avg_score))
+        if n < 10:
+            conf -= 0.10
+            fb.append("Too few jobs after filters. Broaden search terms or expand boards.")
+        if top_score < threshold:
+            conf -= 0.15
+            fb.append(f"Top match below threshold ({top_score*100:.1f}% < {threshold*100:.0f}%). Refining query.")
+        conf = max(0.0, min(1.0, conf))
+        return conf, fb
+
+
+class OneClickAutomationEngine:
+    """
+    Description: CareerOS-style One-Click autonomous workflow with HITL gates.
+    Layer: L0-L9
+    """
+
+    def __init__(self) -> None:
+        self._s = get_settings()
+        self._store = SqliteStateStore()
+
+        self._health = HealthService()
+        self._health.load_env(dotenv_path=str(Path(".env")))
+        self._health.enable_langsmith_tracing(project=self._s.langsmith_project)
+
+        self._notifier = NotificationService(dry_run=not bool(self._s.twilio_account_sid))
+        self._sanitize = SanitizeAgent()
+
+        self._ollama = OllamaClient(self._s.ollama_base_url, getattr(self._s, "ollama_model", "llama3.2"))
+
+        self._parser = ParserAgentService()
+        self._parser_eval = ParserEvaluatorService()
+
+        self._matcher = MatcherAgentService() if MatcherAgentService else None
+        self._disc_eval = DiscoveryEvaluatorAgent()
+
+        self._out_guard = OutputGuard() if OutputGuard else None
+        self._cover = CoverLetterService() if CoverLetterService else None
+        self._cover_eval = CoverLetterEvaluatorService() if CoverLetterEvaluatorService else None
+        self._strategy = StrategyAgentService() if StrategyAgentService else None
+        self._apply = ApplyExecutorService() if ApplyExecutorService else None
+
+    def _persist(self, state: OrchestrationState) -> None:
+        d = _run_dir(state.run_id)
+        _save_json(d / "state.json", state.model_dump())
+        self._store.upsert_state(run_id=state.run_id, status=state.status, state=state.model_dump(), updated_at_utc=state.updated_at_utc)
+
+    def load(self, run_id: str) -> Optional[Dict[str, Any]]:
+        return self._store.get_state(run_id=run_id)
+
+    def start_run(self, *, filename: str, data: bytes, prefs: Dict[str, Any]) -> OrchestrationState:
+        st = OrchestrationState.new(env=self._s.environment, mode="agentic", git_sha=None)
+        st.meta["preferences"] = prefs
+        st.meta.setdefault("job_scores", {})
+        st.meta.setdefault("job_components", {})
+        st.meta.setdefault("job_meta", {})
+        LiveFeed.emit(st, layer="L1", agent="Dashboard", message="Run created. Starting autonomous pipeline…")
+        self._persist(st)
+
+        t = threading.Thread(target=self._run_pipeline, args=(st.run_id, filename, data), daemon=True)
+        t.start()
+        return st
+
+    def submit_action(self, *, run_id: str, action_type: str, payload: Dict[str, Any]) -> OrchestrationState:
+        raw = self.load(run_id)
+        if not raw:
+            raise ValueError("run_id not found")
+        st = OrchestrationState(**raw)
+        st.meta["last_user_action"] = {"type": action_type, "payload": payload}
+        LiveFeed.emit(st, layer="L5", agent="HITL", message=f"User action received: {action_type}")
+        self._persist(st)
+
+        t = threading.Thread(target=self._continue_after_hitl, args=(run_id,), daemon=True)
+        t.start()
+        return st
+
+    # ---------------- PIPELINE ----------------
+    def _run_pipeline(self, run_id: str, filename: str, data: bytes) -> None:
+        raw = self.load(run_id)
+        if not raw:
+            return
+        st = OrchestrationState(**raw)
+        run_dir = _run_dir(run_id)
+
+        prefs = st.meta.get("preferences", {}) or {}
+        recency_hours = float(prefs.get("recency_hours", 36))
+        max_jobs = int(prefs.get("max_jobs", 40))
+        target_role = str(prefs.get("target_role", "Data Scientist"))
+        location = str(prefs.get("location", "United States"))
+        remote = bool(prefs.get("remote", True))
+        wfo_ok = bool(prefs.get("wfo_ok", True))
+        salary = str(prefs.get("salary", "")).strip()
+        visa_required = bool(prefs.get("visa_sponsorship_required", False))
+        threshold = float(prefs.get("discovery_threshold", 0.70))
+        max_refinements = int(prefs.get("max_refinements", 3))
+
+        # L2 extract resume text
+        st.start_step("l2_extract", layer_id="L2", tool_name="ResumeExtractor", input_ref={"filename": filename})
+        LiveFeed.emit(st, layer="L2", agent="ParserAgent", message="Extracting resume text from upload…")
+        try:
+            resume_text = LocalResumeExtractor.extract_text(filename=filename, data=data)
+        except Exception as e:
+            st.end_step("l2_extract", status="failed", output_ref={}, message=str(e))
+            st.status = "needs_human_approval"
+            st.meta["pending_action"] = "resume_extract_failed"
+            LiveFeed.emit(st, layer="L2", agent="ParserAgent", message=f"Resume extraction failed: {e}")
+            self._persist(st)
+            return
+
+        (run_dir / "resume_raw.txt").write_text(resume_text, encoding="utf-8")
+        st.add_artifact("resume_raw", str(run_dir / "resume_raw.txt"), content_type="text/plain")
+        st.end_step("l2_extract", status="ok", output_ref={"artifact_key": "resume_raw"}, message="extracted")
+        self._persist(st)
+
+        # L0 sanitize
+        st.start_step("l0_sanitize", layer_id="L0", tool_name="SanitizeAgent", input_ref={})
+        safe = self._sanitize.sanitize_before_llm(
+            state=st, step_id="l0_sanitize", tool_name="sanitize_before_llm",
+            user_text=resume_text, context="resume"
+        )
+        if safe is None:
+            LiveFeed.emit(st, layer="L0", agent="SanitizeAgent", message="Prompt injection detected. Run blocked.")
+            self._persist(st)
+            return
+        st.end_step("l0_sanitize", status="ok", output_ref={"sanitized": True}, message="pass")
+        LiveFeed.emit(st, layer="L0", agent="SanitizeAgent", message="Security check passed.")
+        self._persist(st)
+
+        # L2/L3 parse recursive gate
+        extracted = self._parse_with_gate(st=st, safe_text=safe, run_dir=run_dir)
+        self._persist(st)
+        if st.status == "needs_human_approval":
+            self._notify(st, event="needs_human_approval")
+            return
+
+        resume_skills = [str(s).lower() for s in (extracted.skills or []) if s]
+        ats = ats_score_from_text(safe)
+        st.meta["ats_score"] = ats
+        LiveFeed.emit(st, layer="L2", agent="ParserAgent", message=f"Profile extracted. Skills={len(resume_skills)} ATS={ats:.2f}")
+
+        if not self._s.serper_api_key:
+            st.status = "needs_human_approval"
+            st.meta["pending_action"] = "missing_serper_key"
+            LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message="Missing SERPER_API_KEY in .env.")
+            self._persist(st)
+            return
+
+        discovery = SerperDiscoveryService(api_key=self._s.serper_api_key, health=self._health)
+
+        # ----- L3-L5 discovery refinement loop -----
+        base_query = self._build_query(target_role=target_role, location=location, remote=remote, wfo_ok=wfo_ok, salary=salary, visa_required=visa_required, skills=resume_skills)
+        tbs = "qdr:d" if recency_hours <= 36 else None
+
+        all_ranked: List[Dict[str, Any]] = []
+        for attempt in range(max_refinements + 1):
+            LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message=f"Hunt attempt {attempt+1}: searching 8 job boards…")
+            st.start_step(f"l3_discovery_{attempt+1}", layer_id="L3", tool_name="DiscoveryService", input_ref={"query": base_query, "tbs": tbs})
+
+            results, board_counts = self._search_boards(st=st, discovery=discovery, base_query=base_query, tbs=tbs)
+            st.end_step(f"l3_discovery_{attempt+1}", status="ok", output_ref={"results": len(results), "boards": board_counts}, message="discovered")
+            self._persist(st)
+
+            if st.status in ("blocked", "api_failure"):
+                self._notify(st, event="quota_error", extra={"provider": "serper"})
+                return
+
+            # L4 scrape + score
+            LiveFeed.emit(st, layer="L4", agent="ScraperAgent", message=f"Scraping + normalizing up to {max_jobs} jobs…")
+            ranked = self._scrape_and_score(
+                st=st,
+                results=results[:max_jobs],
+                extracted=extracted,
+                resume_text=safe,
+                resume_skills=resume_skills,
+                ats=ats,
+                recency_hours=recency_hours,
+                visa_required=visa_required,
+            )
+            all_ranked = ranked
+            _save_json(run_dir / "ranking.json", ranked)
+            st.add_artifact("ranking", str(run_dir / "ranking.json"), content_type="application/json")
+            _save_json(run_dir / "search_summary.json", {"query": base_query, "tbs": tbs, "boards": board_counts, "raw_results": len(results), "kept": len(ranked)})
+            st.add_artifact("search_summary", str(run_dir / "search_summary.json"), content_type="application/json")
+            self._persist(st)
+
+            if not ranked:
+                conf, fb = 0.0, ["No jobs survived filters. Widen recency or disable visa-required filter."]
+            else:
+                top = float(ranked[0]["interview_chance_score"])
+                avg = sum(float(x["interview_chance_score"]) for x in ranked[:20]) / max(1, min(20, len(ranked)))
+                conf, fb = self._disc_eval.evaluate(top_score=top, avg_score=avg, n=len(ranked), threshold=threshold)
+
+            LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message=f"Discovery confidence={conf:.2f} (threshold={threshold:.2f}).")
+            if fb:
+                LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message=" | ".join(fb[:2]))
+
+            # Pass -> HITL review ranking
+            if ranked and float(ranked[0]["interview_chance_score"]) >= threshold:
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "review_ranking"
+                LiveFeed.emit(st, layer="L1", agent="Dashboard", message="Ranking ready for review (HITL).")
+                self._persist(st)
+                self._notify(st, event="needs_human_approval")
+                return
+
+            # Low confidence after final attempt -> HITL
+            if attempt >= max_refinements:
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "low_confidence_discovery"
+                LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message="Low confidence after retries. Needs human guidance.")
+                self._persist(st)
+                self._notify(st, event="needs_human_approval")
+                return
+
+            # refine query
+            base_query = self._refine_query(
+                st=st,
+                base_query=base_query,
+                ranked=ranked,
+                resume_skills=resume_skills,
+                target_role=target_role,
+                location=location,
+                visa_required=visa_required,
+            )
+            LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message=f"Refining query → {base_query[:160]}")
+            self._persist(st)
+
+    def _continue_after_hitl(self, run_id: str) -> None:
+        raw = self.load(run_id)
+        if not raw:
+            return
+        st = OrchestrationState(**raw)
+        run_dir = _run_dir(run_id)
+
+        pending = st.meta.get("pending_action")
+        action = (st.meta.get("last_user_action") or {}).get("type")
+        payload = (st.meta.get("last_user_action") or {}).get("payload") or {}
+
+        # Reject ranking => restart discovery with extra notes
+        if pending == "review_ranking" and action == "reject_ranking":
+            st.status = "running"
+            st.meta["pending_action"] = None
+            st.meta.setdefault("user_refinement_notes", [])
+            st.meta["user_refinement_notes"].append(payload.get("reason", "User rejected ranking"))
+            LiveFeed.emit(st, layer="L5", agent="HITL", message="Ranking rejected. Re-running discovery with refined intent…")
+            self._persist(st)
+
+            # Resume text + extracted should exist already; just rerun pipeline discovery section by restarting whole run is heavy.
+            # Simple approach: re-run full pipeline with the already uploaded resume.
+            resume_path = run_dir / "resume_raw.txt"
+            if not resume_path.exists():
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "resume_missing"
+                self._persist(st)
+                return
+            resume_text = resume_path.read_text(encoding="utf-8")
+            # Fake a file name; we only need text. We'll re-enter pipeline by calling _run_pipeline with same text via TXT bytes.
+            self._run_pipeline(run_id, "resume.txt", resume_text.encode("utf-8"))
+            return
+
+        # Approve ranking => generate drafts (L6) then pause for draft review
+        if pending == "review_ranking" and action == "approve_ranking":
+            LiveFeed.emit(st, layer="L6", agent="Generator", message="Ranking approved. Generating strategy + cover letters…")
+            st.status = "running"
+            st.meta["pending_action"] = None
+            self._persist(st)
+
+            ranking_path = run_dir / "ranking.json"
+            if not ranking_path.exists():
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "ranking_missing"
+                self._persist(st)
+                return
+
+            ranked = json.loads(ranking_path.read_text(encoding="utf-8"))
+            top_n = int((st.meta.get("preferences", {}) or {}).get("draft_count", 10))
+            ranked = ranked[:top_n]
+
+            # Load extracted resume
+            ex_ref = st.artifacts.get("extracted_resume")
+            if not ex_ref or not Path(ex_ref.path).exists():
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "extracted_resume_missing"
+                self._persist(st)
+                return
+            extracted = ExtractedResume(**json.loads(Path(ex_ref.path).read_text(encoding="utf-8")))
+
+            drafts_bundle = self._generate_drafts(st=st, extracted=extracted, ranked=ranked, run_dir=run_dir)
+            _save_json(run_dir / "drafts.json", drafts_bundle)
+            st.add_artifact("drafts_bundle", str(run_dir / "drafts.json"), content_type="application/json")
+
+            st.status = "needs_human_approval"
+            st.meta["pending_action"] = "review_drafts"
+            LiveFeed.emit(st, layer="L1", agent="Dashboard", message="Drafts ready for review (HITL).")
+            self._persist(st)
+            self._notify(st, event="needs_human_approval")
+            return
+
+        # Approve drafts => apply + XAI + dossier => completed
+        if pending == "review_drafts" and action == "approve_drafts":
+            LiveFeed.emit(st, layer="L7", agent="ApplyExecutor", message="Drafts approved. Submitting (simulated)…")
+            st.status = "running"
+            st.meta["pending_action"] = None
+            self._persist(st)
+
+            ok = self._apply_and_finalize(st=st, run_dir=run_dir)
+            if ok:
+                st.status = "completed"
+                LiveFeed.emit(st, layer="L9", agent="Analytics", message="Run completed. Dossier ready.")
+                self._persist(st)
+                self._notify(st, event="completed")
+            else:
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "apply_failed"
+                self._persist(st)
+                self._notify(st, event="needs_human_approval")
+            return
+
+        # Reject drafts => back to ranking review
+        if pending == "review_drafts" and action == "reject_drafts":
+            st.status = "needs_human_approval"
+            st.meta["pending_action"] = "review_ranking"
+            st.meta.setdefault("user_refinement_notes", [])
+            st.meta["user_refinement_notes"].append(payload.get("reason", "User rejected drafts"))
+            LiveFeed.emit(st, layer="L5", agent="HITL", message="Drafts rejected. Returning to ranking review.")
+            self._persist(st)
+            self._notify(st, event="needs_human_approval")
+            return
+
+    # ---------------- helpers ----------------
+    def _notify(self, st: OrchestrationState, *, event: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        prefs = st.meta.get("preferences", {}) or {}
+        to = prefs.get("user_phone") or getattr(self._s, "user_phone", None)
+        if to:
+            self._notifier.notify(state=st, event=event, extra=extra, to_phone=str(to))
+
+    def _parse_with_gate(self, *, st: OrchestrationState, safe_text: str, run_dir: Path) -> ExtractedResume:
+        fb: List[str] = []
+        extracted: Optional[ExtractedResume] = None
+
+        for attempt in range(4):
+            sid = f"l2_parse_{attempt+1}"
+            st.start_step(sid, layer_id="L2", tool_name="ParserAgentService", input_ref={"attempt": attempt+1})
+            LiveFeed.emit(st, layer="L2", agent="ParserAgent", message=f"Parsing resume (attempt {attempt+1})…")
+            extracted = self._parser.parse(raw_text=safe_text, orchestration_state=st, feedback=fb)
+            p = run_dir / f"extracted_resume_attempt_{attempt+1}.json"
+            _save_json(p, extracted.to_json_dict())
+            st.add_artifact(f"extracted_resume_attempt_{attempt+1}", str(p), content_type="application/json")
+            st.end_step(sid, status="ok", output_ref={"artifact_key": f"extracted_resume_attempt_{attempt+1}"}, message="parsed")
+
+            ev = self._parser_eval.evaluate(
+                orchestration_state=st, raw_text=safe_text, extracted=extracted,
+                target_id="resume_main", threshold=0.80, retry_count=attempt, max_retries=3
+            )
+            decision = st.apply_recursive_gate(target_id="resume_main", layer_id="L3")
+            LiveFeed.emit(st, layer="L3", agent="ParserEvaluator", message=f"Parse quality={ev.evaluation_score:.2f} decision={decision}")
+            self._persist(st)
+
+            if decision == "pass":
+                st.add_artifact("extracted_resume", str(p), content_type="application/json")
+                return extracted
+
+            if decision == "human_approval":
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "resume_cleanup"
+                return extracted
+
+            fb = ev.feedback
+
+        st.status = "needs_human_approval"
+        st.meta["pending_action"] = "resume_cleanup"
+        return extracted or ExtractedResume()
+
+    def _build_query(self, *, target_role: str, location: str, remote: bool, wfo_ok: bool, salary: str, visa_required: bool, skills: List[str]) -> str:
+        intent = []
+        if remote:
+            intent.append("remote")
+        if wfo_ok:
+            intent.append("hybrid")
+        if not intent:
+            intent.append("on-site")
+        intent_str = " ".join(intent)
+
+        skill_str = " ".join(skills[:6])
+        salary_part = f'"{salary}"' if salary else ""
+        visa_part = '"visa sponsorship" OR h1b OR opt OR cpt' if visa_required else ""
+        # Keep it Google-friendly
+        return f'{target_role} {location} {intent_str} {salary_part} {skill_str} ({visa_part}) apply'
+
+    def _search_boards(self, *, st: OrchestrationState, discovery: SerperDiscoveryService, base_query: str, tbs: Optional[str]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        seen = set()
+        out: List[Dict[str, Any]] = []
+        counts: Dict[str, int] = {}
+        for b in DEFAULT_JOB_BOARDS:
+            q = f'{base_query} site:{b.domain}'
+            step_id = f"l3_serper_{b.domain.replace('/','_')}"
+            st.start_step(step_id, layer_id="L3", tool_name="serper.search", input_ref={"board": b.name})
+            items = discovery.search(state=st, step_id=step_id, query=q, num=10, tbs=tbs)
+            st.end_step(step_id, status="ok", output_ref={"count": len(items)}, message=b.name)
+            counts[b.name] = len(items)
+
+            for it in items:
+                link = it.get("link") or ""
+                if not link or link in seen:
+                    continue
+                seen.add(link)
+                it["board"] = b.name
+                out.append(it)
+
+        LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message=f"Found {len(out)} unique roles across boards.")
+        return out, counts
+
+    def _scrape_and_score(
+        self,
+        *,
+        st: OrchestrationState,
+        results: List[Dict[str, Any]],
+        extracted: ExtractedResume,
+        resume_text: str,
+        resume_skills: List[str],
+        ats: float,
+        recency_hours: float,
+        visa_required: bool,
+    ) -> List[Dict[str, Any]]:
+        ranked: List[Dict[str, Any]] = []
+
+        res_tokens = Counter(_tokenize(resume_text))
+        exp_text = " ".join([str(x) for x in (extracted.experience or [])])[:5000]
+        exp_tokens = Counter(_tokenize(exp_text)) if exp_text else res_tokens
+
+        # decide per-job
+        for idx, it in enumerate(results):
+            url = it.get("link") or ""
+            title = it.get("title") or ""
+            snippet = it.get("snippet") or ""
+            board = it.get("board") or "unknown"
+
+            # recency filter
+            rh = parse_recency_hours(snippet)
+            if rh is not None and rh > recency_hours:
+                continue
+
+            step_id = f"l4_scrape_{idx+1}"
+            st.start_step(step_id, layer_id="L4", tool_name="ScraperService", input_ref={"url": url, "board": board})
+            job_text = ScraperService.fetch_text(url=url, snippet=snippet)
+            st.end_step(step_id, status="ok", output_ref={"chars": len(job_text)}, message="scraped")
+
+            # visa filter
+            v_ok = visa_ok(job_text)
+            if visa_required and not v_ok:
+                continue
+
+            job_skills = extract_job_skills(job_text, resume_skills)
+            if job_skills:
+                overlap = len(set(job_skills) & set(resume_skills)) / max(1, len(set(job_skills)))
+            else:
+                overlap = 0.0
+
+            job_tokens = Counter(_tokenize(job_text))
+            exp_align = cosine_sim(exp_tokens, job_tokens)
+
+            market = 1.0
+            # very rough market factor heuristic from snippet
+            low = snippet.lower()
+            if "applicants" in low:
+                m = re.search(r"(\d+)\+?\s*applicants", low)
+                if m:
+                    n = int(m.group(1))
+                    market = 1.0 + min(1.5, n / 200.0)  # 200 applicants => 2.0
+
+            score = compute_interview_chance(skill_overlap=overlap, exp_align=exp_align, ats=ats, market=market)
+
+            # boost if visa-positive signals and visa required
+            if visa_required and visa_positive(job_text):
+                score = min(1.0, score + 0.05)
+
+            rationale = [
+                f"SkillOverlap={overlap:.2f}",
+                f"ExperienceAlignment={exp_align:.2f}",
+                f"ATS={ats:.2f}",
+                f"MarketFactor={market:.2f}",
+                ("VisaOK" if v_ok else "NoSponsorship"),
+            ]
+
+            ranked.append(
+                {
+                    "rank": 0,
+                    "title": title,
+                    "company": board,
+                    "board": board,
+                    "url": url,
+                    "recency_hours": rh,
+                    "visa_ok": v_ok,
+                    "matched_skills": list(set(job_skills) & set(resume_skills))[:12],
+                    "missing_skills": [s for s in job_skills if s not in resume_skills][:12],
+                    "skill_overlap": overlap,
+                    "experience_alignment": exp_align,
+                    "ats_score": ats,
+                    "market_factor": market,
+                    "interview_chance_score": score,
+                    "overall_match_percent": round(score * 100.0, 2),
+                    "rationale": rationale,
+                }
+            )
+
+            # meta for UI/XAI
+            jid = url or str(uuid4().hex)
+            st.meta.setdefault("job_scores", {})
+            st.meta.setdefault("job_components", {})
+            st.meta.setdefault("job_meta", {})
+            st.meta["job_scores"][jid] = float(score)
+            st.meta["job_components"][jid] = {
+                "skill_overlap": float(overlap),
+                "experience_alignment": float(exp_align),
+                "ats_score": float(ats),
+                "market_competition_factor": float(market),
+            }
+            st.meta["job_meta"][jid] = {"role_title": title, "company": board, "url": url, "source": board}
+
+        ranked.sort(key=lambda x: float(x["interview_chance_score"]), reverse=True)
+        for i, r in enumerate(ranked, start=1):
+            r["rank"] = i
+
+        LiveFeed.emit(st, layer="L4", agent="MatcherAgent", message=f"Scored {len(ranked)} jobs. Top score={ranked[0]['overall_match_percent'] if ranked else 'n/a'}")
+        return ranked
+
+    def _refine_query(
+        self,
+        *,
+        st: OrchestrationState,
+        base_query: str,
+        ranked: List[Dict[str, Any]],
+        resume_skills: List[str],
+        target_role: str,
+        location: str,
+        visa_required: bool,
+    ) -> str:
+        top = ranked[0] if ranked else {}
+        top_sk = (top.get("matched_skills") or [])[:6]
+        skill_hint = " ".join(list(dict.fromkeys([*top_sk, *resume_skills]))[:8])
+
+        # include user refinement notes if any
+        notes = st.meta.get("user_refinement_notes", []) or []
+        notes_hint = " ".join([str(n)[:30] for n in notes[-2:]]) if notes else ""
+
+        if self._ollama.available():
+            prompt = (
+                "You refine job search queries.\n"
+                f"Target role: {target_role}\nLocation: {location}\n"
+                f"Current query: {base_query}\n"
+                f"Skill hint: {skill_hint}\n"
+                f"Visa required: {visa_required}\n"
+                f"User notes: {notes_hint}\n"
+                "Return ONE concise improved query string only."
+            )
+            safe = self._sanitize.sanitize_before_llm(state=st, step_id="l0_query_refine", tool_name="sanitize_before_llm", user_text=prompt, context="chat")
+            if safe:
+                out = self._ollama.generate(prompt=safe, timeout=35.0)
+                if out:
+                    return out.replace("\n", " ")[:220]
+
+        visa_part = '("visa sponsorship" OR h1b OR opt)' if visa_required else ""
+        return f"{target_role} {location} {skill_hint} {visa_part} apply"
+
+    def _generate_drafts(self, *, st: OrchestrationState, extracted: ExtractedResume, ranked: List[Dict[str, Any]], run_dir: Path) -> Dict[str, Any]:
+        drafts: List[Dict[str, Any]] = []
+        strategies: List[Dict[str, Any]] = []
+
+        # Simple deterministic fallback if CoverLetterService missing
+        def fallback_cover(job_title: str, company: str) -> str:
+            email = getattr(getattr(extracted, "contact", None), "email", "") or ""
+            name = getattr(extracted, "name", "Candidate")
+            return f"""{name}
+{email}
+
+Dear Hiring Manager,
+
+I’m applying for the {job_title} role. I bring strong experience in Python, ML/GenAI delivery, and production MLOps. I focus on shipping reliable systems, not demos—clean APIs, reproducible pipelines, and measurable business impact.
+
+I’d welcome the chance to discuss how I can help {company} deliver practical AI outcomes.
+
+Sincerely,
+{name}
+"""
+
+        for j in ranked:
+            title = j.get("title") or j.get("role_title") or "Role"
+            company = j.get("company") or j.get("board") or "Company"
+            url = j.get("url") or ""
+
+            # Strategy (best effort)
+            if self._strategy:
+                try:
+                    # If you have a full MatchReport in your repo, wire it here later.
+                    # For now: strategy is lightweight.
+                    strategies.append({"job": title, "company": company, "action_items": ["Emphasize top matched skills", "Quantify impact", "Align summary to role"]})
+                except Exception as e:
+                    strategies.append({"job": title, "company": company, "error": str(e)})
+            else:
+                strategies.append({"job": title, "company": company, "action_items": ["Emphasize top matched skills", "Quantify impact", "Align summary to role"]})
+
+            # Cover letter
+            body = ""
+            eval_score = None
+            guard_action = None
+            guard_issues: List[str] = []
+
+            if self._cover and self._cover_eval and JobDescription and self._matcher:
+                try:
+                    # Create a minimal JobDescription for generation
+                    jd = JobDescription(
+                        job_id=str(uuid4().hex),
+                        role_title=title,
+                        company=company,
+                        country_code=str((st.meta.get("preferences", {}) or {}).get("country", "US")),
+                        required_skills=[],
+                        preferred_skills=[],
+                        responsibilities=[],
+                        requirements_text="",
+                        applicants_count=None,
+                        market_competition_factor=None,
+                    )
+                    # Minimal match report substitute: reuse job rationale fields for context
+                    # If your CoverLetterService expects MatchReport, it will still work if implemented that way in your repo.
+                    draft = self._cover.draft(resume=extracted, job=jd, match_report=None, orchestration_state=st, feedback=["Include contact header"])  # type: ignore
+                    body = draft.body
+                    # evaluator twin (best effort)
+                    ev = self._cover_eval.evaluate(orchestration_state=st, resume=extracted, job=jd, match_report=None, draft=draft, target_id=f"cover::{title}", threshold=0.80, retry_count=0, max_retries=3)  # type: ignore
+                    eval_score = float(getattr(ev, "evaluation_score", 0.0))
+                except Exception:
+                    body = fallback_cover(title, company)
+            else:
+                body = fallback_cover(title, company)
+
+            # Output guard
+            if self._out_guard:
+                try:
+                    gr = self._out_guard.check_cover_letter(state=st, draft_text=body, resume=extracted, match_report=None, country_code=str((st.meta.get("preferences", {}) or {}).get("country", "US")))  # type: ignore
+                    guard_action = gr.action
+                    guard_issues = gr.issues[:3]
+                except Exception:
+                    pass
+
+            p = run_dir / f"cover_letter_{re.sub(r'[^a-zA-Z0-9]+','_',title)[:40]}.md"
+            p.write_text(body, encoding="utf-8")
+            st.add_artifact(p.stem, str(p), content_type="text/markdown")
+
+            drafts.append({
+                "title": title,
+                "company": company,
+                "url": url,
+                "cover_path": str(p),
+                "evaluator_score": eval_score,
+                "guard_action": guard_action,
+                "guard_issues": guard_issues,
+            })
+
+        LiveFeed.emit(st, layer="L6", agent="CoverLetterAgent", message=f"Generated {len(drafts)} cover letters.")
+        return {"drafts": drafts, "strategies": strategies}
+
+    def _apply_and_finalize(self, *, st: OrchestrationState, run_dir: Path) -> bool:
+        # Apply simulation (if ApplyExecutorService exists)
+        if not self._apply:
+            LiveFeed.emit(st, layer="L7", agent="ApplyExecutor", message="Apply executor missing. Skipping apply.")
+        else:
+            # Submit top 3 (configurable)
+            ranking_path = run_dir / "ranking.json"
+            if ranking_path.exists():
+                ranked = json.loads(ranking_path.read_text(encoding="utf-8"))[:3]
+                subs: List[Dict[str, Any]] = []
+                for j in ranked:
+                    try:
+                        job_id = str(j.get("url") or uuid4().hex)
+                        # pick any cover artifact key
+                        # (we stored markdown files with stems; for simplicity, apply uses placeholders here)
+                        sub = self._apply.submit(orchestration_state=st, job_id=job_id, resume_artifact_key="extracted_resume", cover_letter_artifact_key="drafts_bundle", notes="Simulated apply")  # type: ignore
+                        subs.append(sub.model_dump())
+                    except Exception:
+                        continue
+                _save_json(run_dir / "submissions.json", {"submissions": subs})
+                st.add_artifact("submissions", str(run_dir / "submissions.json"), content_type="application/json")
+
+        # XAI + dossier
+        if XAIService and CareerDossierExporter:
+            try:
+                xai = XAIService()
+                xai_paths = xai.write_outputs(state=st, require_reportlab=False)
+                st.add_artifact("xai_transparency_pdf", xai_paths["pdf"], content_type="application/pdf")
+                st.add_artifact("transparency_matrix_json", xai_paths["json"], content_type="application/json")
+
+                exporter = CareerDossierExporter()
+                bundle = exporter.bundle_reports(run_id=st.run_id, final_pdf_path=xai_paths["pdf"])
+                st.add_artifact("career_dossier_zip", bundle["zip"], content_type="application/zip")
+            except Exception as e:
+                LiveFeed.emit(st, layer="L9", agent="Analytics", message=f"XAI/Dossier generation failed: {e}")
+                return False
+
+        return True
+
+
+ENGINE = OneClickAutomationEngine()

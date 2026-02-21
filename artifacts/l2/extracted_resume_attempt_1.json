@@ -1,0 +1,46 @@
+{
+  "name": "Ganesh Prasad Bhandari",
+  "contact": {
+    "email": "ganesh@example.com",
+    "phone": null,
+    "location": null,
+    "links": [
+      "https://www.linkedin.com/in/ganesh-prasad-bhandari/"
+    ]
+  },
+  "skills": [
+    "python",
+    "sql",
+    "fastapi",
+    "docker",
+    "kubernetes",
+    "azure",
+    "aws",
+    "mlflow",
+    "langgraph",
+    "rag",
+    "vector database",
+    "pydantic",
+    "github actions"
+  ],
+  "experience": [
+    {
+      "title": null,
+      "company": null,
+      "start_date": null,
+      "end_date": null,
+      "bullets": [
+        "Built RAG assistant using Azure OpenAI + embeddings + vector search; improved response relevance by 30%.",
+        "Deployed containerized services with Docker and Kubernetes; reduced deployment time from hours to minutes.",
+        "Implemented MLflow tracking and reproducible pipelines; improved experiment traceability and release safety."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "degree": null,
+      "institution": "MSIT, Clark University, 2026",
+      "graduation_year": "2026"
+    }
+  ]
+}

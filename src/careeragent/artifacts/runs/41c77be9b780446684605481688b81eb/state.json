@@ -1,0 +1,318 @@
+{
+  "version": "v1",
+  "run_id": "41c77be9b780446684605481688b81eb",
+  "created_at_utc": "2026-02-21T05:26:30Z",
+  "updated_at_utc": "2026-02-21T05:26:30Z",
+  "status": "needs_human_approval",
+  "mode": "agentic",
+  "env": "local",
+  "git_sha": null,
+  "artifacts": {
+    "resume_raw": {
+      "key": "resume_raw",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/src/careeragent/artifacts/runs/41c77be9b780446684605481688b81eb/resume_raw.txt",
+      "content_type": "text/plain",
+      "sha256": null
+    },
+    "extracted_resume_attempt_1": {
+      "key": "extracted_resume_attempt_1",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/src/careeragent/artifacts/runs/41c77be9b780446684605481688b81eb/extracted_resume_attempt_1.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_2": {
+      "key": "extracted_resume_attempt_2",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/src/careeragent/artifacts/runs/41c77be9b780446684605481688b81eb/extracted_resume_attempt_2.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_3": {
+      "key": "extracted_resume_attempt_3",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/src/careeragent/artifacts/runs/41c77be9b780446684605481688b81eb/extracted_resume_attempt_3.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_4": {
+      "key": "extracted_resume_attempt_4",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/src/careeragent/artifacts/runs/41c77be9b780446684605481688b81eb/extracted_resume_attempt_4.json",
+      "content_type": "application/json",
+      "sha256": null
+    }
+  },
+  "steps": [
+    {
+      "step_id": "l2_extract",
+      "layer_id": "L2",
+      "tool_name": "ResumeExtractor",
+      "status": "ok",
+      "message": "extracted",
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "input_ref": {
+        "filename": "Ganesh_AI_Architect.pdf"
+      },
+      "output_ref": {
+        "artifact_key": "resume_raw"
+      }
+    },
+    {
+      "step_id": "l0_sanitize",
+      "layer_id": "L0",
+      "tool_name": "SanitizeAgent",
+      "status": "ok",
+      "message": "pass",
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "input_ref": {},
+      "output_ref": {
+        "sanitized": true
+      }
+    },
+    {
+      "step_id": "l2_parse_1",
+      "layer_id": "L2",
+      "tool_name": "ParserAgentService",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "input_ref": {
+        "attempt": 1
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_1"
+      }
+    },
+    {
+      "step_id": "l2_parse_2",
+      "layer_id": "L2",
+      "tool_name": "ParserAgentService",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "input_ref": {
+        "attempt": 2
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_2"
+      }
+    },
+    {
+      "step_id": "l2_parse_3",
+      "layer_id": "L2",
+      "tool_name": "ParserAgentService",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "input_ref": {
+        "attempt": 3
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_3"
+      }
+    },
+    {
+      "step_id": "l2_parse_4",
+      "layer_id": "L2",
+      "tool_name": "ParserAgentService",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "input_ref": {
+        "attempt": 4
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_4"
+      }
+    }
+  ],
+  "approvals": [],
+  "evaluations": [
+    {
+      "eval_id": "c42fe88ca1fd4a35aa1fe6008eb893ee",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.40499999999999997,
+      "threshold": 0.8,
+      "feedback": [
+        "Contact completeness low: include email + phone (or a professional link like LinkedIn/GitHub).",
+        "Experience section weak: add bullet points with measurable impact (metrics, scope, tools).",
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.4,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.08000000000000002
+      },
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "passed": false
+    },
+    {
+      "eval_id": "91f9b5d4452c4daa915b92f277d038a5",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.40499999999999997,
+      "threshold": 0.8,
+      "feedback": [
+        "Contact completeness low: include email + phone (or a professional link like LinkedIn/GitHub).",
+        "Experience section weak: add bullet points with measurable impact (metrics, scope, tools).",
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 1,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.4,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.08000000000000002
+      },
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "passed": false
+    },
+    {
+      "eval_id": "0910e2f5a3eb47f0854a77e04446dbce",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.40499999999999997,
+      "threshold": 0.8,
+      "feedback": [
+        "Contact completeness low: include email + phone (or a professional link like LinkedIn/GitHub).",
+        "Experience section weak: add bullet points with measurable impact (metrics, scope, tools).",
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 2,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.4,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.08000000000000002
+      },
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "passed": false
+    },
+    {
+      "eval_id": "168469893b20434dae11a86de8f9ef23",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.40499999999999997,
+      "threshold": 0.8,
+      "feedback": [
+        "Contact completeness low: include email + phone (or a professional link like LinkedIn/GitHub).",
+        "Experience section weak: add bullet points with measurable impact (metrics, scope, tools).",
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 3,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.4,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.08000000000000002
+      },
+      "started_at_utc": "2026-02-21T05:26:30Z",
+      "finished_at_utc": "2026-02-21T05:26:30Z",
+      "passed": false
+    }
+  ],
+  "meta": {
+    "preferences": {
+      "target_role": "ai architecture",
+      "country": "US",
+      "location": "United States",
+      "remote": false,
+      "wfo_ok": true,
+      "salary": "300000",
+      "user_phone": "5083659302",
+      "discovery_threshold": 0.7,
+      "max_refinements": 3
+    },
+    "live_feed": [
+      {
+        "layer": "L1",
+        "agent": "Dashboard",
+        "message": "Run created. Starting autonomous pipeline\u2026"
+      },
+      {
+        "layer": "L2",
+        "agent": "ParserAgent",
+        "message": "Resume extracted from upload."
+      },
+      {
+        "layer": "L0",
+        "agent": "SanitizeAgent",
+        "message": "Security passed."
+      },
+      {
+        "layer": "L3",
+        "agent": "ParserEvaluator",
+        "message": "Parse score=0.40 decision=retry"
+      },
+      {
+        "layer": "L3",
+        "agent": "ParserEvaluator",
+        "message": "Parse score=0.40 decision=retry"
+      },
+      {
+        "layer": "L3",
+        "agent": "ParserEvaluator",
+        "message": "Parse score=0.40 decision=retry"
+      },
+      {
+        "layer": "L3",
+        "agent": "ParserEvaluator",
+        "message": "Parse score=0.40 decision=human_approval"
+      }
+    ],
+    "pending_action": "resume_cleanup"
+  }
+}

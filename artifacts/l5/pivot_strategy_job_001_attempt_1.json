@@ -1,0 +1,29 @@
+{
+  "job_id": "job_001",
+  "overall_match_percent": 25.85,
+  "posture": "pivot",
+  "action_items": [
+    {
+      "title": "Reframe experience around the role\u2019s core outcomes",
+      "why_it_matters": "Hiring managers screen for outcome-aligned evidence, not just titles.",
+      "how_to_execute": [
+        "Rewrite your Summary to mirror the job\u2019s top 3 responsibilities (only what you\u2019ve actually done).",
+        "Move the most relevant project/experience bullets to the top of Experience.",
+        "Add measurable impact (latency, cost reduction, adoption, accuracy, revenue)."
+      ],
+      "priority": "high",
+      "eta_days": 1
+    },
+    {
+      "title": "Close skill gaps with proof-based micro-projects",
+      "why_it_matters": "If you\u2019re missing required skills, you need evidence fast\u2014not claims.",
+      "how_to_execute": [
+        "Pick 1\u20132 gaps and build a small repo that demonstrates them: model evaluation",
+        "Add a short 'Projects' section with 2 bullets: what you built + what metric improved.",
+        "Link GitHub in contact links and include the repo in your cover letter."
+      ],
+      "priority": "high",
+      "eta_days": 3
+    }
+  ]
+}

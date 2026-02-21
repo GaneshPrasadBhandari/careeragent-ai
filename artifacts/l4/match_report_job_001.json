@@ -1,0 +1,32 @@
+{
+  "job_id": "job_001",
+  "role_title": "Data Scientist (Insurance AI)",
+  "company": "InsureTech",
+  "matched_skills": [
+    "aws",
+    "docker",
+    "fastapi",
+    "mlflow",
+    "python",
+    "sql"
+  ],
+  "missing_required_skills": [
+    "model evaluation"
+  ],
+  "missing_preferred_skills": [],
+  "components": {
+    "skill_overlap": 0.8571428571428571,
+    "experience_alignment": 0.09128709291752768,
+    "ats_score": 0.7549999999999999,
+    "market_competition_factor": 2.199836860740519
+  },
+  "interview_chance_score": 0.2585031546584749,
+  "overall_match_percent": 25.85,
+  "rationale": [
+    "Skill overlap: 0.86 (matched 6 required skills).",
+    "Top gaps (required): model evaluation.",
+    "Experience alignment: 0.09 (text similarity proxy).",
+    "ATS score: 0.75 (structure/density proxy).",
+    "Market factor: 2.20 (competition penalty)."
+  ]
+}

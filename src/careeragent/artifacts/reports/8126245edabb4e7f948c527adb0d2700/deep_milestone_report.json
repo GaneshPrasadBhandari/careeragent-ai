@@ -1,0 +1,71 @@
+{
+  "run_id": "8126245edabb4e7f948c527adb0d2700",
+  "run_status": "running",
+  "match_explanations": [
+    {
+      "job_id": "job_123",
+      "role_title": null,
+      "company": null,
+      "interview_chance_score": 0.65,
+      "overall_match_percent": 65.0,
+      "weights": {
+        "w1_skill_overlap": 0.45,
+        "w2_experience_alignment": 0.35,
+        "w3_ats_score": 0.2
+      },
+      "components": {
+        "skill_overlap": 0.7,
+        "experience_alignment": 0.6,
+        "ats_score": 0.8,
+        "market_competition_factor": 1.4
+      },
+      "explanation": [
+        "Score = (0.45\u00d7SkillOverlap + 0.35\u00d7ExperienceAlignment + 0.20\u00d7ATS) \u00f7 MarketFactor.",
+        "Components: SkillOverlap=0.7, ExperienceAlignment=0.6, ATS=0.8, MarketFactor=1.4.",
+        "Primary drivers are the largest weighted components (skills, then experience alignment)."
+      ]
+    }
+  ],
+  "market_trends": {
+    "top_keywords": [
+      {
+        "keyword": "python",
+        "count": 1
+      },
+      {
+        "keyword": "sql",
+        "count": 1
+      },
+      {
+        "keyword": "aws",
+        "count": 1
+      },
+      {
+        "keyword": "fastapi",
+        "count": 1
+      }
+    ],
+    "note": "Keyword counts are derived from job requirements inputs and observed gaps."
+  },
+  "security_compliance": {
+    "security_events_total": 2,
+    "security_event_types": {
+      "prompt_injection_block": 1,
+      "output_guard_flag": 1
+    },
+    "run_failure_code": "SECURITY_BLOCK"
+  },
+  "quota_summary": {
+    "serper": {
+      "provider": "serper",
+      "total_requests": 2,
+      "total_errors": 2,
+      "last_status_code": 403,
+      "blocked": true,
+      "last_error": "403 quota exceeded / forbidden"
+    }
+  },
+  "outcome_summary": {
+    "status_updates_total": 0
+  }
+}

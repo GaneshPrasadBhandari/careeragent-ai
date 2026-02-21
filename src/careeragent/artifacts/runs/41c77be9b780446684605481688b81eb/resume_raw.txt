@@ -1,0 +1,6 @@
+Ganesh - Principal AI Solution Architect
+Summary: 12+ years of experience in Enterprise AI Strategy.
+Core Skills: LLM Orchestration, RAG Systems, Multi-Agent Workflows.
+Tech Stack: Python, LangChain, Pinecone, PyTorch, Azure AI.
+Experience: Led AI transformation for Fortune 500 companies.
+Architectural Focus: Scalable MLOps and ethical AI governance.

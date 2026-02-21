@@ -1,0 +1,353 @@
+
+from __future__ import annotations
+
+import json
+import threading
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
+
+import httpx
+
+from careeragent.config import artifacts_root, get_settings
+from careeragent.orchestration.state import OrchestrationState
+from careeragent.services.db_service import SqliteStateStore
+from careeragent.services.notification_service import NotificationService
+from careeragent.services.health_service import HealthService
+
+from careeragent.agents.security_agent import SanitizeAgent
+from careeragent.agents.parser_agent_service import ParserAgentService, ExtractedResume
+from careeragent.agents.parser_evaluator_service import ParserEvaluatorService
+from careeragent.agents.matcher_agent_schema import JobDescription
+from careeragent.agents.matcher_agent_service import MatcherAgentService
+from careeragent.services.xai_service import XAIService
+from careeragent.services.exporter import CareerDossierExporter
+
+
+class LiveFeed:
+    """
+    Description: Live Agent Feed logger stored in state.meta['live_feed'] for UI.
+    Layer: L1
+    Input: OrchestrationState + event
+    Output: appended feed
+    """
+    @staticmethod
+    def emit(state: OrchestrationState, *, layer: str, agent: str, message: str) -> None:
+        state.meta.setdefault("live_feed", [])
+        state.meta["live_feed"].append({"layer": layer, "agent": agent, "message": message})
+        state.touch()
+
+
+def _run_dir(run_id: str) -> Path:
+    d = artifacts_root() / "runs" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_json(p: Path, obj: Any) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+
+
+class LocalResumeExtractor:
+    """
+    Description: Extract resume text from uploaded PDF/TXT/DOCX (best-effort local).
+    Layer: L2
+    Input: filename + bytes
+    Output: extracted text
+    """
+    @staticmethod
+    def extract_text(*, filename: str, data: bytes) -> str:
+        name = (filename or "").lower()
+        if name.endswith(".txt"):
+            return data.decode("utf-8", errors="replace")
+
+        if name.endswith(".pdf"):
+            try:
+                from pypdf import PdfReader  # type: ignore
+            except Exception as e:
+                raise RuntimeError("PDF extraction needs pypdf. Install: uv add pypdf") from e
+            import io
+            reader = PdfReader(io.BytesIO(data))
+            return "\n".join([(pg.extract_text() or "") for pg in reader.pages])
+
+        if name.endswith(".docx"):
+            try:
+                import docx  # type: ignore
+            except Exception as e:
+                raise RuntimeError("DOCX extraction needs python-docx. Install: uv add python-docx") from e
+            import io
+            f = io.BytesIO(data)
+            d = docx.Document(f)
+            return "\n".join([p.text for p in d.paragraphs if p.text])
+
+        return data.decode("utf-8", errors="replace")
+
+
+class SerperDiscoveryService:
+    """
+    Description: Serper-based job discovery.
+    Layer: L3
+    Input: query
+    Output: list of search results
+    """
+    SERPER_URL = "https://google.serper.dev/search"
+
+    def __init__(self, *, api_key: str, health: HealthService) -> None:
+        self._key = api_key
+        self._health = health
+
+    def search(self, *, state: OrchestrationState, step_id: str, query: str, num: int = 20) -> List[Dict[str, Any]]:
+        headers = {"X-API-KEY": self._key, "Content-Type": "application/json"}
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                r = client.post(self.SERPER_URL, headers=headers, json={"q": query, "num": num})
+        except Exception as e:
+            state.status = "api_failure"
+            state.meta["run_failure_code"] = "API_FAILURE"
+            state.meta["run_failure_provider"] = "serper"
+            LiveFeed.emit(state, layer="L3", agent="DiscoveryService", message=f"Serper request failed: {e}")
+            return []
+
+        # quota enforcement (403 -> blocked)
+        if self._health.quota.handle_serper_response(
+            state=state, step_id=step_id, status_code=r.status_code, tool_name="serper.search", error_detail=r.text[:200]
+        ):
+            return []
+
+        if r.status_code >= 400:
+            state.status = "api_failure"
+            state.meta["run_failure_code"] = "API_FAILURE"
+            state.meta["run_failure_provider"] = "serper"
+            LiveFeed.emit(state, layer="L3", agent="DiscoveryService", message=f"Serper error {r.status_code}: {r.text[:200]}")
+            return []
+
+        organic = (r.json().get("organic") or [])
+        out = []
+        for it in organic:
+            out.append({"title": it.get("title") or "", "link": it.get("link") or "", "snippet": it.get("snippet") or ""})
+        return out
+
+
+class OneClickAutomationEngine:
+    """
+    Description: One-click autonomous pipeline runner with HITL pause points.
+    Layer: L0-L9
+    Input: resume upload + preferences
+    Output: state persisted for UI polling
+    """
+
+    def __init__(self) -> None:
+        self._s = get_settings()
+        self._store = SqliteStateStore()
+
+        self._health = HealthService()
+        self._health.load_env(dotenv_path=str(Path(".env")))
+        self._health.enable_langsmith_tracing(project=self._s.langsmith_project)
+
+        self._notifier = NotificationService(dry_run=not bool(self._s.twilio_account_sid))
+        self._sanitize = SanitizeAgent()
+
+        self._parser = ParserAgentService()
+        self._parser_eval = ParserEvaluatorService()
+        self._matcher = MatcherAgentService()
+
+    def _persist(self, state: OrchestrationState) -> None:
+        d = _run_dir(state.run_id)
+        _save_json(d / "state.json", state.model_dump())
+        self._store.upsert_state(run_id=state.run_id, status=state.status, state=state.model_dump(), updated_at_utc=state.updated_at_utc)
+
+    def load(self, run_id: str) -> Optional[Dict[str, Any]]:
+        return self._store.get_state(run_id=run_id)
+
+    def start_run(self, *, filename: str, data: bytes, prefs: Dict[str, Any]) -> OrchestrationState:
+        state = OrchestrationState.new(env=self._s.environment, mode="agentic", git_sha=None)
+        state.meta["preferences"] = prefs
+        LiveFeed.emit(state, layer="L1", agent="Dashboard", message="Run created. Starting autonomous pipeline…")
+        self._persist(state)
+
+        t = threading.Thread(target=self._run, args=(state.run_id, filename, data), daemon=True)
+        t.start()
+        return state
+
+    def submit_action(self, *, run_id: str, action_type: str, payload: Dict[str, Any]) -> OrchestrationState:
+        raw = self.load(run_id)
+        if not raw:
+            raise ValueError("run_id not found")
+        state = OrchestrationState(**raw)
+        state.meta["last_user_action"] = {"type": action_type, "payload": payload}
+        LiveFeed.emit(state, layer="L5", agent="HITL", message=f"User action: {action_type}")
+        self._persist(state)
+
+        # For beta: just flip pending_action & continue in background if needed
+        t = threading.Thread(target=self._continue, args=(run_id,), daemon=True)
+        t.start()
+        return state
+
+    # ---------------- core run ----------------
+    def _run(self, run_id: str, filename: str, data: bytes) -> None:
+        raw = self.load(run_id)
+        if not raw:
+            return
+        state = OrchestrationState(**raw)
+        run_dir = _run_dir(run_id)
+
+        # L2 extract
+        state.start_step("l2_extract", layer_id="L2", tool_name="ResumeExtractor", input_ref={"filename": filename})
+        try:
+            text = LocalResumeExtractor.extract_text(filename=filename, data=data)
+        except Exception as e:
+            state.end_step("l2_extract", status="failed", output_ref={}, message=str(e))
+            state.status = "needs_human_approval"
+            state.meta["pending_action"] = "resume_extract_failed"
+            LiveFeed.emit(state, layer="L2", agent="ParserAgent", message=f"Resume extraction failed: {e}")
+            self._persist(state)
+            return
+
+        (run_dir / "resume_raw.txt").write_text(text, encoding="utf-8")
+        state.add_artifact("resume_raw", str(run_dir / "resume_raw.txt"), content_type="text/plain")
+        state.end_step("l2_extract", status="ok", output_ref={"artifact_key": "resume_raw"}, message="extracted")
+        LiveFeed.emit(state, layer="L2", agent="ParserAgent", message="Resume extracted from upload.")
+        self._persist(state)
+
+        # L0 sanitize
+        state.start_step("l0_sanitize", layer_id="L0", tool_name="SanitizeAgent", input_ref={})
+        safe = self._sanitize.sanitize_before_llm(state=state, step_id="l0_sanitize", tool_name="sanitize_before_llm", user_text=text, context="resume")
+        if safe is None:
+            LiveFeed.emit(state, layer="L0", agent="SanitizeAgent", message="Prompt injection detected. Run blocked.")
+            self._persist(state)
+            return
+        state.end_step("l0_sanitize", status="ok", output_ref={"sanitized": True}, message="pass")
+        LiveFeed.emit(state, layer="L0", agent="SanitizeAgent", message="Security passed.")
+        self._persist(state)
+
+        # L2/L3 parse loop
+        extracted = None
+        fb: List[str] = []
+        for attempt in range(4):
+            sid = f"l2_parse_{attempt+1}"
+            state.start_step(sid, layer_id="L2", tool_name="ParserAgentService", input_ref={"attempt": attempt+1})
+            extracted = self._parser.parse(raw_text=safe, orchestration_state=state, feedback=fb)
+            p = run_dir / f"extracted_resume_attempt_{attempt+1}.json"
+            _save_json(p, extracted.to_json_dict())
+            state.add_artifact(f"extracted_resume_attempt_{attempt+1}", str(p), content_type="application/json")
+            state.end_step(sid, status="ok", output_ref={"artifact_key": f"extracted_resume_attempt_{attempt+1}"}, message="parsed")
+
+            ev = self._parser_eval.evaluate(
+                orchestration_state=state, raw_text=safe, extracted=extracted,
+                target_id="resume_main", threshold=0.80, retry_count=attempt, max_retries=3
+            )
+            decision = state.apply_recursive_gate(target_id="resume_main", layer_id="L3")
+            LiveFeed.emit(state, layer="L3", agent="ParserEvaluator", message=f"Parse score={ev.evaluation_score:.2f} decision={decision}")
+            self._persist(state)
+
+            if decision == "pass":
+                state.add_artifact("extracted_resume", str(p), content_type="application/json")
+                break
+            if decision == "human_approval":
+                state.status = "needs_human_approval"
+                state.meta["pending_action"] = "resume_cleanup"
+                self._persist(state)
+                return
+            fb = ev.feedback
+
+        if not extracted:
+            state.status = "needs_human_approval"
+            state.meta["pending_action"] = "resume_cleanup"
+            self._persist(state)
+            return
+
+        # L3 discovery (simple beta)
+        prefs = state.meta.get("preferences", {}) or {}
+        target_role = str(prefs.get("target_role", "Data Scientist"))
+        location = str(prefs.get("location", "United States"))
+        remote = bool(prefs.get("remote", True))
+        skills = " ".join((extracted.skills or [])[:6])
+        intent = "remote" if remote else "on-site"
+
+        if not self._s.serper_api_key:
+            state.status = "needs_human_approval"
+            state.meta["pending_action"] = "missing_serper_key"
+            LiveFeed.emit(state, layer="L3", agent="DiscoveryAgent", message="Missing SERPER_API_KEY in .env.")
+            self._persist(state)
+            return
+
+        discovery = SerperDiscoveryService(api_key=self._s.serper_api_key, health=self._health)
+        q = f'{target_role} {location} {intent} {skills} "apply"'
+        state.start_step("l3_discovery", layer_id="L3", tool_name="DiscoveryService", input_ref={"query": q})
+        LiveFeed.emit(state, layer="L3", agent="DiscoveryAgent", message="Searching job boards…")
+        results = discovery.search(state=state, step_id="l3_discovery", query=q, num=20)
+        state.end_step("l3_discovery", status="ok", output_ref={"results": len(results)}, message="discovered")
+        self._persist(state)
+
+        if state.status in ("blocked", "api_failure"):
+            return
+
+        # L4 match top 8 results using snippets as job text (beta)
+        ranked: List[Dict[str, Any]] = []
+        for it in results[:8]:
+            job_id = uuid4().hex
+            jd = JobDescription(
+                job_id=job_id,
+                role_title=it.get("title") or target_role,
+                company="JobBoard",
+                country_code=str(prefs.get("country", "US")),
+                required_skills=(extracted.skills or [])[:12],
+                preferred_skills=[],
+                responsibilities=[],
+                requirements_text=(it.get("snippet") or ""),
+                applicants_count=None,
+                market_competition_factor=None,
+            )
+            rep = self._matcher.match(resume=extracted, job=jd, orchestration_state=state)
+            ranked.append({
+                "job_id": job_id,
+                "role_title": jd.role_title,
+                "company": jd.company,
+                "url": it.get("link"),
+                "interview_chance_score": float(rep.interview_chance_score),
+                "overall_match_percent": float(rep.overall_match_percent),
+                "matched_skills": rep.matched_skills[:10],
+                "missing_required_skills": rep.missing_required_skills[:10],
+            })
+            state.meta.setdefault("job_scores", {})
+            state.meta.setdefault("job_components", {})
+            state.meta.setdefault("job_meta", {})
+            state.meta["job_scores"][job_id] = float(rep.interview_chance_score)
+            state.meta["job_components"][job_id] = rep.components.model_dump()
+            state.meta["job_meta"][job_id] = {"role_title": jd.role_title, "company": jd.company, "url": it.get("link")}
+
+        ranked.sort(key=lambda x: x["interview_chance_score"], reverse=True)
+        _save_json(run_dir / "ranking.json", ranked)
+        state.add_artifact("ranking", str(run_dir / "ranking.json"), content_type="application/json")
+
+        # HITL pause for ranking review
+        state.status = "needs_human_approval"
+        state.meta["pending_action"] = "review_ranking"
+        LiveFeed.emit(state, layer="L1", agent="Dashboard", message="Ranking ready for review.")
+        self._persist(state)
+
+        # Pre-generate XAI + ZIP for download
+        try:
+            xai = XAIService()
+            xai_paths = xai.write_outputs(state=state, require_reportlab=False)
+            state.add_artifact("xai_transparency_pdf", xai_paths["pdf"], content_type="application/pdf")
+            state.add_artifact("transparency_matrix_json", xai_paths["json"], content_type="application/json")
+
+            exporter = CareerDossierExporter()
+            bundle = exporter.bundle_reports(run_id=state.run_id, final_pdf_path=xai_paths["pdf"])
+            state.add_artifact("career_dossier_zip", bundle["zip"], content_type="application/zip")
+            self._persist(state)
+        except Exception:
+            pass
+
+    def _continue(self, run_id: str) -> None:
+        raw = self.load(run_id)
+        if not raw:
+            return
+        state = OrchestrationState(**raw)
+        # For now, beta continues are handled by your existing action logic elsewhere.
+        self._persist(state)
+
+
+ENGINE = OneClickAutomationEngine()

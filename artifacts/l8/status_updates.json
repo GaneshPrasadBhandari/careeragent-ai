@@ -1,0 +1,18 @@
+[
+  {
+    "event_id": "10f8ba33ee964de48ccd89188188bf8a",
+    "submission_id": "de9ef008cbc94279ae7f6a02dcf0d37a",
+    "job_id": "job_001",
+    "status": "applied",
+    "occurred_at_utc": "2026-02-20T21:56:31Z",
+    "note": "Submitted."
+  },
+  {
+    "event_id": "9923452f68274b6ba8c982927987f4b6",
+    "submission_id": "de9ef008cbc94279ae7f6a02dcf0d37a",
+    "job_id": "job_001",
+    "status": "interviewing",
+    "occurred_at_utc": "2026-02-20T21:56:31Z",
+    "note": "Recruiter screen scheduled."
+  }
+]

@@ -1,0 +1,351 @@
+{
+  "run_id": "494eeebb28544fdea225f3a9a2b3c650",
+  "run_status": "completed",
+  "artifacts": {
+    "raw_resume": {
+      "key": "raw_resume",
+      "path": "outputs/inputs/raw_resume.txt",
+      "content_type": "text/plain",
+      "sha256": null
+    },
+    "job_job_001": {
+      "key": "job_job_001",
+      "path": "outputs/inputs/job.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_1": {
+      "key": "extracted_resume_attempt_1",
+      "path": "outputs/l2/extracted_resume_attempt_1.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "match_report_job_001": {
+      "key": "match_report_job_001",
+      "path": "outputs/l4/match_report_job_001.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "pivot_strategy_job_001_attempt_1": {
+      "key": "pivot_strategy_job_001_attempt_1",
+      "path": "outputs/l5/pivot_strategy_job_001_attempt_1.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "pivot_strategy_job_001_attempt_2": {
+      "key": "pivot_strategy_job_001_attempt_2",
+      "path": "outputs/l5/pivot_strategy_job_001_attempt_2.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "cover_letter_job_001_attempt_1": {
+      "key": "cover_letter_job_001_attempt_1",
+      "path": "outputs/l6/cover_letter_job_001_attempt_1.md",
+      "content_type": "text/markdown",
+      "sha256": null
+    },
+    "cover_letter_job_001_attempt_2": {
+      "key": "cover_letter_job_001_attempt_2",
+      "path": "outputs/l6/cover_letter_job_001_attempt_2.md",
+      "content_type": "text/markdown",
+      "sha256": null
+    },
+    "submission_de9ef008cbc94279ae7f6a02dcf0d37a": {
+      "key": "submission_de9ef008cbc94279ae7f6a02dcf0d37a",
+      "path": "outputs/l7/submission_de9ef008cbc94279ae7f6a02dcf0d37a.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "status_updates": {
+      "key": "status_updates",
+      "path": "outputs/l8/status_updates.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "analytics_report": {
+      "key": "analytics_report",
+      "path": "outputs/l9/analytics_report.json",
+      "content_type": "application/json",
+      "sha256": null
+    }
+  },
+  "steps": [
+    {
+      "step_id": "l2_parse_1",
+      "layer_id": "L2",
+      "tool_name": "parser_agent_service",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "attempt": 1
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_1"
+      }
+    },
+    {
+      "step_id": "l4_match",
+      "layer_id": "L4",
+      "tool_name": "matcher_agent_service",
+      "status": "ok",
+      "message": "matched",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "job_id": "job_001"
+      },
+      "output_ref": {
+        "artifact_key": "match_report_job_001"
+      }
+    },
+    {
+      "step_id": "l5_strategy_1",
+      "layer_id": "L5",
+      "tool_name": "strategy_agent_service",
+      "status": "ok",
+      "message": "strategy",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "attempt": 1
+      },
+      "output_ref": {
+        "artifact_key": "pivot_strategy_job_001_attempt_1"
+      }
+    },
+    {
+      "step_id": "l5_strategy_2",
+      "layer_id": "L5",
+      "tool_name": "strategy_agent_service",
+      "status": "ok",
+      "message": "strategy",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "attempt": 2
+      },
+      "output_ref": {
+        "artifact_key": "pivot_strategy_job_001_attempt_2"
+      }
+    },
+    {
+      "step_id": "l6_cover_1",
+      "layer_id": "L6",
+      "tool_name": "cover_letter_service",
+      "status": "ok",
+      "message": "cover_letter",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "attempt": 1
+      },
+      "output_ref": {
+        "artifact_key": "cover_letter_job_001_attempt_1"
+      }
+    },
+    {
+      "step_id": "l6_cover_2",
+      "layer_id": "L6",
+      "tool_name": "cover_letter_service",
+      "status": "ok",
+      "message": "cover_letter",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "attempt": 2
+      },
+      "output_ref": {
+        "artifact_key": "cover_letter_job_001_attempt_2"
+      }
+    },
+    {
+      "step_id": "l7_apply",
+      "layer_id": "L7",
+      "tool_name": "apply_executor_service",
+      "status": "ok",
+      "message": "submitted",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "job_id": "job_001"
+      },
+      "output_ref": {
+        "submission_id": "de9ef008cbc94279ae7f6a02dcf0d37a",
+        "artifact_key": "submission_de9ef008cbc94279ae7f6a02dcf0d37a"
+      }
+    },
+    {
+      "step_id": "l8_track",
+      "layer_id": "L8",
+      "tool_name": "application_tracker_service",
+      "status": "ok",
+      "message": "tracked",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {
+        "submission_id": "de9ef008cbc94279ae7f6a02dcf0d37a"
+      },
+      "output_ref": {
+        "artifact_key": "status_updates"
+      }
+    },
+    {
+      "step_id": "l9_analytics",
+      "layer_id": "L9",
+      "tool_name": "analytics_service",
+      "status": "ok",
+      "message": "analytics",
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "input_ref": {},
+      "output_ref": {
+        "artifact_key": "analytics_report"
+      }
+    }
+  ],
+  "evaluations": [
+    {
+      "eval_id": "20d1992b48544e69b6424c32802bc4b4",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.9021250000000001,
+      "threshold": 0.8,
+      "feedback": [
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.9,
+          "experience_alignment": 0.09128709291752768,
+          "ats_score": 0.7825,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.5934504825211347
+      },
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": true
+    },
+    {
+      "eval_id": "18ae2d1441b74e58825bb47b69d8ff00",
+      "layer_id": "L4",
+      "target_id": "match::job_001",
+      "generator_agent": "matcher_agent_service",
+      "evaluator_agent": "matcher_evaluator_service",
+      "evaluation_score": 1.0,
+      "threshold": 0.8,
+      "feedback": [],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": null,
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": true
+    },
+    {
+      "eval_id": "78b30de637aa457d9be8e1df42fd997c",
+      "layer_id": "L5",
+      "target_id": "strategy::job_001",
+      "generator_agent": "strategy_agent_service",
+      "evaluator_agent": "strategy_evaluator_service",
+      "evaluation_score": 0.6,
+      "threshold": 0.8,
+      "feedback": [
+        "Strategy too thin for low match: add more ActionItems (target 3\u20135) with concrete steps."
+      ],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": null,
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": false
+    },
+    {
+      "eval_id": "1c9c504931d44670a897c3efaed9f630",
+      "layer_id": "L5",
+      "target_id": "strategy::job_001",
+      "generator_agent": "strategy_agent_service",
+      "evaluator_agent": "strategy_evaluator_service",
+      "evaluation_score": 1.0,
+      "threshold": 0.8,
+      "feedback": [],
+      "retry_count": 1,
+      "max_retries": 3,
+      "interview_chance": null,
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": true
+    },
+    {
+      "eval_id": "b78604019a954deeb21d2aa033599f33",
+      "layer_id": "L6",
+      "target_id": "cover::job_001",
+      "generator_agent": "cover_letter_service",
+      "evaluator_agent": "cover_letter_evaluator_service",
+      "evaluation_score": 0.7,
+      "threshold": 0.8,
+      "feedback": [
+        "Contact block missing: include your email (and phone/link if available) in the header."
+      ],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": null,
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": false
+    },
+    {
+      "eval_id": "bef3ea05dee342c0af532e5828e26e01",
+      "layer_id": "L6",
+      "target_id": "cover::job_001",
+      "generator_agent": "cover_letter_service",
+      "evaluator_agent": "cover_letter_evaluator_service",
+      "evaluation_score": 1.0,
+      "threshold": 0.8,
+      "feedback": [],
+      "retry_count": 1,
+      "max_retries": 3,
+      "interview_chance": null,
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": true
+    },
+    {
+      "eval_id": "17fb01ac070f482882bb2582ff089fb4",
+      "layer_id": "L7",
+      "target_id": "apply::de9ef008cbc94279ae7f6a02dcf0d37a",
+      "generator_agent": "apply_executor_service",
+      "evaluator_agent": "apply_executor_evaluator_service",
+      "evaluation_score": 1.0,
+      "threshold": 0.9,
+      "feedback": [],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": null,
+      "started_at_utc": "2026-02-20T21:56:31Z",
+      "finished_at_utc": "2026-02-20T21:56:31Z",
+      "passed": true
+    }
+  ],
+  "meta_keys": [
+    "job_scores",
+    "status_updates",
+    "submissions",
+    "target_requirements_text",
+    "target_role_keywords",
+    "w1_skill_overlap",
+    "w2_experience_alignment",
+    "w3_ats_score"
+  ]
+}

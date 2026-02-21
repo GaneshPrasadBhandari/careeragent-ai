@@ -1,0 +1,347 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, TypedDict
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from langchain_core.runnables import RunnableLambda
+from langgraph.graph import END, StateGraph
+
+from careeragent.orchestration.state import OrchestrationState
+
+
+class ExtractedContact(BaseModel):
+    """Description: Parsed contact details extracted from a raw resume string.
+    Layer: L2
+    Input: Raw resume text
+    Output: Structured contact object
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    links: List[str] = Field(default_factory=list)
+
+
+class ExtractedExperienceItem(BaseModel):
+    """Description: Parsed experience item extracted from a resume.
+    Layer: L2
+    Input: Raw experience lines
+    Output: Structured experience item
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = None
+    company: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    bullets: List[str] = Field(default_factory=list)
+
+
+class ExtractedEducationItem(BaseModel):
+    """Description: Parsed education item extracted from a resume.
+    Layer: L2
+    Input: Raw education lines
+    Output: Structured education item
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    degree: Optional[str] = None
+    institution: Optional[str] = None
+    graduation_year: Optional[str] = None
+
+
+class ExtractedResume(BaseModel):
+    """Description: Canonical L2 resume extraction artifact.
+    Layer: L2
+    Input: Raw resume text (pdf/txt extracted)
+    Output: ATS-oriented structured JSON
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    contact: ExtractedContact = Field(default_factory=ExtractedContact)
+    skills: List[str] = Field(default_factory=list)
+    experience: List[ExtractedExperienceItem] = Field(default_factory=list)
+    education: List[ExtractedEducationItem] = Field(default_factory=list)
+
+    def to_json_dict(self) -> Dict[str, Any]:
+        """Description: Convert model to JSON-serializable dict.
+        Layer: L2
+        Input: ExtractedResume
+        Output: dict
+        """
+        return self.model_dump()
+
+
+@dataclass(frozen=True)
+class ParserConfig:
+    """Description: Configuration knobs for the parser agent.
+    Layer: L0
+    Input: Config from env/state meta
+    Output: Deterministic parsing behavior
+    """
+
+    # conservative defaults; can be overridden via OrchestrationState.meta
+    skill_dictionary: tuple[str, ...] = (
+        "python",
+        "sql",
+        "pandas",
+        "numpy",
+        "scikit-learn",
+        "pytorch",
+        "tensorflow",
+        "mlflow",
+        "dvc",
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "fastapi",
+        "langgraph",
+        "langchain",
+        "rag",
+        "vector database",
+        "chroma",
+        "faiss",
+        "llm",
+        "genai",
+    )
+
+
+class _ParserGraphState(TypedDict):
+    """Description: LangGraph state contract for L2 parsing graph.
+    Layer: L2
+    Input: raw_text + optional feedback + orchestration state
+    Output: parsed ExtractedResume
+    """
+
+    raw_text: str
+    feedback: List[str]
+    orchestration_state: OrchestrationState
+    parsed: Optional[ExtractedResume]
+
+
+class ParserAgentService:
+    """Description: L2 generator that converts raw resume text into ExtractedResume JSON.
+    Layer: L2
+    Input: Raw resume string (from PDF/TXT)
+    Output: ExtractedResume (Pydantic)
+    """
+
+    EMAIL_RE = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
+    PHONE_RE = re.compile(r"(\+?\d[\d\-\s\(\)]{8,}\d)")
+    LINK_RE = re.compile(r"(https?://[^\s]+)")
+
+    HEADING_RE = re.compile(r"^\s*(skills|experience|education|projects|summary)\s*:?\s*$", re.I)
+
+    BULLET_RE = re.compile(r"^\s*[-•*]\s+")
+
+    def __init__(self, config: Optional[ParserConfig] = None) -> None:
+        """Description: Create the parser service.
+        Layer: L0
+        Input: Optional ParserConfig
+        Output: ParserAgentService
+        """
+        self._config = config or ParserConfig()
+
+    def as_runnable(self) -> RunnableLambda:
+        """Description: Expose the parser as a LangChain runnable (for orchestration nodes/tools).
+        Layer: L2
+        Input: raw_text str (and optional kwargs in dict)
+        Output: ExtractedResume
+        """
+
+        def _run(payload: Dict[str, Any]) -> ExtractedResume:
+            raw_text = payload["raw_text"]
+            feedback = payload.get("feedback") or []
+            st: OrchestrationState = payload["orchestration_state"]
+            return self.parse(raw_text=raw_text, orchestration_state=st, feedback=feedback)
+
+        return RunnableLambda(_run)
+
+    def build_langgraph(self) -> Any:
+        """Description: Build a minimal LangGraph for parsing (single node).
+        Layer: L2
+        Input: None
+        Output: Compiled LangGraph runnable
+        """
+        g = StateGraph(_ParserGraphState)
+
+        def _parse_node(state: _ParserGraphState) -> _ParserGraphState:
+            parsed = self.parse(
+                raw_text=state["raw_text"],
+                orchestration_state=state["orchestration_state"],
+                feedback=state.get("feedback") or [],
+            )
+            state["parsed"] = parsed
+            return state
+
+        g.add_node("parse", _parse_node)
+        g.set_entry_point("parse")
+        g.add_edge("parse", END)
+        return g.compile()
+
+    def parse(
+        self,
+        *,
+        raw_text: str,
+        orchestration_state: OrchestrationState,
+        feedback: Optional[List[str]] = None,
+    ) -> ExtractedResume:
+        """Description: Parse raw resume text into ExtractedResume.
+        Layer: L2
+        Input: raw_text + feedback + OrchestrationState
+        Output: ExtractedResume
+        """
+        fb = [f.strip() for f in (feedback or []) if f and str(f).strip()]
+
+        text = (raw_text or "").replace("\t", " ").strip()
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+        # --- name (simple heuristic: first non-empty line that is not an email/URL)
+        name = None
+        for ln in lines[:5]:
+            if self.EMAIL_RE.search(ln) or self.LINK_RE.search(ln):
+                continue
+            if len(ln.split()) <= 6 and len(ln) <= 60:
+                name = ln
+                break
+
+        # --- contact
+        email = self._first_match(self.EMAIL_RE, text)
+        phone = self._first_match(self.PHONE_RE, text)
+        links = list(dict.fromkeys(self.LINK_RE.findall(text)))  # unique, stable order
+
+        contact = ExtractedContact(email=email, phone=phone, links=links)
+
+        # --- section slicing
+        sections = self._split_sections(lines)
+
+        skills = self._parse_skills(sections.get("skills", []), text, orchestration_state, fb)
+        experience = self._parse_experience(sections.get("experience", []))
+        education = self._parse_education(sections.get("education", []))
+
+        # Feedback-driven enrichment (recursive loop-back hook)
+        if any("skills" in s.lower() for s in fb) and not skills:
+            skills = self._infer_skills_from_dictionary(text, orchestration_state)
+
+        if any("contact" in s.lower() for s in fb) and not (contact.email and (contact.phone or contact.links)):
+            # try a more permissive phone parse
+            phone2 = self._first_match(re.compile(r"(\d[\d\-\s]{9,}\d)"), text)
+            contact.phone = contact.phone or phone2
+
+        extracted = ExtractedResume(
+            name=name,
+            contact=contact,
+            skills=skills,
+            experience=experience,
+            education=education,
+        )
+        return extracted
+
+    # -------------------- internals --------------------
+
+    @staticmethod
+    def _first_match(rx: re.Pattern, text: str) -> Optional[str]:
+        m = rx.search(text or "")
+        return m.group(0).strip() if m else None
+
+    def _split_sections(self, lines: List[str]) -> Dict[str, List[str]]:
+        """Description: Split resume lines into ATS-style sections by headings.
+        Layer: L2
+        Input: lines
+        Output: dict of section -> lines
+        """
+        current = "header"
+        out: Dict[str, List[str]] = {"header": []}
+        for ln in lines:
+            if self.HEADING_RE.match(ln):
+                current = self.HEADING_RE.match(ln).group(1).lower()  # type: ignore[union-attr]
+                out.setdefault(current, [])
+                continue
+            out.setdefault(current, []).append(ln)
+        return out
+
+    def _parse_skills(
+        self,
+        skill_lines: List[str],
+        full_text: str,
+        orchestration_state: OrchestrationState,
+        feedback: List[str],
+    ) -> List[str]:
+        """Description: Extract skills list from Skills section, with fallback inference.
+        Layer: L2
+        Input: skill_lines + full_text + state
+        Output: list[str]
+        """
+        skills: List[str] = []
+        if skill_lines:
+            joined = " ".join(skill_lines)
+            # split by common delimiters
+            parts = re.split(r"[,\|•·/;]+", joined)
+            skills = [p.strip().lower() for p in parts if p and p.strip()]
+        # Fallback inference if missing or if asked for keyword density
+        if not skills or any("keyword" in s.lower() for s in feedback):
+            inferred = self._infer_skills_from_dictionary(full_text, orchestration_state)
+            skills = list(dict.fromkeys((skills + inferred)))
+        # normalize: keep concise unique tokens
+        cleaned = []
+        for s in skills:
+            s2 = re.sub(r"\s+", " ", s).strip()
+            if not s2 or len(s2) < 2:
+                continue
+            cleaned.append(s2)
+        return list(dict.fromkeys(cleaned))
+
+    def _infer_skills_from_dictionary(self, text: str, orchestration_state: OrchestrationState) -> List[str]:
+        """Description: Infer skills by scanning a skill dictionary against raw text.
+        Layer: L2
+        Input: text + OrchestrationState.meta
+        Output: list[str] inferred skills
+        """
+        custom = orchestration_state.meta.get("skill_dictionary")
+        dictionary = list(custom) if isinstance(custom, (list, tuple)) else list(self._config.skill_dictionary)
+        hay = (text or "").lower()
+        found = []
+        for kw in dictionary:
+            k = str(kw).lower().strip()
+            if not k:
+                continue
+            if k in hay:
+                found.append(k)
+        return list(dict.fromkeys(found))
+
+    def _parse_experience(self, exp_lines: List[str]) -> List[ExtractedExperienceItem]:
+        """Description: Parse Experience section into items (heuristic).
+        Layer: L2
+        Input: Experience lines
+        Output: list[ExtractedExperienceItem]
+        """
+        if not exp_lines:
+            return []
+
+        bullets = [ln for ln in exp_lines if self.BULLET_RE.match(ln)]
+        # Keep a single item for now; later we’ll split by company/title blocks.
+        return [ExtractedExperienceItem(bullets=[re.sub(self.BULLET_RE, "", b).strip() for b in bullets])] if bullets else [
+            ExtractedExperienceItem(bullets=exp_lines[:8])
+        ]
+
+    def _parse_education(self, edu_lines: List[str]) -> List[ExtractedEducationItem]:
+        """Description: Parse Education section into items (heuristic).
+        Layer: L2
+        Input: Education lines
+        Output: list[ExtractedEducationItem]
+        """
+        if not edu_lines:
+            return []
+        joined = " ".join(edu_lines)
+        year = self._first_match(re.compile(r"(19|20)\d{2}"), joined)
+        return [ExtractedEducationItem(institution=edu_lines[0], graduation_year=year)]

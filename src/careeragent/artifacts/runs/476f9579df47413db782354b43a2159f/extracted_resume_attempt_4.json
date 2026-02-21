@@ -1,0 +1,19 @@
+{
+  "name": "Alex Rivera",
+  "contact": {
+    "email": null,
+    "phone": null,
+    "location": null,
+    "links": []
+  },
+  "skills": [
+    "python",
+    "sql",
+    "docker",
+    "kubernetes",
+    "aws",
+    "fastapi"
+  ],
+  "experience": [],
+  "education": []
+}

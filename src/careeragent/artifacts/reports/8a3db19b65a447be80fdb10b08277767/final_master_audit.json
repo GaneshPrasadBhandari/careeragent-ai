@@ -1,0 +1,352 @@
+{
+  "run_id": "8a3db19b65a447be80fdb10b08277767",
+  "status": "completed",
+  "artifacts": {
+    "extracted_resume_attempt_1": {
+      "key": "extracted_resume_attempt_1",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/extracted_resume_attempt_1.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_2": {
+      "key": "extracted_resume_attempt_2",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/extracted_resume_attempt_2.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_3": {
+      "key": "extracted_resume_attempt_3",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/extracted_resume_attempt_3.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "extracted_resume_attempt_4": {
+      "key": "extracted_resume_attempt_4",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/extracted_resume_attempt_4.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "match_report_job_777": {
+      "key": "match_report_job_777",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/match_report_job_777.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "pivot_strategy_job_777": {
+      "key": "pivot_strategy_job_777",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/pivot_strategy_job_777.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "cover_letter_job_777": {
+      "key": "cover_letter_job_777",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/cover_letter_job_777.md",
+      "content_type": "text/markdown",
+      "sha256": null
+    },
+    "submission_c894d12faba346ca864bfcaac2608f41": {
+      "key": "submission_c894d12faba346ca864bfcaac2608f41",
+      "path": "src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/submission_c894d12faba346ca864bfcaac2608f41.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "transparency_matrix_json": {
+      "key": "transparency_matrix_json",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/notebooks/src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/transparency_matrix.json",
+      "content_type": "application/json",
+      "sha256": null
+    },
+    "xai_transparency_pdf": {
+      "key": "xai_transparency_pdf",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/notebooks/src/careeragent/artifacts/reports/8a3db19b65a447be80fdb10b08277767/xai_transparency_report.pdf",
+      "content_type": "application/pdf",
+      "sha256": null
+    },
+    "career_dossier_zip": {
+      "key": "career_dossier_zip",
+      "path": "/Users/ganeshprasadbhandari/Documents/D_drive/clark/careeragent-ai/notebooks/src/careeragent/artifacts/exports/career_dossier_8a3db19b65a447be80fdb10b08277767.zip",
+      "content_type": "application/zip",
+      "sha256": null
+    }
+  },
+  "steps": [
+    {
+      "step_id": "l0_security",
+      "layer_id": "L0",
+      "tool_name": "sanitize_before_llm",
+      "status": "ok",
+      "message": "security_pass",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "context": "resume"
+      },
+      "output_ref": {
+        "sanitized": true
+      }
+    },
+    {
+      "step_id": "l2_parse_1",
+      "layer_id": "L2",
+      "tool_name": "parser_agent_service",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "attempt": 1
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_1"
+      }
+    },
+    {
+      "step_id": "l2_parse_2",
+      "layer_id": "L2",
+      "tool_name": "parser_agent_service",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "attempt": 2
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_2"
+      }
+    },
+    {
+      "step_id": "l2_parse_3",
+      "layer_id": "L2",
+      "tool_name": "parser_agent_service",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "attempt": 3
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_3"
+      }
+    },
+    {
+      "step_id": "l2_parse_4",
+      "layer_id": "L2",
+      "tool_name": "parser_agent_service",
+      "status": "ok",
+      "message": "parsed",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "attempt": 4
+      },
+      "output_ref": {
+        "artifact_key": "extracted_resume_attempt_4"
+      }
+    },
+    {
+      "step_id": "l4_match",
+      "layer_id": "L4",
+      "tool_name": "matcher_agent_service",
+      "status": "ok",
+      "message": "matched",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "job_id": "job_777"
+      },
+      "output_ref": {
+        "artifact_key": "match_report_job_777"
+      }
+    },
+    {
+      "step_id": "l5_strategy",
+      "layer_id": "L5",
+      "tool_name": "strategy_agent_service",
+      "status": "ok",
+      "message": "strategy",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "job_id": "job_777"
+      },
+      "output_ref": {
+        "artifact_key": "pivot_strategy_job_777"
+      }
+    },
+    {
+      "step_id": "l6_cover",
+      "layer_id": "L6",
+      "tool_name": "cover_letter_service",
+      "status": "ok",
+      "message": "cover_letter",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "job_id": "job_777"
+      },
+      "output_ref": {
+        "artifact_key": "cover_letter_job_777"
+      }
+    },
+    {
+      "step_id": "l7_apply",
+      "layer_id": "L7",
+      "tool_name": "apply_executor_service",
+      "status": "ok",
+      "message": "submitted",
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "input_ref": {
+        "job_id": "job_777"
+      },
+      "output_ref": {
+        "submission_id": "c894d12faba346ca864bfcaac2608f41"
+      }
+    }
+  ],
+  "evaluations": [
+    {
+      "eval_id": "ad1bba0e02d9438eb89b3977f738db16",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.780625,
+      "threshold": 0.8,
+      "feedback": [
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 0,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.5125,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.1025
+      },
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "passed": false
+    },
+    {
+      "eval_id": "506870d8a8554f0da250d9924266fa2f",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.780625,
+      "threshold": 0.8,
+      "feedback": [
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 1,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.5125,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.1025
+      },
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "passed": false
+    },
+    {
+      "eval_id": "5bfadfae70ab4afcad530c22f01a6653",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.780625,
+      "threshold": 0.8,
+      "feedback": [
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 2,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.5125,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.1025
+      },
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "passed": false
+    },
+    {
+      "eval_id": "aea0875d6941499a8d76f583069e3d73",
+      "layer_id": "L3",
+      "target_id": "resume_main",
+      "generator_agent": "parser_agent_service",
+      "evaluator_agent": "parser_evaluator_service",
+      "evaluation_score": 0.780625,
+      "threshold": 0.8,
+      "feedback": [
+        "ATS formatting: use more bullet points under Experience to improve scanability."
+      ],
+      "retry_count": 3,
+      "max_retries": 3,
+      "interview_chance": {
+        "weights": {
+          "w1_skill_overlap": 0.45,
+          "w2_experience_alignment": 0.35,
+          "w3_ats_score": 0.2
+        },
+        "components": {
+          "skill_overlap": 0.0,
+          "experience_alignment": 0.0,
+          "ats_score": 0.5125,
+          "market_competition_factor": 1.0
+        },
+        "interview_chance_score": 0.1025
+      },
+      "started_at_utc": "2026-02-20T22:59:26Z",
+      "finished_at_utc": "2026-02-20T22:59:26Z",
+      "passed": false
+    }
+  ],
+  "notifications": [
+    {
+      "event": "completed",
+      "to": "+10000000000",
+      "result": {
+        "sent": false,
+        "dry_run": true,
+        "reason": "missing_twilio_config_or_dry_run",
+        "payload": {
+          "to": "+10000000000",
+          "body": "CareerAgent-AI: Run 8a3db19b65a447be80fdb10b08277767 completed successfully.",
+          "from": null
+        }
+      },
+      "extra": {}
+    }
+  ]
+}

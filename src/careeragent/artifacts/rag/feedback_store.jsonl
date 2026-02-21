@@ -1,0 +1,2 @@
+{"doc_id": "ba019c0eb190237602510a83", "text": "Error: TypeError in src/careeragent/orchestration/state.py line 42 when parsing. Steps to reproduce: run pipeline.", "metadata": {"source": "user", "context": "apply_flow"}}
+{"doc_id": "ba019c0eb190237602510a83", "text": "Error: TypeError in src/careeragent/orchestration/state.py line 42 when parsing. Steps to reproduce: run pipeline.", "metadata": {"source": "user", "context": "apply_flow"}}

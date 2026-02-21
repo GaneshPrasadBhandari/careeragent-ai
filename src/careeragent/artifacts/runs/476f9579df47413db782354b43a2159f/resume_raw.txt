@@ -1,0 +1,5 @@
+Alex Rivera
+Summary: Senior Software Engineer with 8 years of experience in Python, FastAPI, and AWS.
+Skills: Python, FastAPI, PostgreSQL, Docker, Kubernetes, AWS (EC2, S3, Lambda).
+Experience: Developed scalable microservices at TechCorp. Managed containerized deployments using Kubernetes. Optimized database queries for high-traffic applications.
+

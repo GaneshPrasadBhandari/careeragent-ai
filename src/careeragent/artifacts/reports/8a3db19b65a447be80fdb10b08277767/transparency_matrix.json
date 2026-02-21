@@ -1,0 +1,24 @@
+{
+  "run_id": "8a3db19b65a447be80fdb10b08277767",
+  "rows": [
+    {
+      "job_id": "job_777",
+      "role_title": "Data Scientist (Insurance AI)",
+      "company": "InsureTech",
+      "skill_overlap": 0.8571428571428571,
+      "experience_alignment": 0.09999999999999998,
+      "ats_score": 0.7549999999999999,
+      "market_factor": 2.239283247796922,
+      "w_skill": 0.45,
+      "w_exp": 0.35,
+      "w_ats": 0.2,
+      "contrib_skill": 0.3857142857142857,
+      "contrib_exp": 0.03499999999999999,
+      "contrib_ats": 0.151,
+      "weighted_sum": 0.5717142857142856,
+      "final_score": 0.2553112860004451,
+      "final_percent": 25.53,
+      "notes": []
+    }
+  ]
+}

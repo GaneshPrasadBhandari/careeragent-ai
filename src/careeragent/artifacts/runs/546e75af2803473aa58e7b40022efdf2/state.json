@@ -1,0 +1,82 @@
+{
+  "version": "v1",
+  "run_id": "546e75af2803473aa58e7b40022efdf2",
+  "created_at_utc": "2026-02-21T06:22:56Z",
+  "updated_at_utc": "2026-02-21T06:23:12Z",
+  "status": "needs_human_approval",
+  "mode": "agentic",
+  "env": "local",
+  "git_sha": null,
+  "artifacts": {},
+  "steps": [
+    {
+      "step_id": "l2_extract",
+      "layer_id": "L2",
+      "tool_name": "ResumeExtractor",
+      "status": "failed",
+      "message": "No module named 'docx'",
+      "started_at_utc": "2026-02-21T06:22:56Z",
+      "finished_at_utc": "2026-02-21T06:22:56Z",
+      "input_ref": {
+        "filename": "11 to be updated Revised Resume ganesh prasad bhadari 2025.docx"
+      },
+      "output_ref": {}
+    }
+  ],
+  "approvals": [],
+  "evaluations": [],
+  "meta": {
+    "preferences": {
+      "target_role": "AI solution architect",
+      "country": "US",
+      "location": "United States",
+      "remote": true,
+      "wfo_ok": true,
+      "salary": "350000",
+      "visa_sponsorship_required": true,
+      "recency_hours": 24.0,
+      "max_jobs": 40,
+      "discovery_threshold": 0.7,
+      "max_refinements": 3,
+      "resume_strict_gate": false,
+      "resume_threshold": 0.55
+    },
+    "live_feed": [
+      {
+        "layer": "L1",
+        "agent": "Dashboard",
+        "message": "Run created. Starting autonomous pipeline\u2026"
+      },
+      {
+        "layer": "L2",
+        "agent": "ParserAgent",
+        "message": "Extracting resume text from upload\u2026"
+      },
+      {
+        "layer": "L2",
+        "agent": "ParserAgent",
+        "message": "Resume extraction failed: No module named 'docx'"
+      },
+      {
+        "layer": "L5",
+        "agent": "HITL",
+        "message": "User action received: resume_cleanup_submit"
+      },
+      {
+        "layer": "L5",
+        "agent": "HITL",
+        "message": "Resume cleanup submitted but text was empty."
+      }
+    ],
+    "job_scores": {},
+    "job_components": {},
+    "job_meta": {},
+    "pending_action": "resume_cleanup",
+    "last_user_action": {
+      "type": "resume_cleanup_submit",
+      "payload": {
+        "resume_text": ""
+      }
+    }
+  }
+}

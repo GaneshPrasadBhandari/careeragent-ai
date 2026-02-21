@@ -1,0 +1,17 @@
+Ganesh Prasad Bhandari
+ganesh@example.com | https://www.linkedin.com/in/ganesh-prasad-bhandari/ | Boston, MA
+
+Summary
+AI/ML Solution Architect focused on GenAI product delivery, RAG systems, and production ML/MLOps.
+
+Skills
+Python, SQL, FastAPI, Docker, Kubernetes, Azure, AWS, MLflow, LangGraph, RAG, Vector Database, Pydantic, GitHub Actions
+
+Experience
+Senior Solution Architect (GenAI) | ExampleCo | 2022–2025
+- Built RAG assistant using Azure OpenAI + embeddings + vector search; improved response relevance by 30%.
+- Deployed containerized services with Docker and Kubernetes; reduced deployment time from hours to minutes.
+- Implemented MLflow tracking and reproducible pipelines; improved experiment traceability and release safety.
+
+Education
+MSIT, Clark University, 2026

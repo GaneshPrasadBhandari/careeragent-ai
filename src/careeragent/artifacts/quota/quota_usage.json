@@ -1,0 +1,10 @@
+{
+  "serper": {
+    "provider": "serper",
+    "total_requests": 2,
+    "total_errors": 2,
+    "last_status_code": 403,
+    "blocked": true,
+    "last_error": "403 quota exceeded / forbidden"
+  }
+}

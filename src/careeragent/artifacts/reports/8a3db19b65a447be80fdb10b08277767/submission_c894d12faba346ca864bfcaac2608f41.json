@@ -1,0 +1,9 @@
+{
+  "submission_id": "c894d12faba346ca864bfcaac2608f41",
+  "job_id": "job_777",
+  "channel": "simulated",
+  "resume_artifact_key": "extracted_resume_attempt_1",
+  "cover_letter_artifact_key": "cover_letter_job_777",
+  "submitted_at_utc": "2026-02-20T22:59:26Z",
+  "notes": "Local simulated submit (Batch 7 master test)."
+}
