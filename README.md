@@ -63,7 +63,7 @@ This makes it suitable for:
 
 ## 🏗️ System Architecture
 
-![CareerOS Agents Architecture](./CareerOS_Agents_Architecture.png)
+![CareerOS Agents Architecture](./CareerAgent-AI_Architecture.png)
 
 > *Figure 1: CareerOS Agents architecture blueprint — Interface → Control Plane (ORCH) → Execution Plane (Tool Agents + Evidence Logging).*
 
