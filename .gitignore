@@ -9,3 +9,23 @@ wheels/
 # Virtual environments
 .venv
 .env
+# System files
+.DS_Store
+**/.DS_Store
+
+# Backups and temporary files
+*.bak*
+*.old
+app/old_dashboard.py
+
+# Python environment and cache
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Operational Artifacts (Don't commit local data)
+src/careeragent/artifacts/daily_jobs/
+src/careeragent/artifacts/runs/
+src/careeragent/artifacts/db/*.db
+uv.lock

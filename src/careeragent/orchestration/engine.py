@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -13,34 +14,54 @@ import httpx
 from careeragent.config import artifacts_root, get_settings
 from careeragent.orchestration.state import OrchestrationState
 from careeragent.services.db_service import SqliteStateStore
+from careeragent.services.health_service import HealthService
 from careeragent.services.notification_service import NotificationService
-
-# HealthService is optional; if missing, we degrade gracefully
-try:
-    from careeragent.services.health_service import HealthService  # type: ignore
-except Exception:
-    HealthService = None  # type: ignore
+from careeragent.services.learning_resource_service import LearningResourceService
 
 from careeragent.agents.security_agent import SanitizeAgent
 from careeragent.agents.parser_agent_service import ParserAgentService, ExtractedResume
 from careeragent.agents.parser_evaluator_service import ParserEvaluatorService
 
-# --------------------------- helpers ---------------------------
+
+@dataclass(frozen=True)
+class JobBoard:
+    name: str
+    domain: str
+
+
+DEFAULT_JOB_BOARDS: Tuple[JobBoard, ...] = (
+    JobBoard("LinkedIn Jobs", "linkedin.com/jobs"),
+    JobBoard("Indeed", "indeed.com"),
+    JobBoard("Glassdoor", "glassdoor.com"),
+    JobBoard("ZipRecruiter", "ziprecruiter.com"),
+    JobBoard("Monster", "monster.com"),
+    JobBoard("Dice", "dice.com"),
+    JobBoard("Lever", "jobs.lever.co"),
+    JobBoard("Greenhouse", "boards.greenhouse.io"),
+)
+
+VISA_NEGATIVE = ("unable to sponsor","cannot sponsor","no sponsorship","do not sponsor","not sponsor","without sponsorship","no visa","cannot provide visa")
+VISA_POSITIVE = ("visa sponsorship","h1b","opt","cpt","stem opt","work visa")
+
+COMMON_SKILL_DICTIONARY = [
+    "python","sql","fastapi","docker","kubernetes","mlflow","dvc","aws","azure","gcp","pytorch",
+    "tensorflow","scikit-learn","pandas","numpy","spark","databricks","snowflake","airflow","kafka",
+    "langchain","langgraph","rag","faiss","chroma","terraform","github actions","postgres","redis"
+]
+
+
 def _run_dir(run_id: str) -> Path:
     d = artifacts_root() / "runs" / run_id
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-def _save_json(path: Path, obj: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+
+def _save_json(p: Path, obj: Any) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(obj, indent=2), encoding="utf-8")
 
 
 class LiveFeed:
-    """
-    Description: Live Agent Feed logger.
-    Layer: L1
-    """
     @staticmethod
     def emit(st: OrchestrationState, *, layer: str, agent: str, message: str) -> None:
         st.meta.setdefault("live_feed", [])
@@ -49,111 +70,61 @@ class LiveFeed:
 
 
 class LocalResumeExtractor:
-    """
-    Description: Extract resume text from PDF/TXT/DOCX.
-    Layer: L2
-    """
     @staticmethod
     def extract_text(*, filename: str, data: bytes) -> str:
         name = (filename or "").lower()
         if name.endswith(".txt"):
             return data.decode("utf-8", errors="replace")
-
         if name.endswith(".pdf"):
             from pypdf import PdfReader  # type: ignore
             import io
             reader = PdfReader(io.BytesIO(data))
             return "\n".join([(pg.extract_text() or "") for pg in reader.pages])
-
         if name.endswith(".docx"):
             import docx  # type: ignore
             import io
             d = docx.Document(io.BytesIO(data))
             return "\n".join([p.text for p in d.paragraphs if p.text])
-
         return data.decode("utf-8", errors="replace")
 
 
-# -------- Job discovery (Serper across 8 boards) --------
-JOB_BOARDS = [
-    ("LinkedIn Jobs", "linkedin.com/jobs"),
-    ("Indeed", "indeed.com"),
-    ("Glassdoor", "glassdoor.com"),
-    ("ZipRecruiter", "ziprecruiter.com"),
-    ("Monster", "monster.com"),
-    ("Dice", "dice.com"),
-    ("Lever", "jobs.lever.co"),
-    ("Greenhouse", "boards.greenhouse.io"),
-]
-
-VISA_NEGATIVE = ("unable to sponsor","cannot sponsor","no sponsorship","do not sponsor","not sponsor","without sponsorship","no visa")
-VISA_POSITIVE = ("visa sponsorship","h1b","opt","cpt","stem opt","work visa")
-
-
-def _parse_recency_hours(snippet: str) -> Optional[float]:
-    s = (snippet or "").lower()
-    if "today" in s: return 6.0
-    if "yesterday" in s: return 24.0
-    m = re.search(r"(\d+)\s*hours?\s*ago", s)
-    if m: return float(m.group(1))
-    m = re.search(r"(\d+)\s*days?\s*ago", s)
-    if m: return float(m.group(1)) * 24.0
-    return None
-
-
-def _tokenize(text: str) -> List[str]:
-    return re.findall(r"[a-zA-Z][a-zA-Z0-9\+\#\.-]{1,}", (text or "").lower())
-
-
-def _cosine(a: Dict[str,int], b: Dict[str,int]) -> float:
-    if not a or not b: return 0.0
-    dot = sum(v * b.get(k,0) for k,v in a.items())
-    na = sum(v*v for v in a.values()) ** 0.5
-    nb = sum(v*v for v in b.values()) ** 0.5
-    if na == 0 or nb == 0: return 0.0
-    return float(dot/(na*nb))
-
-
-def _ats_score(resume_text: str) -> float:
-    t = (resume_text or "").lower()
-    score = 0.0
-    if re.search(r"[\w\.-]+@[\w\.-]+\.\w+", t): score += 0.20
-    if re.search(r"\+?\d[\d\-\s\(\)]{8,}\d", t): score += 0.10
-    for h in ["summary","skills","experience","education","projects"]:
-        if h in t: score += 0.12
-    if "-" in resume_text or "•" in resume_text: score += 0.10
-    if len(resume_text) > 1200: score += 0.12
-    return max(0.0, min(1.0, score))
-
-
-def _compute_interview_chance(skill_overlap: float, exp_align: float, ats: float, market: float) -> float:
-    market = max(1.0, float(market))
-    score = (0.45*skill_overlap + 0.35*exp_align + 0.20*ats) / market
-    return max(0.0, min(1.0, float(score)))
-
-
-class SerperClient:
+class SerperDiscovery:
     SERPER_URL = "https://google.serper.dev/search"
 
-    def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
+    def __init__(self, *, api_key: str, health: HealthService) -> None:
+        self._key = api_key
+        self._health = health
 
-    def search(self, query: str, num: int = 10, tbs: Optional[str] = None) -> List[Dict[str, Any]]:
-        headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
+    def search(self, *, st: OrchestrationState, step_id: str, query: str, num: int = 10, tbs: Optional[str] = None) -> List[Dict[str, Any]]:
+        headers = {"X-API-KEY": self._key, "Content-Type": "application/json"}
         body: Dict[str, Any] = {"q": query, "num": num}
         if tbs:
             body["tbs"] = tbs
         with httpx.Client(timeout=30.0) as client:
             r = client.post(self.SERPER_URL, headers=headers, json=body)
-        if r.status_code >= 400:
+
+        if self._health.quota.handle_serper_response(
+            state=st, step_id=step_id, status_code=r.status_code, tool_name="serper.search", error_detail=r.text[:200]
+        ):
             return []
+
+        if r.status_code >= 400:
+            st.status = "api_failure"
+            st.meta["run_failure_code"] = "API_FAILURE"
+            st.meta["run_failure_provider"] = "serper"
+            st.meta["run_failure_detail"] = r.text[:200]
+            return []
+
         organic = (r.json().get("organic") or [])
-        return [{"title": it.get("title") or "", "link": it.get("link") or "", "snippet": it.get("snippet") or ""} for it in organic]
+        out = []
+        for it in organic:
+            out.append({"title": it.get("title") or "", "link": it.get("link") or "", "snippet": it.get("snippet") or ""})
+        return out
 
 
 class Scraper:
     @staticmethod
-    def fetch_text(url: str, snippet: str) -> str:
+    def fetch_text(*, url: str, snippet: str) -> str:
         if not url:
             return snippet or ""
         try:
@@ -162,30 +133,88 @@ class Scraper:
             if r.status_code >= 400:
                 return snippet or ""
             html = r.text
-            txt = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S|re.I)
+            txt = re.sub(r"<(script|style)[^>]*>.*?</\\1>", " ", html, flags=re.S|re.I)
             txt = re.sub(r"<[^>]+>", " ", txt)
-            txt = re.sub(r"\s+", " ", txt).strip()
+            txt = re.sub(r"\\s+", " ", txt).strip()
             return txt[:16000] if txt else (snippet or "")
         except Exception:
             return snippet or ""
 
 
+def tokenize(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z][a-zA-Z0-9\\+\\#\\.-]{1,}", (text or "").lower())
+
+
+def cosine(a: Dict[str,int], b: Dict[str,int]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(v * b.get(k,0) for k,v in a.items())
+    na = sum(v*v for v in a.values()) ** 0.5
+    nb = sum(v*v for v in b.values()) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(dot/(na*nb))
+
+
+def recency_hours(snippet: str) -> Optional[float]:
+    s = (snippet or "").lower()
+    if "today" in s:
+        return 6.0
+    if "yesterday" in s:
+        return 24.0
+    m = re.search(r"(\\d+)\\s*hours?\\s*ago", s)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(\\d+)\\s*days?\\s*ago", s)
+    if m:
+        return float(m.group(1))*24.0
+    return None
+
+
+def ats_score(resume_text: str) -> float:
+    t = (resume_text or "").lower()
+    score = 0.0
+    if re.search(r"[\\w\\.-]+@[\\w\\.-]+\\.\\w+", t): score += 0.20
+    if re.search(r"\\+?\\d[\\d\\-\\s\\(\\)]{8,}\\d", t): score += 0.10
+    for h in ["summary","skills","experience","education","projects"]:
+        if h in t: score += 0.12
+    if "-" in resume_text or "•" in resume_text: score += 0.10
+    if len(resume_text) > 1200: score += 0.12
+    return max(0.0, min(1.0, score))
+
+
+def compute_interview_chance(skill_overlap: float, exp_align: float, ats_s: float, market: float) -> float:
+    market = max(1.0, float(market))
+    score = (0.45*skill_overlap + 0.35*exp_align + 0.20*ats_s) / market
+    return max(0.0, min(1.0, float(score)))
+
+
+def extract_job_skills(job_text: str, resume_skills: List[str]) -> List[str]:
+    low = (job_text or "").lower()
+    pool = list(dict.fromkeys([*(resume_skills or []), *COMMON_SKILL_DICTIONARY]))
+    found = []
+    for s in pool:
+        s2 = str(s).lower().strip()
+        if s2 and s2 in low:
+            found.append(s2)
+    return list(dict.fromkeys(found))[:40]
+
+
 class OneClickAutomationEngine:
     """
-    Description: Full one-click engine with soft-gated parser + full discovery/matching/ranking.
+    Description: Full Career Operating System loop (L0-L9).
     Layer: L0-L9
     """
 
     def __init__(self) -> None:
         self._s = get_settings()
         self._store = SqliteStateStore()
-        self._notifier = NotificationService(dry_run=not bool(self._s.twilio_account_sid))
-
+        self._health = HealthService()
+        self._notifier = NotificationService(dry_run=not bool(getattr(self._s, "twilio_account_sid", None)))
         self._sanitize = SanitizeAgent()
         self._parser = ParserAgentService()
         self._parser_eval = ParserEvaluatorService()
-
-        self._health = HealthService() if HealthService else None
+        self._learn = LearningResourceService(serper_api_key=getattr(self._s, "serper_api_key", None))
 
     def _persist(self, st: OrchestrationState) -> None:
         d = _run_dir(st.run_id)
@@ -198,7 +227,6 @@ class OneClickAutomationEngine:
     def start_run(self, *, filename: str, data: bytes, prefs: Dict[str, Any]) -> OrchestrationState:
         st = OrchestrationState.new(env=self._s.environment, mode="agentic", git_sha=None)
         st.meta["preferences"] = prefs
-        st.meta.setdefault("live_feed", [])
         st.meta.setdefault("job_scores", {})
         st.meta.setdefault("job_components", {})
         st.meta.setdefault("job_meta", {})
@@ -220,6 +248,7 @@ class OneClickAutomationEngine:
         t.start()
         return st
 
+    # ---------------- main loop ----------------
     def _run(self, run_id: str, filename: str, data: bytes) -> None:
         raw = self.load(run_id)
         if not raw:
@@ -228,27 +257,19 @@ class OneClickAutomationEngine:
         run_dir = _run_dir(run_id)
         prefs = st.meta.get("preferences", {}) or {}
 
-        # ---- L2 Extract ----
+        # L2 extract
         st.start_step("l2_extract", layer_id="L2", tool_name="ResumeExtractor", input_ref={"filename": filename})
         LiveFeed.emit(st, layer="L2", agent="ParserAgent", message="Extracting resume text from upload…")
-        try:
-            resume_text = LocalResumeExtractor.extract_text(filename=filename, data=data)
-        except Exception as e:
-            st.end_step("l2_extract", status="failed", output_ref={}, message=str(e))
-            st.status = "needs_human_approval"
-            st.meta["pending_action"] = "resume_cleanup"
-            LiveFeed.emit(st, layer="L2", agent="ParserAgent", message=f"Resume extraction failed: {e}")
-            self._persist(st)
-            return
-
+        resume_text = LocalResumeExtractor.extract_text(filename=filename, data=data)
         (run_dir / "resume_raw.txt").write_text(resume_text, encoding="utf-8")
         st.add_artifact("resume_raw", str(run_dir / "resume_raw.txt"), content_type="text/plain")
         st.end_step("l2_extract", status="ok", output_ref={"artifact_key":"resume_raw"}, message="extracted")
-        self._persist(st)
 
-        # ---- L0 Sanitize ----
+        # L0 sanitize
         st.start_step("l0_sanitize", layer_id="L0", tool_name="SanitizeAgent", input_ref={})
-        safe = self._sanitize.sanitize_before_llm(state=st, step_id="l0_sanitize", tool_name="sanitize_before_llm", user_text=resume_text, context="resume")
+        safe = self._sanitize.sanitize_before_llm(
+            state=st, step_id="l0_sanitize", tool_name="sanitize_before_llm", user_text=resume_text, context="resume"
+        )
         if safe is None:
             st.status = "blocked"
             LiveFeed.emit(st, layer="L0", agent="SanitizeAgent", message="Prompt injection detected. Run blocked.")
@@ -256,105 +277,190 @@ class OneClickAutomationEngine:
             return
         st.end_step("l0_sanitize", status="ok", output_ref={"sanitized": True}, message="pass")
         LiveFeed.emit(st, layer="L0", agent="SanitizeAgent", message="Security check passed.")
-        self._persist(st)
 
-        # ---- L2 Parse (single strong pass) ----
-        st.start_step("l2_parse", layer_id="L2", tool_name="ParserAgentService", input_ref={"attempt": 1})
+        # L2 intake bundle
+        st.start_step("l2_parse", layer_id="L2", tool_name="ParserAgentService", input_ref={})
         extracted = self._parser.parse(raw_text=safe, orchestration_state=st, feedback=[])
-        p = run_dir / "extracted_resume.json"
-        _save_json(p, extracted.to_json_dict())
-        st.add_artifact("extracted_resume", str(p), content_type="application/json")
-        st.end_step("l2_parse", status="ok", output_ref={"artifact_key":"extracted_resume"}, message="parsed")
+        _save_json(run_dir / "intake_bundle.json", extracted.to_json_dict())
+        st.add_artifact("intake_bundle", str(run_dir / "intake_bundle.json"), content_type="application/json")
+        st.end_step("l2_parse", status="ok", output_ref={"artifact_key":"intake_bundle"}, message="parsed")
 
-        # ---- L3 Evaluate (SOFT gate) ----
-        # strict gate optional; default False for automation
-        strict_gate = bool(prefs.get("resume_strict_gate", False))
-        threshold = 0.80 if strict_gate else float(prefs.get("resume_threshold", 0.55))
-
-        ev = self._parser_eval.evaluate(
-            orchestration_state=st,
-            raw_text=safe,
-            extracted=extracted,
-            target_id="resume_main",
-            threshold=threshold,
-            retry_count=0,
-            max_retries=0,
-        )
-
+        # L3 eval (soft)
+        ev = self._parser_eval.evaluate(orchestration_state=st, raw_text=safe, extracted=extracted, target_id="resume_main", threshold=float(prefs.get("resume_threshold", 0.55)))
         score = float(getattr(ev, "evaluation_score", 0.0))
-        LiveFeed.emit(st, layer="L3", agent="ParserEvaluator", message=f"Resume quality={score:.2f} (threshold={threshold:.2f}).")
+        LiveFeed.emit(st, layer="L3", agent="ParserEvaluator", message=f"Intake quality={score:.2f}. Continuing automation.")
 
-        # If truly broken, stop; otherwise continue but allow optional cleanup
-        if score < 0.30:
-            st.status = "needs_human_approval"
-            st.meta["pending_action"] = "resume_cleanup"
-            LiveFeed.emit(st, layer="L3", agent="ParserEvaluator", message="Resume parsing too weak. Needs manual cleanup.")
-            self._persist(st)
-            return
-        elif score < threshold:
+        # Do NOT hard stop. Only mark optional cleanup.
+        if score < 0.55:
             st.meta["pending_action"] = "resume_cleanup_optional"
-            LiveFeed.emit(st, layer="L3", agent="ParserEvaluator", message="Proceeding automatically, but resume cleanup is recommended.")
+            LiveFeed.emit(st, layer="L5", agent="HITL", message="Optional: improve resume text for better ATS + scoring. Pipeline continues.")
 
         self._persist(st)
 
-        # ---- L3 Discovery ----
-        if not self._s.serper_api_key:
+        # L3 job hunt across 8 boards for multiple roles
+        roles = prefs.get("target_roles") or []
+        if isinstance(roles, str):
+            roles = [r.strip() for r in roles.splitlines() if r.strip()]
+        if not roles:
+            roles = [str(prefs.get("target_role","Data Scientist"))]
+
+        location = str(prefs.get("location","United States"))
+        remote = bool(prefs.get("remote", True))
+        wfo_ok = bool(prefs.get("wfo_ok", True))
+        salary = str(prefs.get("salary","")).strip()
+        visa_required = bool(prefs.get("visa_sponsorship_required", False))
+        recency_limit = float(prefs.get("recency_hours", 36))
+        max_jobs = int(prefs.get("max_jobs", 40))
+        discovery_threshold = float(prefs.get("discovery_threshold", 0.70))
+        max_refinements = int(prefs.get("max_refinements", 3))
+
+        serper_key = getattr(self._s, "serper_api_key", None)
+        if not serper_key:
             st.status = "needs_human_approval"
             st.meta["pending_action"] = "missing_serper_key"
             LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message="Missing SERPER_API_KEY in .env.")
             self._persist(st)
             return
 
-        target_role = str(prefs.get("target_role","Data Scientist"))
-        location = str(prefs.get("location","United States"))
-        remote = bool(prefs.get("remote", True))
-        wfo_ok = bool(prefs.get("wfo_ok", True))
-        salary = str(prefs.get("salary","")).strip()
-        visa_required = bool(prefs.get("visa_sponsorship_required", False))
-        recency_hours = float(prefs.get("recency_hours", 36))
-        max_jobs = int(prefs.get("max_jobs", 40))
-        discovery_threshold = float(prefs.get("discovery_threshold", 0.70))
-        max_refinements = int(prefs.get("max_refinements", 3))
+        discovery = SerperDiscovery(api_key=serper_key, health=self._health)
 
         resume_skills = [s.lower() for s in (extracted.skills or [])]
-        ats = _ats_score(safe)
-        st.meta["ats_score"] = ats
+        resume_ats = ats_score(safe)
+        resume_tokens = {}
+        for t in tokenize(safe):
+            resume_tokens[t] = resume_tokens.get(t, 0) + 1
+        exp_text = " ".join([" ".join(x.bullets) for x in (extracted.experience or [])]) or safe
+        exp_tokens = {}
+        for t in tokenize(exp_text):
+            exp_tokens[t] = exp_tokens.get(t, 0) + 1
 
-        serper = SerperClient(self._s.serper_api_key)
-        tbs = "qdr:d" if recency_hours <= 36 else None
+        # query builder
+        def build_query(role: str) -> str:
+            intent = []
+            if remote: intent.append("remote")
+            if wfo_ok: intent.append("hybrid")
+            if not intent: intent.append("on-site")
+            salary_part = f'"{salary}"' if salary else ""
+            visa_part = '"visa sponsorship" OR h1b OR opt OR cpt' if visa_required else ""
+            skill_hint = " ".join(resume_skills[:6])
+            return f'{role} {location} {" ".join(intent)} {salary_part} {skill_hint} ({visa_part}) apply'
 
-        base_query = self._build_query(target_role, location, remote, wfo_ok, salary, visa_required, resume_skills)
+        # tbs recency (best-effort)
+        tbs = "qdr:d" if recency_limit <= 36 else None
+
+        # refinement loop
+        query_variants = [build_query(r) for r in roles[:4]]
+        all_results: List[Dict[str, Any]] = []
 
         for attempt in range(max_refinements + 1):
-            LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message=f"Hunt attempt {attempt+1}: searching 8 boards…")
-            results = self._discover_all(serper, base_query, tbs=tbs)
+            LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message=f"Hunt attempt {attempt+1}: searching 8 boards for {len(query_variants)} roles…")
+            seen = set()
+            all_results = []
+            for qi, q in enumerate(query_variants):
+                for b in DEFAULT_JOB_BOARDS:
+                    step_id = f"l3_serper_{attempt+1}_{qi}_{b.domain.replace('/','_')}"
+                    st.start_step(step_id, layer_id="L3", tool_name="serper.search", input_ref={"role_query": q, "board": b.name})
+                    items = discovery.search(st=st, step_id=step_id, query=f"{q} site:{b.domain}", num=10, tbs=tbs)
+                    st.end_step(step_id, status="ok", output_ref={"count": len(items)}, message=b.name)
+                    for it in items:
+                        link = it.get("link") or ""
+                        if not link or link in seen:
+                            continue
+                        seen.add(link)
+                        it["board"] = b.name
+                        it["role_hint"] = roles[min(qi, len(roles)-1)]
+                        all_results.append(it)
 
-            # ---- L4 Scrape + score ----
-            ranked = self._score_jobs(
-                resume_text=safe,
-                extracted=extracted,
-                ats=ats,
-                visa_required=visa_required,
-                recency_hours=recency_hours,
-                results=results[:max_jobs],
-            )
+            # L4 scrape+score max_jobs
+            LiveFeed.emit(st, layer="L4", agent="ScraperAgent", message=f"Scraping + scoring up to {max_jobs} jobs…")
+            ranked: List[Dict[str, Any]] = []
+            for idx, it in enumerate(all_results[:max_jobs]):
+                url = it.get("link") or ""
+                snippet = it.get("snippet") or ""
+                title = it.get("title") or ""
+                board = it.get("board") or "unknown"
+                rh = recency_hours(snippet)
+                if rh is not None and rh > recency_limit:
+                    continue
+
+                step_id = f"l4_scrape_{attempt+1}_{idx+1}"
+                st.start_step(step_id, layer_id="L4", tool_name="Scraper", input_ref={"url": url, "board": board})
+                text = Scraper.fetch_text(url=url, snippet=snippet)
+                st.end_step(step_id, status="ok", output_ref={"chars": len(text)}, message="scraped")
+
+                low = text.lower()
+                visa_ok = not any(x in low for x in VISA_NEGATIVE)
+                if visa_required and not visa_ok:
+                    continue
+
+                job_skills = extract_job_skills(text, resume_skills)
+                overlap = len(set(job_skills) & set(resume_skills)) / max(1, len(set(job_skills))) if job_skills else 0.0
+
+                job_tokens = {}
+                for t in tokenize(text):
+                    job_tokens[t] = job_tokens.get(t, 0) + 1
+                exp_align = cosine(exp_tokens, job_tokens)
+
+                market = 1.0
+                if "applicants" in snippet.lower():
+                    m = re.search(r"(\\d+)\\+?\\s*applicants", snippet.lower())
+                    if m:
+                        n = int(m.group(1))
+                        market = 1.0 + min(1.5, n/200.0)
+
+                score = compute_interview_chance(overlap, exp_align, resume_ats, market)
+                if visa_required and any(x in low for x in VISA_POSITIVE):
+                    score = min(1.0, score + 0.05)
+
+                missing = [s for s in job_skills if s not in resume_skills][:12]
+                jid = url or uuid4().hex
+
+                ranked.append({
+                    "job_id": jid,
+                    "rank": 0,
+                    "role_hint": it.get("role_hint"),
+                    "title": title,
+                    "board": board,
+                    "url": url,
+                    "recency_hours": rh,
+                    "visa_ok": visa_ok,
+                    "matched_skills": list(set(job_skills) & set(resume_skills))[:12],
+                    "missing_skills": missing,
+                    "components": {
+                        "skill_overlap": overlap,
+                        "experience_alignment": exp_align,
+                        "ats_score": resume_ats,
+                        "market_competition_factor": market,
+                    },
+                    "interview_chance_score": score,
+                    "overall_match_percent": round(score*100.0, 2),
+                    "rationale": [
+                        f"SkillOverlap={overlap:.2f}",
+                        f"ExperienceAlignment={exp_align:.2f}",
+                        f"ATS={resume_ats:.2f}",
+                        f"MarketFactor={market:.2f}",
+                        ("VisaOK" if visa_ok else "NoSponsorship"),
+                    ],
+                })
+
+                st.meta["job_scores"][jid] = float(score)
+                st.meta["job_components"][jid] = ranked[-1]["components"]
+                st.meta["job_meta"][jid] = {"role_title": title, "company": board, "url": url, "source": board}
+
+            ranked.sort(key=lambda x: float(x["interview_chance_score"]), reverse=True)
+            for i, r in enumerate(ranked, start=1):
+                r["rank"] = i
+
             _save_json(run_dir / "ranking.json", ranked)
             st.add_artifact("ranking", str(run_dir / "ranking.json"), content_type="application/json")
-            self._persist(st)
+            LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message=f"Ranked {len(ranked)} jobs. Top={ranked[0]['overall_match_percent'] if ranked else 'n/a'}%")
 
-            if not ranked:
-                conf = 0.0
-            else:
-                top = float(ranked[0]["interview_chance_score"])
-                avg = sum(float(x["interview_chance_score"]) for x in ranked[:20]) / max(1, min(20, len(ranked)))
-                conf = min(1.0, 0.65*top + 0.35*avg)
-
-            LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message=f"Discovery confidence={conf:.2f} (need ≥ {discovery_threshold:.2f}).")
-
-            if ranked and float(ranked[0]["interview_chance_score"]) >= discovery_threshold:
+            # Gate decision
+            top_score = float(ranked[0]["interview_chance_score"]) if ranked else 0.0
+            if top_score >= discovery_threshold and len(ranked) >= min(20, max_jobs):
                 st.status = "needs_human_approval"
                 st.meta["pending_action"] = "review_ranking"
-                LiveFeed.emit(st, layer="L1", agent="Dashboard", message="Ranking ready for review (HITL).")
+                LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message="Ranking ready for approval (HITL).")
                 self._persist(st)
                 return
 
@@ -365,8 +471,13 @@ class OneClickAutomationEngine:
                 self._persist(st)
                 return
 
-            base_query = self._refine_query(base_query, ranked, resume_skills, visa_required, target_role, location)
-            LiveFeed.emit(st, layer="L3", agent="DiscoveryAgent", message=f"Refining query → {base_query[:160]}")
+            # refine queries (simple deterministic refinement)
+            if ranked:
+                top = ranked[0]
+                hint = " ".join((top.get("matched_skills") or [])[:6])
+            else:
+                hint = " ".join(resume_skills[:6])
+            query_variants = [f"{r} {location} {hint} apply" for r in roles[:4]]
             self._persist(st)
 
     def _continue(self, run_id: str) -> None:
@@ -379,137 +490,172 @@ class OneClickAutomationEngine:
         action = (st.meta.get("last_user_action") or {}).get("type")
         payload = (st.meta.get("last_user_action") or {}).get("payload") or {}
 
-        # NEW: Resume cleanup submit
-        if pending in ("resume_cleanup", "resume_cleanup_optional") and action == "resume_cleanup_submit":
+        # Optional resume improvement loop
+        if pending == "resume_cleanup_optional" and action == "resume_cleanup_submit":
             new_text = str(payload.get("resume_text","")).strip()
-            if not new_text:
-                LiveFeed.emit(st, layer="L5", agent="HITL", message="Resume cleanup submitted but text was empty.")
+            if new_text:
+                (run_dir / "resume_raw.txt").write_text(new_text, encoding="utf-8")
+                st.add_artifact("resume_raw", str(run_dir / "resume_raw.txt"), content_type="text/plain")
+                st.status = "running"
+                st.meta["pending_action"] = None
+                LiveFeed.emit(st, layer="L2", agent="ParserAgent", message="Resume updated. Restarting run…")
+                self._persist(st)
+                self._run(run_id, "resume.txt", new_text.encode("utf-8"))
+            return
+
+        # Approve ranking -> generate drafts + learning plan for missing skills
+        if pending == "review_ranking" and action == "approve_ranking":
+            ranking_path = run_dir / "ranking.json"
+            intake_path = run_dir / "intake_bundle.json"
+            if not (ranking_path.exists() and intake_path.exists()):
+                st.status = "needs_human_approval"
+                st.meta["pending_action"] = "missing_artifacts"
                 self._persist(st)
                 return
 
-            (run_dir / "resume_raw.txt").write_text(new_text, encoding="utf-8")
-            st.add_artifact("resume_raw", str(run_dir / "resume_raw.txt"), content_type="text/plain")
-            st.meta["pending_action"] = None
-            st.status = "running"
-            LiveFeed.emit(st, layer="L2", agent="ParserAgent", message="Resume updated by user. Restarting pipeline…")
-            self._persist(st)
+            ranked = json.loads(ranking_path.read_text(encoding="utf-8"))
+            intake = ExtractedResume(**json.loads(intake_path.read_text(encoding="utf-8")))
+            top_n = int((st.meta.get("preferences", {}) or {}).get("draft_count", 10))
+            ranked = ranked[:top_n]
 
-            # restart the run using updated text as txt bytes (no need for original upload)
-            self._run(run_id, "resume.txt", new_text.encode("utf-8"))
+            # Drafts (ATS resume + cover letter) + learning plan
+            drafts: List[Dict[str, Any]] = []
+            learning: Dict[str, Any] = {}
+
+            # ATS resume template built from intake (no user ATS required)
+            base_resume = self._build_ats_resume(intake)
+            (run_dir / "ats_resume_base.md").write_text(base_resume, encoding="utf-8")
+            st.add_artifact("ats_resume_base", str(run_dir / "ats_resume_base.md"), content_type="text/markdown")
+
+            for j in ranked:
+                jid = j["job_id"]
+                title = j.get("title") or "Role"
+                company = j.get("board") or "Company"
+                missing = j.get("missing_skills") or []
+
+                # Tailored resume (keyword injection + bullets)
+                tailored = self._tailor_resume(base_resume, title, company, j.get("matched_skills") or [], missing)
+                resume_path = run_dir / f"resume_{jid[:10]}.md"
+                resume_path.write_text(tailored, encoding="utf-8")
+                st.add_artifact(f"resume_{jid[:10]}", str(resume_path), content_type="text/markdown")
+
+                # Cover letter
+                cover = self._cover_letter(intake, title, company, j.get("matched_skills") or [])
+                cover_path = run_dir / f"cover_{jid[:10]}.md"
+                cover_path.write_text(cover, encoding="utf-8")
+                st.add_artifact(f"cover_{jid[:10]}", str(cover_path), content_type="text/markdown")
+
+                # Learning plan for missing skills
+                if missing:
+                    learning[jid] = self._learn.build_learning_plan(missing_skills=missing)
+
+                drafts.append({
+                    "job_id": jid,
+                    "title": title,
+                    "company": company,
+                    "url": j.get("url"),
+                    "resume_path": str(resume_path),
+                    "cover_path": str(cover_path),
+                    "missing_skills": missing,
+                })
+
+            _save_json(run_dir / "drafts_bundle.json", {"drafts": drafts, "learning_plan": learning})
+            st.add_artifact("drafts_bundle", str(run_dir / "drafts_bundle.json"), content_type="application/json")
+
+            st.status = "needs_human_approval"
+            st.meta["pending_action"] = "review_drafts"
+            LiveFeed.emit(st, layer="L6", agent="DraftAgent", message=f"Generated {len(drafts)} resume+cover packages + learning plans.")
+            self._persist(st)
             return
 
-        # Ranking approval/reject can be wired next (your next step).
-        LiveFeed.emit(st, layer="L5", agent="HITL", message=f"No handler for pending={pending}, action={action}")
+        # Approve drafts -> mark completed (apply simulation can be added later)
+        if pending == "review_drafts" and action == "approve_drafts":
+            st.status = "completed"
+            st.meta["pending_action"] = None
+            LiveFeed.emit(st, layer="L7", agent="ApplyExecutor", message="Drafts approved. (Simulated) submission completed.")
+            self._persist(st)
+            return
+
+        # Reject ranking -> rerun discovery with refined hint
+        if pending == "review_ranking" and action == "reject_ranking":
+            reason = str(payload.get("reason","")).strip()
+            st.meta.setdefault("user_refinement_notes", [])
+            if reason:
+                st.meta["user_refinement_notes"].append(reason)
+            st.status = "running"
+            st.meta["pending_action"] = None
+            LiveFeed.emit(st, layer="L5", agent="HITL", message="Ranking rejected. Re-running discovery…")
+            self._persist(st)
+
+            resume_path = run_dir / "resume_raw.txt"
+            if resume_path.exists():
+                self._run(run_id, "resume.txt", resume_path.read_bytes())
+            return
+
+        # Reject drafts -> go back to ranking approval
+        if pending == "review_drafts" and action == "reject_drafts":
+            st.status = "needs_human_approval"
+            st.meta["pending_action"] = "review_ranking"
+            LiveFeed.emit(st, layer="L6", agent="HITL", message="Drafts rejected. Returning to ranking review.")
+            self._persist(st)
+            return
+
         self._persist(st)
 
-    def _build_query(self, target_role: str, location: str, remote: bool, wfo_ok: bool, salary: str, visa_required: bool, skills: List[str]) -> str:
-        intent = []
-        if remote: intent.append("remote")
-        if wfo_ok: intent.append("hybrid")
-        if not intent: intent.append("on-site")
-        skill_str = " ".join(skills[:6])
-        salary_part = f'"{salary}"' if salary else ""
-        visa_part = '"visa sponsorship" OR h1b OR opt OR cpt' if visa_required else ""
-        return f'{target_role} {location} {" ".join(intent)} {salary_part} {skill_str} ({visa_part}) apply'
+    # -------- ATS Resume generation (no user ATS needed) --------
+    def _build_ats_resume(self, intake: ExtractedResume) -> str:
+        email = intake.contact.email or ""
+        phone = intake.contact.phone or ""
+        linkedin = intake.contact.linkedin or ""
+        github = intake.contact.github or ""
+        name = intake.name or "Candidate"
 
-    def _discover_all(self, serper: SerperClient, base_query: str, tbs: Optional[str]) -> List[Dict[str, Any]]:
-        seen = set()
-        out: List[Dict[str, Any]] = []
-        for name, domain in JOB_BOARDS:
-            q = f"{base_query} site:{domain}"
-            items = serper.search(q, num=10, tbs=tbs)
-            for it in items:
-                link = it.get("link") or ""
-                if not link or link in seen:
-                    continue
-                seen.add(link)
-                it["board"] = name
-                out.append(it)
-        return out
+        skills = ", ".join((intake.skills or [])[:25])
+        bullets = []
+        if intake.experience and intake.experience[0].bullets:
+            bullets = intake.experience[0].bullets[:8]
 
-    def _score_jobs(self, *, resume_text: str, extracted: ExtractedResume, ats: float, visa_required: bool, recency_hours: float, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        ranked: List[Dict[str, Any]] = []
-        res_tokens = {}
-        for t in _tokenize(resume_text):
-            res_tokens[t] = res_tokens.get(t, 0) + 1
-        exp_text = " ".join([" ".join(x.bullets) for x in (extracted.experience or [])]) if extracted.experience else resume_text
-        exp_tokens = {}
-        for t in _tokenize(exp_text):
-            exp_tokens[t] = exp_tokens.get(t, 0) + 1
-        resume_skills = [s.lower() for s in (extracted.skills or [])]
+        bullets_md = "\n".join([f"- {b}" for b in bullets]) if bullets else "- Add 4–6 bullets with measurable impact (metrics, scope, tools)."
 
-        for it in results:
-            snippet = it.get("snippet") or ""
-            rh = _parse_recency_hours(snippet)
-            if rh is not None and rh > recency_hours:
-                continue
+        return f"""# {name}
+{email} | {phone} | {linkedin} | {github}
 
-            url = it.get("link") or ""
-            board = it.get("board") or "unknown"
-            title = it.get("title") or ""
+## Summary
+{intake.summary or "AI/ML professional focused on production-grade GenAI and MLOps systems."}
 
-            job_text = Scraper.fetch_text(url, snippet)
-            low = job_text.lower()
+## Skills
+{skills}
 
-            # visa filter
-            v_ok = not any(x in low for x in VISA_NEGATIVE)
-            if visa_required and not v_ok:
-                continue
+## Experience
+{bullets_md}
 
-            # skills overlap (from resume skills present in job text)
-            present = [s for s in resume_skills if s and s in low]
-            overlap = len(set(present)) / max(1, len(set(resume_skills))) if resume_skills else 0.0
+## Education
+- (Auto-filled from resume intake)
+"""
 
-            # exp alignment cosine
-            job_tokens = {}
-            for t in _tokenize(job_text):
-                job_tokens[t] = job_tokens.get(t, 0) + 1
-            exp_align = _cosine(exp_tokens, job_tokens)
+    def _tailor_resume(self, base: str, title: str, company: str, matched: List[str], missing: List[str]) -> str:
+        matched_str = ", ".join(matched[:12])
+        missing_str = ", ".join(missing[:8])
+        return base + f"\n\n## Target Role Alignment\n- Target Role: {title} @ {company}\n- Matched Keywords: {matched_str}\n- Gap Keywords (learning plan attached): {missing_str}\n"
 
-            market = 1.0
-            if "applicants" in snippet.lower():
-                m = re.search(r"(\d+)\+?\s*applicants", snippet.lower())
-                if m:
-                    n = int(m.group(1))
-                    market = 1.0 + min(1.5, n/200.0)
+    def _cover_letter(self, intake: ExtractedResume, title: str, company: str, matched: List[str]) -> str:
+        name = intake.name or "Candidate"
+        email = intake.contact.email or ""
+        kw = ", ".join(matched[:8])
+        return f"""{name}
+{email}
 
-            score = _compute_interview_chance(overlap, exp_align, ats, market)
-            if visa_required and any(x in low for x in VISA_POSITIVE):
-                score = min(1.0, score + 0.05)
+Dear Hiring Manager,
 
-            ranked.append({
-                "title": title,
-                "board": board,
-                "url": url,
-                "recency_hours": rh,
-                "visa_ok": v_ok,
-                "skill_overlap": overlap,
-                "experience_alignment": exp_align,
-                "ats_score": ats,
-                "market_factor": market,
-                "interview_chance_score": score,
-                "overall_match_percent": round(score*100.0, 2),
-                "matched_skills": present[:12],
-                "rationale": [
-                    f"SkillOverlap={overlap:.2f}",
-                    f"ExperienceAlignment={exp_align:.2f}",
-                    f"ATS={ats:.2f}",
-                    f"MarketFactor={market:.2f}",
-                    ("VisaOK" if v_ok else "NoSponsorship"),
-                ]
-            })
+I’m applying for the {title} role. My background includes production-grade AI/ML delivery, GenAI application development, and MLOps practices (CI/CD, reproducible pipelines, evaluation, and governance).
 
-        ranked.sort(key=lambda x: float(x["interview_chance_score"]), reverse=True)
-        for i, r in enumerate(ranked, start=1):
-            r["rank"] = i
-        return ranked
+I’m especially aligned to this role through: {kw}.
 
-    def _refine_query(self, base_query: str, ranked: List[Dict[str, Any]], resume_skills: List[str], visa_required: bool, target_role: str, location: str) -> str:
-        top = ranked[0] if ranked else {}
-        top_skills = (top.get("matched_skills") or [])[:6]
-        hint = " ".join(list(dict.fromkeys([*top_skills, *resume_skills]))[:8])
-        visa = '("visa sponsorship" OR h1b OR opt)' if visa_required else ""
-        return f"{target_role} {location} {hint} {visa} apply"
+I’d welcome a quick conversation on how I can help {company} deliver measurable AI impact.
+
+Sincerely,  
+{name}
+"""
 
 
 ENGINE = OneClickAutomationEngine()

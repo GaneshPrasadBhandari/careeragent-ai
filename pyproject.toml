@@ -23,6 +23,7 @@ dependencies = [
   "twilio>=9.0",
   "pypdf>=6.7.1",
   "python-multipart>=0.0.22",
+  "python-docx>=1.2.0",
 ]
 
 [project.optional-dependencies]
