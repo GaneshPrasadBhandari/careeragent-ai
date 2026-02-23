@@ -29,3 +29,4 @@ src/careeragent/artifacts/daily_jobs/
 src/careeragent/artifacts/runs/
 src/careeragent/artifacts/db/*.db
 uv.lock
+*.zip
