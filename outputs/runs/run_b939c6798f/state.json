@@ -1,0 +1,1938 @@
+{
+  "run_id": "run_b939c6798f",
+  "status": "completed",
+  "pending_action": null,
+  "current_layer": "L9",
+  "progress_percent": 100,
+  "preferences": {
+    "target_roles": [
+      "Solution Architect",
+      "GenAI Architect",
+      "ML Engineer",
+      "data scientist"
+    ],
+    "country": "US",
+    "location": "United States",
+    "remote": true,
+    "wfo_ok": true,
+    "salary": "",
+    "visa_sponsorship_required": false,
+    "recency_hours": 72.0,
+    "max_jobs": 25,
+    "discovery_threshold": 0.5,
+    "max_refinements": 3,
+    "resume_threshold": 0.5,
+    "draft_count": 8,
+    "user_phone": null
+  },
+  "extracted_profile": {
+    "name": "Ganesh Prasad Bhandari",
+    "contact": {
+      "email": "gbhandari@clarku.com",
+      "phone": "508-365-9302",
+      "location": "years specializing in AI, ML",
+      "links": [
+        "https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/",
+        "https://medium.com/@ganeshprasadbhandari79"
+      ],
+      "linkedin": "https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/",
+      "github": null,
+      "medium": "https://medium.com/@ganeshprasadbhandari79"
+    },
+    "summary": "Dynamic and results-driven AI/ML professional with 16+ years of",
+    "skills": [
+      "Python",
+      "TensorFlow",
+      "Scikit-learn",
+      "SQL",
+      "Power BI",
+      "Tableau",
+      "Azure OpenAI",
+      "AWS",
+      "Azure ML Studio",
+      "LLM Ops",
+      "Big Data Analytics",
+      "Spark",
+      "Team mentoring",
+      "AI training sessions",
+      "public speaking (NTT Data NTalks)",
+      "AI governance",
+      "BFSI fraud detection",
+      "compliance and ethics"
+    ],
+    "experience": [
+      {
+        "title": "Dynamic and results-driven AI/ML professional with 16+ years of experience, including 6+ years specializing in AI, ML, and Generative AI solutions. Expertise in designing AI architectures, developing advanced analytic solutions, and leading AI-driven automation projects.",
+        "company": "Education",
+        "start_date": null,
+        "end_date": null,
+        "bullets": []
+      },
+      {
+        "title": "Senior Solution Architect",
+        "company": "Led the development of Copilot and AI Assistants, completing proof-of-concept (POC) to drive AI adoption.",
+        "start_date": null,
+        "end_date": null,
+        "bullets": []
+      },
+      {
+        "title": "Senior Data Scientist",
+        "company": "Powerweave Software Solutions Pvt. Ltd, Mumbai, India          February 2022 \u2013 December 2022",
+        "start_date": null,
+        "end_date": null,
+        "bullets": []
+      }
+    ],
+    "education": [
+      {
+        "degree": null,
+        "institution": "Master of Science in Information Technology (Healthcare Technology)             May 2026",
+        "graduation_year": "2026"
+      },
+      {
+        "degree": null,
+        "institution": "Clark University; Worcester, MA",
+        "graduation_year": null
+      },
+      {
+        "degree": null,
+        "institution": "Master of Data Science (Global)\t\t\t\t\t\t\t  JULY 2024",
+        "graduation_year": "2024"
+      },
+      {
+        "degree": null,
+        "institution": "Deakin University, Australia",
+        "graduation_year": null
+      },
+      {
+        "degree": null,
+        "institution": "Post Graduate Program in Artificial Intelligence and Machine Learning\t  January 2021",
+        "graduation_year": "2021"
+      },
+      {
+        "degree": null,
+        "institution": "University of Texas at Austin; Austin, TX",
+        "graduation_year": null
+      },
+      {
+        "degree": null,
+        "institution": "Master of Business Administration (MBA)",
+        "graduation_year": null
+      },
+      {
+        "degree": null,
+        "institution": "Swami Vivekanand Subharti University, India | \t\t\t\t\t  December 2018",
+        "graduation_year": "2018"
+      }
+    ]
+  },
+  "jobs_raw": [
+    {
+      "title": "Senior Solution Architect - Guidewire Careers",
+      "url": "https://guidewire.wd5.myworkdayjobs.com/external/job/united-states---remote/senior-solution-architect_jr_14251",
+      "snippet": "Solution Architect (SA) influences, determines, and executes the ... United States - Remote. time type: Full time. posted on: Posted 28 Days Ago ...",
+      "location_hint": "United States"
+    },
+    {
+      "title": "Solution Architect Jobs - Levels.fyi",
+      "url": "https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area",
+      "snippet": "Date Posted All Filters Clear Filters ... 6 days ago. Omaha, NE \u00b7 $146K - $212K \u00b7 Solution Architect I - Cloud 5 days ago. United States \u00b7 Fully Remote \u00b7 $175K.",
+      "location_hint": "days ago. Omaha, NE",
+      "full_text_md": "Title: Principal Solution Architect - E... | CDW | Levels.fyi\n\nURL Source: https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area\n\nMarkdown Content:\nDescription At CDW, we make it happen, together. Trust, connection, and commitment are at the heart of how we work together to deliver for our customers. It\u2019s why we\u2019re coworkers, not just employees. Coworkers who genuinely believe in supporting our customers and one another. We collectively forge our path forward with a level of commitment that speaks to who we are and where we\u2019re headed. We\u2019re proud to share our story and Make Amazing Happen at CDW. Job Summary The Principal Solution Architect \u2013 Enterprise Networking is a field-based technical pre-sales role that focuses on developing comprehensive Enterprise Networking solutions for CDW customers. This role involves providing consultative guidance, supporting partner product sales, scoping service offerings, and fostering strategic relationships to drive business growth. In this role you will be working with customers, delivery, and internal sales teams to develop and maintain strategic relationships and be a trusted advisor to grow our Enterprise Networking services business. What You Will Do \u2022 Develop appropriate assessment and service solutions for CDW customers, including architecture, optimizations, technology health checks, deployment services, and advisory services. \u2022 Collaborate with customers, delivery teams, and internal sales to offer consultative guidance, plan sales strategy, and author statements of work (SOWs). \u2022 Analyze technical and competitive considerations, defining actions to meet customer expectations in the sales cycle by uncovering customer long-term goals and requirements and crafting solutions that build towards the desired end goals. \u2022 Maintain strategic relationships with Customers, Internal Sales & Delivery management, acting as a trusted advisor to drive business growth. \u2022 Grow influence in your assigned territory by high levels of engagement with vendors/partners/customers/Sales as a strategic advisor and being seen by teammates as an expert in the field. \u2022 Act as a subject matter expert in multiple families of products and solutions, providing regular contributions to CDW marketing approved online activities, such as LinkedIn, blog posts, online magazine, etc. \u2022 Drive outreach initiatives, technical enablement projects, coaching, and mentoring for other SAs, Solution Executives, and Field Sellers. \u2022 Mentoring and coaching of solution architects around best practices to engage with coworkers and customers. What we expect of you: \u2022 Bachelor's Degree or equivalent experience. \u2022 Minimum of (8) years in technical, pre-sales, or post-sale delivery role. \u2022 Experience designing and architecting Enterprise Networking tailored to CDW\u2019s client needs. \u2022 Extensive hands on experience with routing, switching, wireless networking, campus switching, SD-WAN, data center networking solutions from partners like Cisco, Aruba, HPE, Juniper, Meraki, Extreme and Dell. \u2022 Motivated, self-starting, and able to independently perform high quality work with minimal guidance. \u2022 Understand industry-specific challenges, regulations, and best practices. \u2022 Tailored recommendations and position the company's solutions effectively within the industry landscape. \u2022 A PSA should be able to work effectively in a team, lead technical discussions, and influence decision-making. \u2022 They may also provide guidance and mentorship to junior team members. \u2022 A PSA must have a customer-centric mindset and be able to understand and articulate customer needs effectively. \u2022 They should possess excellent communication and presentation skills to engage with customers, gather requirements, and explain technical concepts in a clear and concise manner. \u2022 Building relationships, understanding customer pain points, and providing tailored solutions are key aspects of this role. \u2022 The candidate should have the ability to design and communicate comprehensive solutions that address customer requirements, business challenges, and build consensus around the final solution. \u2022 They should be skilled in analyzing complex problems, identifying appropriate solutions, and translating technical concepts into understandable terms for customers. \u2022 Pay range: $145,600 - $211,870, depending on experience and skill set \u2022 Annual bonus target of 25% subject to terms and conditions of plan \u2022 Benefits overview: https://cdw.benefit-info.com/ \u2022 Salary ranges may be subject to geographic differentials We make technology work so people can do great things. CDW is a leading multi-brand provider of information technology solutions to business, government, education and healthcare customers in the United States, the United Kingdom and Canada. A Fortune 500 company and member of the S&P 500 Index, CDW helps its customers to navigate an increasingly complex IT market and maximize return on their technology investments. Together, we unite. Together, we win. Together, we thrive. CDW is an equal opportunity employer. All qualified applicants will receive consideration for employment without regards to race, color, religion, sex, sexual orientation, gender identity, national origin, disability status, protected veteran status or any other basis prohibited by state and local law. CDW is committed to fostering an equitable, transparent, and respectful hiring process for all applicants. During our application process, CDW\u2019s goal is to get to know you as an applicant and understand your experience, strengths, skills, and qualifications. While AI can help you present yourself more clearly and effectively, the essence of your application should be authentically yours. To learn more, please review CDW's AI Applicant Notice.\n\nCompany Details\n---------------\n\n![Image 1](https://img.logo.dev/cdw.com?token=pk_Ez-J4YOpSS-Bjtug_T41Dw)\n\nCDW Corporation, headquartered in Lincolnshire, Illinois, is a provider of technology products and services for business, government and education.\n\nVernon Hills, IL, US 9,250$24.71B Public\n"
+    },
+    {
+      "title": "Enterprise Applications Solution Architect - United States (Remote)",
+      "url": "https://v2x.dejobs.org/virtual-usa/enterprise-applications-solution-architect-united-states-remote/EE9B7CD1CA2E4BF7925A5E1E0DEBA91E/job",
+      "snippet": "Enterprise Applications Solution Architect - United States (Remote)Virtual, USA Posted 33 days ago \u00b7 Healthcare coverage \u00b7 Retirement plan \u00b7 Life insurance, AD&D, ...",
+      "location_hint": "Life insurance, AD"
+    },
+    {
+      "title": "Solution Architect - Cloud Engineering - FedEx Careers",
+      "url": "https://careers.fedex.com/solution-architect-cloud-engineering/job/P25-317183-3",
+      "snippet": "Solution Architect - Cloud Engineering ... Location: Remote; 7900 Legacy Drive, Plano, TX 75024, United States; 1000 FedEx Drive, Coraopolis, PA 15108-9373, ...",
+      "location_hint": "Remote; 7900 Legacy Drive, Plano, TX 75024, United States; 1000 FedEx Drive, Cor"
+    },
+    {
+      "title": "Salesforce Senior Solution Architect - Quill - Staples Inc. Careers",
+      "url": "https://dev.careers.staples.ca/hcmUI/CandidateExperience/en/sites/StaplesInc/job/60326?lastSelectedFacet=CATEGORIES&selectedCategoriesFacet=300000005257038",
+      "snippet": "Salesforce Senior Solution Architect - Quill. Lincolnshire, IL, United States (On-site). Job Description. This position is a minimum of 4 days in office with ...",
+      "location_hint": "Salesforce Senior Solution Architect - Quill. Lincolnshire, IL"
+    }
+  ],
+  "jobs_scored": [
+    {
+      "title": "Senior Solution Architect - Guidewire Careers",
+      "url": "https://guidewire.wd5.myworkdayjobs.com/external/job/united-states---remote/senior-solution-architect_jr_14251",
+      "snippet": "Solution Architect (SA) influences, determines, and executes the ... United States - Remote. time type: Full time. posted on: Posted 28 Days Ago ...",
+      "location_hint": "United States",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.047619047619047616
+      },
+      "overall_match_percent": 15.95
+    },
+    {
+      "title": "Solution Architect Jobs - Levels.fyi",
+      "url": "https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area",
+      "snippet": "Date Posted All Filters Clear Filters ... 6 days ago. Omaha, NE \u00b7 $146K - $212K \u00b7 Solution Architect I - Cloud 5 days ago. United States \u00b7 Fully Remote \u00b7 $175K.",
+      "location_hint": "days ago. Omaha, NE",
+      "full_text_md": "Title: Principal Solution Architect - E... | CDW | Levels.fyi\n\nURL Source: https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area\n\nMarkdown Content:\nDescription At CDW, we make it happen, together. Trust, connection, and commitment are at the heart of how we work together to deliver for our customers. It\u2019s why we\u2019re coworkers, not just employees. Coworkers who genuinely believe in supporting our customers and one another. We collectively forge our path forward with a level of commitment that speaks to who we are and where we\u2019re headed. We\u2019re proud to share our story and Make Amazing Happen at CDW. Job Summary The Principal Solution Architect \u2013 Enterprise Networking is a field-based technical pre-sales role that focuses on developing comprehensive Enterprise Networking solutions for CDW customers. This role involves providing consultative guidance, supporting partner product sales, scoping service offerings, and fostering strategic relationships to drive business growth. In this role you will be working with customers, delivery, and internal sales teams to develop and maintain strategic relationships and be a trusted advisor to grow our Enterprise Networking services business. What You Will Do \u2022 Develop appropriate assessment and service solutions for CDW customers, including architecture, optimizations, technology health checks, deployment services, and advisory services. \u2022 Collaborate with customers, delivery teams, and internal sales to offer consultative guidance, plan sales strategy, and author statements of work (SOWs). \u2022 Analyze technical and competitive considerations, defining actions to meet customer expectations in the sales cycle by uncovering customer long-term goals and requirements and crafting solutions that build towards the desired end goals. \u2022 Maintain strategic relationships with Customers, Internal Sales & Delivery management, acting as a trusted advisor to drive business growth. \u2022 Grow influence in your assigned territory by high levels of engagement with vendors/partners/customers/Sales as a strategic advisor and being seen by teammates as an expert in the field. \u2022 Act as a subject matter expert in multiple families of products and solutions, providing regular contributions to CDW marketing approved online activities, such as LinkedIn, blog posts, online magazine, etc. \u2022 Drive outreach initiatives, technical enablement projects, coaching, and mentoring for other SAs, Solution Executives, and Field Sellers. \u2022 Mentoring and coaching of solution architects around best practices to engage with coworkers and customers. What we expect of you: \u2022 Bachelor's Degree or equivalent experience. \u2022 Minimum of (8) years in technical, pre-sales, or post-sale delivery role. \u2022 Experience designing and architecting Enterprise Networking tailored to CDW\u2019s client needs. \u2022 Extensive hands on experience with routing, switching, wireless networking, campus switching, SD-WAN, data center networking solutions from partners like Cisco, Aruba, HPE, Juniper, Meraki, Extreme and Dell. \u2022 Motivated, self-starting, and able to independently perform high quality work with minimal guidance. \u2022 Understand industry-specific challenges, regulations, and best practices. \u2022 Tailored recommendations and position the company's solutions effectively within the industry landscape. \u2022 A PSA should be able to work effectively in a team, lead technical discussions, and influence decision-making. \u2022 They may also provide guidance and mentorship to junior team members. \u2022 A PSA must have a customer-centric mindset and be able to understand and articulate customer needs effectively. \u2022 They should possess excellent communication and presentation skills to engage with customers, gather requirements, and explain technical concepts in a clear and concise manner. \u2022 Building relationships, understanding customer pain points, and providing tailored solutions are key aspects of this role. \u2022 The candidate should have the ability to design and communicate comprehensive solutions that address customer requirements, business challenges, and build consensus around the final solution. \u2022 They should be skilled in analyzing complex problems, identifying appropriate solutions, and translating technical concepts into understandable terms for customers. \u2022 Pay range: $145,600 - $211,870, depending on experience and skill set \u2022 Annual bonus target of 25% subject to terms and conditions of plan \u2022 Benefits overview: https://cdw.benefit-info.com/ \u2022 Salary ranges may be subject to geographic differentials We make technology work so people can do great things. CDW is a leading multi-brand provider of information technology solutions to business, government, education and healthcare customers in the United States, the United Kingdom and Canada. A Fortune 500 company and member of the S&P 500 Index, CDW helps its customers to navigate an increasingly complex IT market and maximize return on their technology investments. Together, we unite. Together, we win. Together, we thrive. CDW is an equal opportunity employer. All qualified applicants will receive consideration for employment without regards to race, color, religion, sex, sexual orientation, gender identity, national origin, disability status, protected veteran status or any other basis prohibited by state and local law. CDW is committed to fostering an equitable, transparent, and respectful hiring process for all applicants. During our application process, CDW\u2019s goal is to get to know you as an applicant and understand your experience, strengths, skills, and qualifications. While AI can help you present yourself more clearly and effectively, the essence of your application should be authentically yours. To learn more, please review CDW's AI Applicant Notice.\n\nCompany Details\n---------------\n\n![Image 1](https://img.logo.dev/cdw.com?token=pk_Ez-J4YOpSS-Bjtug_T41Dw)\n\nCDW Corporation, headquartered in Lincolnshire, Illinois, is a provider of technology products and services for business, government and education.\n\nVernon Hills, IL, US 9,250$24.71B Public\n",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.02
+      },
+      "overall_match_percent": 15.4
+    },
+    {
+      "title": "Enterprise Applications Solution Architect - United States (Remote)",
+      "url": "https://v2x.dejobs.org/virtual-usa/enterprise-applications-solution-architect-united-states-remote/EE9B7CD1CA2E4BF7925A5E1E0DEBA91E/job",
+      "snippet": "Enterprise Applications Solution Architect - United States (Remote)Virtual, USA Posted 33 days ago \u00b7 Healthcare coverage \u00b7 Retirement plan \u00b7 Life insurance, AD&D, ...",
+      "location_hint": "Life insurance, AD",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.0
+      },
+      "overall_match_percent": 15.0
+    },
+    {
+      "title": "Solution Architect - Cloud Engineering - FedEx Careers",
+      "url": "https://careers.fedex.com/solution-architect-cloud-engineering/job/P25-317183-3",
+      "snippet": "Solution Architect - Cloud Engineering ... Location: Remote; 7900 Legacy Drive, Plano, TX 75024, United States; 1000 FedEx Drive, Coraopolis, PA 15108-9373, ...",
+      "location_hint": "Remote; 7900 Legacy Drive, Plano, TX 75024, United States; 1000 FedEx Drive, Cor",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.0
+      },
+      "overall_match_percent": 15.0
+    },
+    {
+      "title": "Salesforce Senior Solution Architect - Quill - Staples Inc. Careers",
+      "url": "https://dev.careers.staples.ca/hcmUI/CandidateExperience/en/sites/StaplesInc/job/60326?lastSelectedFacet=CATEGORIES&selectedCategoriesFacet=300000005257038",
+      "snippet": "Salesforce Senior Solution Architect - Quill. Lincolnshire, IL, United States (On-site). Job Description. This position is a minimum of 4 days in office with ...",
+      "location_hint": "Salesforce Senior Solution Architect - Quill. Lincolnshire, IL",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.08695652173913043
+      },
+      "overall_match_percent": 16.74
+    }
+  ],
+  "ranking": [
+    {
+      "title": "Salesforce Senior Solution Architect - Quill - Staples Inc. Careers",
+      "url": "https://dev.careers.staples.ca/hcmUI/CandidateExperience/en/sites/StaplesInc/job/60326?lastSelectedFacet=CATEGORIES&selectedCategoriesFacet=300000005257038",
+      "snippet": "Salesforce Senior Solution Architect - Quill. Lincolnshire, IL, United States (On-site). Job Description. This position is a minimum of 4 days in office with ...",
+      "location_hint": "Salesforce Senior Solution Architect - Quill. Lincolnshire, IL",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.08695652173913043
+      },
+      "overall_match_percent": 16.74,
+      "rank": 1
+    },
+    {
+      "title": "Senior Solution Architect - Guidewire Careers",
+      "url": "https://guidewire.wd5.myworkdayjobs.com/external/job/united-states---remote/senior-solution-architect_jr_14251",
+      "snippet": "Solution Architect (SA) influences, determines, and executes the ... United States - Remote. time type: Full time. posted on: Posted 28 Days Ago ...",
+      "location_hint": "United States",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.047619047619047616
+      },
+      "overall_match_percent": 15.95,
+      "rank": 2,
+      "ats_keyword_match": 0.143
+    },
+    {
+      "title": "Solution Architect Jobs - Levels.fyi",
+      "url": "https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area",
+      "snippet": "Date Posted All Filters Clear Filters ... 6 days ago. Omaha, NE \u00b7 $146K - $212K \u00b7 Solution Architect I - Cloud 5 days ago. United States \u00b7 Fully Remote \u00b7 $175K.",
+      "location_hint": "days ago. Omaha, NE",
+      "full_text_md": "Title: Principal Solution Architect - E... | CDW | Levels.fyi\n\nURL Source: https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area\n\nMarkdown Content:\nDescription At CDW, we make it happen, together. Trust, connection, and commitment are at the heart of how we work together to deliver for our customers. It\u2019s why we\u2019re coworkers, not just employees. Coworkers who genuinely believe in supporting our customers and one another. We collectively forge our path forward with a level of commitment that speaks to who we are and where we\u2019re headed. We\u2019re proud to share our story and Make Amazing Happen at CDW. Job Summary The Principal Solution Architect \u2013 Enterprise Networking is a field-based technical pre-sales role that focuses on developing comprehensive Enterprise Networking solutions for CDW customers. This role involves providing consultative guidance, supporting partner product sales, scoping service offerings, and fostering strategic relationships to drive business growth. In this role you will be working with customers, delivery, and internal sales teams to develop and maintain strategic relationships and be a trusted advisor to grow our Enterprise Networking services business. What You Will Do \u2022 Develop appropriate assessment and service solutions for CDW customers, including architecture, optimizations, technology health checks, deployment services, and advisory services. \u2022 Collaborate with customers, delivery teams, and internal sales to offer consultative guidance, plan sales strategy, and author statements of work (SOWs). \u2022 Analyze technical and competitive considerations, defining actions to meet customer expectations in the sales cycle by uncovering customer long-term goals and requirements and crafting solutions that build towards the desired end goals. \u2022 Maintain strategic relationships with Customers, Internal Sales & Delivery management, acting as a trusted advisor to drive business growth. \u2022 Grow influence in your assigned territory by high levels of engagement with vendors/partners/customers/Sales as a strategic advisor and being seen by teammates as an expert in the field. \u2022 Act as a subject matter expert in multiple families of products and solutions, providing regular contributions to CDW marketing approved online activities, such as LinkedIn, blog posts, online magazine, etc. \u2022 Drive outreach initiatives, technical enablement projects, coaching, and mentoring for other SAs, Solution Executives, and Field Sellers. \u2022 Mentoring and coaching of solution architects around best practices to engage with coworkers and customers. What we expect of you: \u2022 Bachelor's Degree or equivalent experience. \u2022 Minimum of (8) years in technical, pre-sales, or post-sale delivery role. \u2022 Experience designing and architecting Enterprise Networking tailored to CDW\u2019s client needs. \u2022 Extensive hands on experience with routing, switching, wireless networking, campus switching, SD-WAN, data center networking solutions from partners like Cisco, Aruba, HPE, Juniper, Meraki, Extreme and Dell. \u2022 Motivated, self-starting, and able to independently perform high quality work with minimal guidance. \u2022 Understand industry-specific challenges, regulations, and best practices. \u2022 Tailored recommendations and position the company's solutions effectively within the industry landscape. \u2022 A PSA should be able to work effectively in a team, lead technical discussions, and influence decision-making. \u2022 They may also provide guidance and mentorship to junior team members. \u2022 A PSA must have a customer-centric mindset and be able to understand and articulate customer needs effectively. \u2022 They should possess excellent communication and presentation skills to engage with customers, gather requirements, and explain technical concepts in a clear and concise manner. \u2022 Building relationships, understanding customer pain points, and providing tailored solutions are key aspects of this role. \u2022 The candidate should have the ability to design and communicate comprehensive solutions that address customer requirements, business challenges, and build consensus around the final solution. \u2022 They should be skilled in analyzing complex problems, identifying appropriate solutions, and translating technical concepts into understandable terms for customers. \u2022 Pay range: $145,600 - $211,870, depending on experience and skill set \u2022 Annual bonus target of 25% subject to terms and conditions of plan \u2022 Benefits overview: https://cdw.benefit-info.com/ \u2022 Salary ranges may be subject to geographic differentials We make technology work so people can do great things. CDW is a leading multi-brand provider of information technology solutions to business, government, education and healthcare customers in the United States, the United Kingdom and Canada. A Fortune 500 company and member of the S&P 500 Index, CDW helps its customers to navigate an increasingly complex IT market and maximize return on their technology investments. Together, we unite. Together, we win. Together, we thrive. CDW is an equal opportunity employer. All qualified applicants will receive consideration for employment without regards to race, color, religion, sex, sexual orientation, gender identity, national origin, disability status, protected veteran status or any other basis prohibited by state and local law. CDW is committed to fostering an equitable, transparent, and respectful hiring process for all applicants. During our application process, CDW\u2019s goal is to get to know you as an applicant and understand your experience, strengths, skills, and qualifications. While AI can help you present yourself more clearly and effectively, the essence of your application should be authentically yours. To learn more, please review CDW's AI Applicant Notice.\n\nCompany Details\n---------------\n\n![Image 1](https://img.logo.dev/cdw.com?token=pk_Ez-J4YOpSS-Bjtug_T41Dw)\n\nCDW Corporation, headquartered in Lincolnshire, Illinois, is a provider of technology products and services for business, government and education.\n\nVernon Hills, IL, US 9,250$24.71B Public\n",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.02
+      },
+      "overall_match_percent": 15.4,
+      "rank": 3,
+      "ats_keyword_match": 0.04
+    },
+    {
+      "title": "Enterprise Applications Solution Architect - United States (Remote)",
+      "url": "https://v2x.dejobs.org/virtual-usa/enterprise-applications-solution-architect-united-states-remote/EE9B7CD1CA2E4BF7925A5E1E0DEBA91E/job",
+      "snippet": "Enterprise Applications Solution Architect - United States (Remote)Virtual, USA Posted 33 days ago \u00b7 Healthcare coverage \u00b7 Retirement plan \u00b7 Life insurance, AD&D, ...",
+      "location_hint": "Life insurance, AD",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.0
+      },
+      "overall_match_percent": 15.0,
+      "rank": 4,
+      "ats_keyword_match": 0.438
+    },
+    {
+      "title": "Solution Architect - Cloud Engineering - FedEx Careers",
+      "url": "https://careers.fedex.com/solution-architect-cloud-engineering/job/P25-317183-3",
+      "snippet": "Solution Architect - Cloud Engineering ... Location: Remote; 7900 Legacy Drive, Plano, TX 75024, United States; 1000 FedEx Drive, Coraopolis, PA 15108-9373, ...",
+      "location_hint": "Remote; 7900 Legacy Drive, Plano, TX 75024, United States; 1000 FedEx Drive, Cor",
+      "matched_skills": [],
+      "missing_skills": [
+        "Python",
+        "TensorFlow",
+        "Scikit-learn",
+        "SQL",
+        "Power BI",
+        "Tableau",
+        "Azure OpenAI",
+        "AWS",
+        "Azure ML Studio",
+        "LLM Ops",
+        "Big Data Analytics",
+        "Spark",
+        "Team mentoring",
+        "AI training sessions",
+        "public speaking (NTT Data NTalks)",
+        "AI governance",
+        "BFSI fraud detection",
+        "compliance and ethics"
+      ],
+      "components": {
+        "skill_overlap": 0.0,
+        "experience_alignment": 0.6,
+        "ats_score": 0.0
+      },
+      "overall_match_percent": 15.0,
+      "rank": 5,
+      "ats_keyword_match": 0.278
+    }
+  ],
+  "approved_job_urls": [
+    "https://careers.fedex.com/solution-architect-cloud-engineering/job/P25-317183-3",
+    "https://guidewire.wd5.myworkdayjobs.com/external/job/united-states---remote/senior-solution-architect_jr_14251",
+    "https://v2x.dejobs.org/virtual-usa/enterprise-applications-solution-architect-united-states-remote/EE9B7CD1CA2E4BF7925A5E1E0DEBA91E/job",
+    "https://www.levels.fyi/jobs/title/solution-architect/location/lincoln-and-hastings-krny-area"
+  ],
+  "search_personas": [
+    {
+      "persona_id": "A",
+      "name": "Strict ATS US 36h",
+      "strategy": "ats_preferred",
+      "recency_hours": 36.0,
+      "must_include": [
+        "Solution Architect",
+        "Solution Architect",
+        "AI Solution Architect",
+        "GenAI Architect",
+        "Solutions Architecture"
+      ],
+      "negative_terms": [
+        "India",
+        "Bangalore",
+        "Nashik",
+        "Shine",
+        "Naukri",
+        "TimesJobs"
+      ],
+      "site_filters": [
+        "greenhouse.io",
+        "lever.co",
+        "workdayjobs.com",
+        "icims.com",
+        "myworkdayjobs.com",
+        "successfactors.com",
+        "smartrecruiters.com"
+      ]
+    },
+    {
+      "persona_id": "B",
+      "name": "ATS-preferred Remote US 7d",
+      "strategy": "ats_preferred",
+      "recency_hours": 168.0,
+      "must_include": [
+        "Solution Architect",
+        "Solution Architect",
+        "AI Solution Architect",
+        "GenAI Architect",
+        "Solutions Architecture",
+        "remote",
+        "hybrid"
+      ],
+      "negative_terms": [
+        "India",
+        "Bangalore",
+        "Nashik",
+        "Shine",
+        "Naukri",
+        "TimesJobs"
+      ],
+      "site_filters": [
+        "greenhouse.io",
+        "lever.co",
+        "workdayjobs.com",
+        "icims.com",
+        "myworkdayjobs.com",
+        "successfactors.com",
+        "smartrecruiters.com"
+      ]
+    },
+    {
+      "persona_id": "C",
+      "name": "Broad US title-strict",
+      "strategy": "broad",
+      "recency_hours": 168.0,
+      "must_include": [
+        "Solution Architect",
+        "United States"
+      ],
+      "negative_terms": [
+        "India",
+        "Bangalore",
+        "Nashik",
+        "Shine",
+        "Naukri",
+        "TimesJobs"
+      ],
+      "site_filters": []
+    }
+  ],
+  "active_persona_id": "A",
+  "retry_count": 7,
+  "max_retries": 6,
+  "refinement_feedback": "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri.",
+  "query_modifiers": {
+    "last_query": "\"Solution Architect\" \"United States\" (\"United States\" OR \"USA\" OR \"Remote\") (\"posted\" OR \"days ago\" OR \"this week\")  -India -Bangalore -Nashik -Shine -Naukri -TimesJobs -India -Bangalore -Nashik -Shine -Naukri.",
+    "strategy": "ats_preferred"
+  },
+  "best_so_far": {
+    "ranking_path": "outputs/runs/run_b939c6798f/ranking.json",
+    "jobs_scored_path": "outputs/runs/run_b939c6798f/jobs_scored.json",
+    "score": 34.35,
+    "persona_id": "B"
+  },
+  "evaluation": {
+    "score": 0.2,
+    "reason": "All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "action": "RETRY_SEARCH",
+    "refinement_feedback": "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+  },
+  "evaluations": [
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:37:09.923375+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.0,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "no ranking to evaluate",
+        "Widen search: broaden to ATS-preferred and 7 days; keep US intent."
+      ],
+      "ts_utc": "2026-02-23T20:37:11.641210+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.2,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "All jobs rejected (soft-fence) \u2014 shifting strategy",
+        "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+      ],
+      "ts_utc": "2026-02-23T20:38:06.387291+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.2,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "All jobs rejected (soft-fence) \u2014 shifting strategy",
+        "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+      ],
+      "ts_utc": "2026-02-23T20:38:41.722346+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.2,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "All jobs rejected (soft-fence) \u2014 shifting strategy",
+        "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+      ],
+      "ts_utc": "2026-02-23T20:39:06.788259+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.2,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "All jobs rejected (soft-fence) \u2014 shifting strategy",
+        "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+      ],
+      "ts_utc": "2026-02-23T20:39:12.777056+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.2,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "All jobs rejected (soft-fence) \u2014 shifting strategy",
+        "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+      ],
+      "ts_utc": "2026-02-23T20:39:16.863161+00:00"
+    },
+    {
+      "layer_id": "L5",
+      "target_id": "ranking_batch",
+      "evaluation_score": 0.2,
+      "threshold": 0.5,
+      "decision": "retry",
+      "feedback": [
+        "All jobs rejected (soft-fence) \u2014 shifting strategy",
+        "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+      ],
+      "ts_utc": "2026-02-23T20:39:19.957228+00:00"
+    },
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:42:50.939536+00:00"
+    },
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:42:52.864807+00:00"
+    },
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:42:54.439579+00:00"
+    },
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:42:55.729823+00:00"
+    },
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:42:57.102693+00:00"
+    },
+    {
+      "layer_id": "L2",
+      "target_id": "intake_bundle",
+      "evaluation_score": 1.0,
+      "threshold": 0.5,
+      "decision": "pass",
+      "feedback": [],
+      "ts_utc": "2026-02-23T20:42:58.532693+00:00"
+    }
+  ],
+  "evaluation_logs": [
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.00 reason=no ranking to evaluate",
+    "[Director] retry=1 reason=no results; relax constraints",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.20 reason=All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "[Director] retry=2 reason=no results; relax constraints",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.20 reason=All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "[Director] retry=3 reason=no results; relax constraints",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.20 reason=All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "[Director] retry=4 reason=no results; relax constraints",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.20 reason=All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "[Director] retry=5 reason=no results; relax constraints",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.20 reason=All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "[Director] retry=6 reason=no results; relax constraints",
+    "[L5_Evaluator] action=RETRY_SEARCH score=0.20 reason=All jobs rejected (soft-fence) \u2014 shifting strategy",
+    "[Director] retry=7 reason=no results; relax constraints",
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L2] intake ok score=1.00 feedback=0",
+    "[L6 ATS] 4 drafts below 0.90 keyword match; HITL review required"
+  ],
+  "steps": [
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:37:09.830102+00:00",
+      "finished_at_utc": "2026-02-23T20:37:09.830202+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:37:09.836937+00:00",
+      "finished_at_utc": "2026-02-23T20:37:09.889271+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:37:09.892516+00:00",
+      "finished_at_utc": "2026-02-23T20:37:09.923434+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:37:09.926904+00:00",
+      "finished_at_utc": "2026-02-23T20:37:11.631116+00:00",
+      "message": "jobs_raw=0 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:37:11.634852+00:00",
+      "finished_at_utc": "2026-02-23T20:37:11.635200+00:00",
+      "message": "jobs_scored=0"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:37:11.640831+00:00",
+      "finished_at_utc": "2026-02-23T20:37:11.641476+00:00",
+      "message": "ranking=0 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:37:11.649082+00:00",
+      "finished_at_utc": "2026-02-23T20:38:04.703308+00:00",
+      "message": "jobs_raw=10 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:38:04.708966+00:00",
+      "finished_at_utc": "2026-02-23T20:38:04.715582+00:00",
+      "message": "jobs_scored=10"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:38:04.721140+00:00",
+      "finished_at_utc": "2026-02-23T20:38:06.387808+00:00",
+      "message": "ranking=10 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:38:06.403236+00:00",
+      "finished_at_utc": "2026-02-23T20:38:40.962639+00:00",
+      "message": "jobs_raw=6 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:38:40.971501+00:00",
+      "finished_at_utc": "2026-02-23T20:38:40.975759+00:00",
+      "message": "jobs_scored=6"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:38:40.982866+00:00",
+      "finished_at_utc": "2026-02-23T20:38:41.722846+00:00",
+      "message": "ranking=6 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:38:41.739670+00:00",
+      "finished_at_utc": "2026-02-23T20:39:06.148204+00:00",
+      "message": "jobs_raw=6 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:39:06.156249+00:00",
+      "finished_at_utc": "2026-02-23T20:39:06.174890+00:00",
+      "message": "jobs_scored=6"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:39:06.182764+00:00",
+      "finished_at_utc": "2026-02-23T20:39:06.788797+00:00",
+      "message": "ranking=6 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:39:06.802840+00:00",
+      "finished_at_utc": "2026-02-23T20:39:12.185422+00:00",
+      "message": "jobs_raw=6 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:39:12.193697+00:00",
+      "finished_at_utc": "2026-02-23T20:39:12.198545+00:00",
+      "message": "jobs_scored=6"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:39:12.205221+00:00",
+      "finished_at_utc": "2026-02-23T20:39:12.777872+00:00",
+      "message": "ranking=6 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:39:12.810308+00:00",
+      "finished_at_utc": "2026-02-23T20:39:16.278047+00:00",
+      "message": "jobs_raw=5 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:39:16.286076+00:00",
+      "finished_at_utc": "2026-02-23T20:39:16.288283+00:00",
+      "message": "jobs_scored=5"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:39:16.294162+00:00",
+      "finished_at_utc": "2026-02-23T20:39:16.864232+00:00",
+      "message": "ranking=5 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L3",
+      "status": "ok",
+      "agent": "ManagerCluster",
+      "started_at_utc": "2026-02-23T20:39:16.884499+00:00",
+      "finished_at_utc": "2026-02-23T20:39:19.517315+00:00",
+      "message": "jobs_raw=5 rejected=0"
+    },
+    {
+      "layer_id": "L4",
+      "status": "ok",
+      "agent": "MatcherAgent",
+      "started_at_utc": "2026-02-23T20:39:19.550032+00:00",
+      "finished_at_utc": "2026-02-23T20:39:19.551386+00:00",
+      "message": "jobs_scored=5"
+    },
+    {
+      "layer_id": "L5",
+      "status": "ok",
+      "agent": "Ranker+Evaluator",
+      "started_at_utc": "2026-02-23T20:39:19.556893+00:00",
+      "finished_at_utc": "2026-02-23T20:39:19.957685+00:00",
+      "message": "ranking=5 action=RETRY_SEARCH"
+    },
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:42:50.833072+00:00",
+      "finished_at_utc": "2026-02-23T20:42:50.833148+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:42:50.840477+00:00",
+      "finished_at_utc": "2026-02-23T20:42:50.880756+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:42:50.890728+00:00",
+      "finished_at_utc": "2026-02-23T20:42:50.939588+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:42:52.766863+00:00",
+      "finished_at_utc": "2026-02-23T20:42:52.766920+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:42:52.777247+00:00",
+      "finished_at_utc": "2026-02-23T20:42:52.822639+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:42:52.833959+00:00",
+      "finished_at_utc": "2026-02-23T20:42:52.864856+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:42:54.331410+00:00",
+      "finished_at_utc": "2026-02-23T20:42:54.331473+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:42:54.343946+00:00",
+      "finished_at_utc": "2026-02-23T20:42:54.399860+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:42:54.406700+00:00",
+      "finished_at_utc": "2026-02-23T20:42:54.439652+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:42:55.611569+00:00",
+      "finished_at_utc": "2026-02-23T20:42:55.611630+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:42:55.635016+00:00",
+      "finished_at_utc": "2026-02-23T20:42:55.681768+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:42:55.690356+00:00",
+      "finished_at_utc": "2026-02-23T20:42:55.729904+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:42:56.991941+00:00",
+      "finished_at_utc": "2026-02-23T20:42:56.992064+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:42:57.019996+00:00",
+      "finished_at_utc": "2026-02-23T20:42:57.060428+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:42:57.069115+00:00",
+      "finished_at_utc": "2026-02-23T20:42:57.102763+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L0",
+      "status": "ok",
+      "agent": "SanitizeAgent",
+      "started_at_utc": "2026-02-23T20:42:58.419812+00:00",
+      "finished_at_utc": "2026-02-23T20:42:58.419874+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L1",
+      "status": "ok",
+      "agent": "IntakeAgent",
+      "started_at_utc": "2026-02-23T20:42:58.431644+00:00",
+      "finished_at_utc": "2026-02-23T20:42:58.484420+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L2",
+      "status": "ok",
+      "agent": "Parser+Planner",
+      "started_at_utc": "2026-02-23T20:42:58.492769+00:00",
+      "finished_at_utc": "2026-02-23T20:42:58.532742+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L6",
+      "status": "ok",
+      "agent": "DraftingAgent",
+      "started_at_utc": "2026-02-23T20:43:31.199715+00:00",
+      "finished_at_utc": "2026-02-23T20:43:32.526718+00:00",
+      "message": "drafts=4"
+    },
+    {
+      "layer_id": "L7",
+      "status": "ok",
+      "agent": "Analytics+Learning",
+      "started_at_utc": "2026-02-23T20:45:35.581974+00:00",
+      "finished_at_utc": "2026-02-23T20:45:35.831726+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L8",
+      "status": "ok",
+      "agent": "MemoryManager",
+      "started_at_utc": "2026-02-23T20:45:35.837401+00:00",
+      "finished_at_utc": "2026-02-23T20:45:35.843796+00:00",
+      "message": "ok"
+    },
+    {
+      "layer_id": "L9",
+      "status": "ok",
+      "agent": "GovernanceAuditor",
+      "started_at_utc": "2026-02-23T20:45:35.851178+00:00",
+      "finished_at_utc": "2026-02-23T20:45:35.851267+00:00",
+      "message": "ok"
+    }
+  ],
+  "live_feed": [
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:37:09.830166+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:37:09.830245+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:37:09.836981+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:37:09.889281+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:37:09.892572+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:37:09.923443+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:37:09.926949+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=0 rejected=0",
+      "ts_utc": "2026-02-23T20:37:11.631133+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:37:11.634888+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=0",
+      "ts_utc": "2026-02-23T20:37:11.635206+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:37:11.640873+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=0 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:37:11.641483+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:37:11.649125+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=10 rejected=0",
+      "ts_utc": "2026-02-23T20:38:04.703317+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:38:04.709022+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=10",
+      "ts_utc": "2026-02-23T20:38:04.715592+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:38:04.721184+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=10 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:38:06.387817+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:38:06.403283+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=6 rejected=0",
+      "ts_utc": "2026-02-23T20:38:40.962648+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:38:40.971547+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=6",
+      "ts_utc": "2026-02-23T20:38:40.975768+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:38:40.982921+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=6 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:38:41.722873+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:38:41.739727+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=6 rejected=0",
+      "ts_utc": "2026-02-23T20:39:06.148212+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:39:06.156297+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=6",
+      "ts_utc": "2026-02-23T20:39:06.174899+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:39:06.182840+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=6 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:39:06.788828+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:39:06.802886+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=6 rejected=0",
+      "ts_utc": "2026-02-23T20:39:12.185431+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:39:12.193783+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=6",
+      "ts_utc": "2026-02-23T20:39:12.198553+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:39:12.205290+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=6 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:39:12.777889+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:39:12.810390+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=5 rejected=0",
+      "ts_utc": "2026-02-23T20:39:16.278057+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:39:16.286146+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=5",
+      "ts_utc": "2026-02-23T20:39:16.288290+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:39:16.294208+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=5 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:39:16.864251+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "ManagerCluster",
+      "message": "Searching jobs (personas + geo fence + extraction)",
+      "ts_utc": "2026-02-23T20:39:16.884571+00:00"
+    },
+    {
+      "layer": "L3",
+      "agent": "orchestrator",
+      "message": "L3 ok: jobs_raw=5 rejected=0",
+      "ts_utc": "2026-02-23T20:39:19.517336+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "MatcherAgent",
+      "message": "Scoring matches",
+      "ts_utc": "2026-02-23T20:39:19.550087+00:00"
+    },
+    {
+      "layer": "L4",
+      "agent": "orchestrator",
+      "message": "L4 ok: jobs_scored=5",
+      "ts_utc": "2026-02-23T20:39:19.551395+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "Ranker+Evaluator",
+      "message": "Ranking and evaluating",
+      "ts_utc": "2026-02-23T20:39:19.556946+00:00"
+    },
+    {
+      "layer": "L5",
+      "agent": "orchestrator",
+      "message": "L5 ok: ranking=5 action=RETRY_SEARCH",
+      "ts_utc": "2026-02-23T20:39:19.957694+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:42:50.833134+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:42:50.833158+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:42:50.840567+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:42:50.880798+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:42:50.890811+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:42:50.939596+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:42:52.766911+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:42:52.766925+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:42:52.777303+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:42:52.822762+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:42:52.834010+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:42:52.864865+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:42:54.331463+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:42:54.331478+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:42:54.344933+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:42:54.399876+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:42:54.406806+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:42:54.439667+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:42:55.611619+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:42:55.611635+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:42:55.635114+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:42:55.681845+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:42:55.690424+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:42:55.729918+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:42:56.992034+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:42:56.992076+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:42:57.020051+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:42:57.060439+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:42:57.069202+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:42:57.102779+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "SanitizeAgent",
+      "message": "Starting run",
+      "ts_utc": "2026-02-23T20:42:58.419863+00:00"
+    },
+    {
+      "layer": "L0",
+      "agent": "orchestrator",
+      "message": "L0 ok: ok",
+      "ts_utc": "2026-02-23T20:42:58.419879+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "IntakeAgent",
+      "message": "Loading resume + preferences",
+      "ts_utc": "2026-02-23T20:42:58.431983+00:00"
+    },
+    {
+      "layer": "L1",
+      "agent": "orchestrator",
+      "message": "L1 ok: ok",
+      "ts_utc": "2026-02-23T20:42:58.484452+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "Parser+Planner",
+      "message": "Extracting profile and building search personas",
+      "ts_utc": "2026-02-23T20:42:58.492853+00:00"
+    },
+    {
+      "layer": "L2",
+      "agent": "orchestrator",
+      "message": "L2 ok: ok",
+      "ts_utc": "2026-02-23T20:42:58.532751+00:00"
+    },
+    {
+      "layer": "L6",
+      "agent": "DraftingAgent",
+      "message": "Generating ATS resume + cover letter",
+      "ts_utc": "2026-02-23T20:43:31.199836+00:00"
+    },
+    {
+      "layer": "L6",
+      "agent": "orchestrator",
+      "message": "L6 ok: drafts=4",
+      "ts_utc": "2026-02-23T20:43:32.526731+00:00"
+    },
+    {
+      "layer": "L7",
+      "agent": "Analytics+Learning",
+      "message": "Recording tracker, learning, roadmap",
+      "ts_utc": "2026-02-23T20:45:35.582045+00:00"
+    },
+    {
+      "layer": "L7",
+      "agent": "orchestrator",
+      "message": "L7 ok: ok",
+      "ts_utc": "2026-02-23T20:45:35.831735+00:00"
+    },
+    {
+      "layer": "L8",
+      "agent": "MemoryManager",
+      "message": "Marking applied and dedupe memory",
+      "ts_utc": "2026-02-23T20:45:35.837451+00:00"
+    },
+    {
+      "layer": "L8",
+      "agent": "orchestrator",
+      "message": "L8 ok: ok",
+      "ts_utc": "2026-02-23T20:45:35.843824+00:00"
+    },
+    {
+      "layer": "L9",
+      "agent": "GovernanceAuditor",
+      "message": "Final governance summary",
+      "ts_utc": "2026-02-23T20:45:35.851244+00:00"
+    },
+    {
+      "layer": "L9",
+      "agent": "orchestrator",
+      "message": "L9 ok: ok",
+      "ts_utc": "2026-02-23T20:45:35.851277+00:00"
+    }
+  ],
+  "artifacts": {
+    "resume_raw": {
+      "path": "outputs/runs/run_b939c6798f/resume_raw.txt",
+      "mime": "text/plain",
+      "created_at_utc": "2026-02-23T20:42:58.484322+00:00"
+    },
+    "extracted_profile": {
+      "path": "outputs/runs/run_b939c6798f/extracted_profile.json",
+      "mime": "application/json",
+      "created_at_utc": "2026-02-23T20:42:58.532649+00:00"
+    },
+    "jobs_raw": {
+      "path": "outputs/runs/run_b939c6798f/jobs_raw.json",
+      "mime": "application/json",
+      "created_at_utc": "2026-02-23T20:39:19.517254+00:00"
+    },
+    "jobs_scored": {
+      "path": "outputs/runs/run_b939c6798f/jobs_scored.json",
+      "mime": "application/json",
+      "created_at_utc": "2026-02-23T20:39:19.551354+00:00"
+    },
+    "ranking": {
+      "path": "outputs/runs/run_b939c6798f/ranking.json",
+      "mime": "application/json",
+      "created_at_utc": "2026-02-23T20:42:58.538966+00:00"
+    },
+    "evaluation": {
+      "path": "outputs/runs/run_b939c6798f/evaluation.json",
+      "mime": "application/json",
+      "created_at_utc": "2026-02-23T20:39:19.957661+00:00"
+    },
+    "resume_393d8bf8da2d": {
+      "path": "outputs/runs/run_b939c6798f/resume_393d8bf8da2d.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:31.580404+00:00"
+    },
+    "cover_393d8bf8da2d": {
+      "path": "outputs/runs/run_b939c6798f/cover_393d8bf8da2d.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:31.580425+00:00"
+    },
+    "resume_393d8bf8da2d_docx": {
+      "path": "outputs/runs/run_b939c6798f/resume_393d8bf8da2d.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:31.580430+00:00"
+    },
+    "cover_393d8bf8da2d_docx": {
+      "path": "outputs/runs/run_b939c6798f/cover_393d8bf8da2d.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:31.580435+00:00"
+    },
+    "resume_393d8bf8da2d_pdf": {
+      "path": "outputs/runs/run_b939c6798f/resume_393d8bf8da2d.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:31.580439+00:00"
+    },
+    "cover_393d8bf8da2d_pdf": {
+      "path": "outputs/runs/run_b939c6798f/cover_393d8bf8da2d.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:31.580444+00:00"
+    },
+    "resume_0244cc608424": {
+      "path": "outputs/runs/run_b939c6798f/resume_0244cc608424.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:31.895517+00:00"
+    },
+    "cover_0244cc608424": {
+      "path": "outputs/runs/run_b939c6798f/cover_0244cc608424.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:31.895554+00:00"
+    },
+    "resume_0244cc608424_docx": {
+      "path": "outputs/runs/run_b939c6798f/resume_0244cc608424.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:31.895564+00:00"
+    },
+    "cover_0244cc608424_docx": {
+      "path": "outputs/runs/run_b939c6798f/cover_0244cc608424.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:31.895572+00:00"
+    },
+    "resume_0244cc608424_pdf": {
+      "path": "outputs/runs/run_b939c6798f/resume_0244cc608424.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:31.895578+00:00"
+    },
+    "cover_0244cc608424_pdf": {
+      "path": "outputs/runs/run_b939c6798f/cover_0244cc608424.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:31.895585+00:00"
+    },
+    "resume_a913485ce5c8": {
+      "path": "outputs/runs/run_b939c6798f/resume_a913485ce5c8.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:32.199155+00:00"
+    },
+    "cover_a913485ce5c8": {
+      "path": "outputs/runs/run_b939c6798f/cover_a913485ce5c8.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:32.199185+00:00"
+    },
+    "resume_a913485ce5c8_docx": {
+      "path": "outputs/runs/run_b939c6798f/resume_a913485ce5c8.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:32.199194+00:00"
+    },
+    "cover_a913485ce5c8_docx": {
+      "path": "outputs/runs/run_b939c6798f/cover_a913485ce5c8.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:32.199201+00:00"
+    },
+    "resume_a913485ce5c8_pdf": {
+      "path": "outputs/runs/run_b939c6798f/resume_a913485ce5c8.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:32.199209+00:00"
+    },
+    "cover_a913485ce5c8_pdf": {
+      "path": "outputs/runs/run_b939c6798f/cover_a913485ce5c8.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:32.199216+00:00"
+    },
+    "resume_dcbfc424cad4": {
+      "path": "outputs/runs/run_b939c6798f/resume_dcbfc424cad4.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:32.526625+00:00"
+    },
+    "cover_dcbfc424cad4": {
+      "path": "outputs/runs/run_b939c6798f/cover_dcbfc424cad4.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:43:32.526654+00:00"
+    },
+    "resume_dcbfc424cad4_docx": {
+      "path": "outputs/runs/run_b939c6798f/resume_dcbfc424cad4.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:32.526663+00:00"
+    },
+    "cover_dcbfc424cad4_docx": {
+      "path": "outputs/runs/run_b939c6798f/cover_dcbfc424cad4.docx",
+      "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "created_at_utc": "2026-02-23T20:43:32.526671+00:00"
+    },
+    "resume_dcbfc424cad4_pdf": {
+      "path": "outputs/runs/run_b939c6798f/resume_dcbfc424cad4.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:32.526679+00:00"
+    },
+    "cover_dcbfc424cad4_pdf": {
+      "path": "outputs/runs/run_b939c6798f/cover_dcbfc424cad4.pdf",
+      "mime": "application/pdf",
+      "created_at_utc": "2026-02-23T20:43:32.526686+00:00"
+    },
+    "career_roadmap": {
+      "path": "outputs/runs/run_b939c6798f/career_roadmap.md",
+      "mime": "text/markdown",
+      "created_at_utc": "2026-02-23T20:45:35.831698+00:00"
+    }
+  },
+  "meta": {
+    "plan_layers": [
+      "L0",
+      "L1",
+      "L2",
+      "L3",
+      "L4",
+      "L5",
+      "L6",
+      "L7",
+      "L8",
+      "L9"
+    ],
+    "governance": {
+      "token_used_est": 0,
+      "token_budget": 120000,
+      "robots_violations": [
+        "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+        "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+        "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+        "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+        "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+        "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+        "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+        "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+        "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+        "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+        "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+        "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+        "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+        "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+        "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+        "https://www.linkedin.com/jobs/view/solutions-architect-usa-remote-at-89-solutions-4372228553: blocked by robots.txt",
+        "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+        "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+        "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+        "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+        "https://www.linkedin.com/jobs/view/solutions-architect-usa-remote-at-89-solutions-4372228553: blocked by robots.txt",
+        "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt"
+      ]
+    }
+  },
+  "token_budget": 120000,
+  "token_used_est": 0,
+  "robots_violations": [
+    "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+    "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+    "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+    "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+    "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+    "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+    "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+    "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+    "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+    "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+    "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+    "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+    "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+    "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+    "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+    "https://www.linkedin.com/jobs/view/solutions-architect-usa-remote-at-89-solutions-4372228553: blocked by robots.txt",
+    "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt",
+    "https://www.linkedin.com/jobs/remote-solutions-architect-jobs: blocked by robots.txt",
+    "https://www.indeed.com/q-remote-solutions-architect-jobs.html: blocked by robots.txt",
+    "https://www.cdwjobs.com/jobs/17269268-solution-architect-i-cloud: blocked by robots.txt",
+    "https://www.linkedin.com/jobs/view/solutions-architect-usa-remote-at-89-solutions-4372228553: blocked by robots.txt",
+    "https://www.ziprecruiter.com/Jobs/Remote-Senior-Solutions-Architect: blocked by robots.txt"
+  ]
+}

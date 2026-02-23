@@ -28,6 +28,13 @@ class ToolSettings(BaseSettings):
     OLLAMA_BASE_URL: Optional[str] = None
     OLLAMA_MODEL: str = "llama3.2"
 
+    # Google Gemini (recommended default cloud LLM)
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-1.5-flash"
+
+    # Tavily (Corrective RAG)
+    TAVILY_API_KEY: Optional[str] = None
+
     OPENAI_API_KEY: Optional[str] = None  # optional
 
 
@@ -160,5 +167,56 @@ async def ollama_generate(settings: ToolSettings, prompt: str) -> ToolResult:
         text = (r.json().get("response") or "").strip()
         conf = 0.7 if len(text) > 40 else 0.35
         return ToolResult(ok=True, confidence=conf, data={"text": text, "model": settings.OLLAMA_MODEL})
+    except Exception as e:
+        return ToolResult(ok=False, confidence=0.0, error=str(e))
+
+
+async def gemini_generate(settings: ToolSettings, prompt: str) -> ToolResult:
+    """Description: Google Gemini REST call.
+    Layer: L2-L6
+    """
+    if not settings.GEMINI_API_KEY:
+        return ToolResult(ok=False, confidence=0.0, error="GEMINI_API_KEY missing")
+    try:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent"
+            f"?key={settings.GEMINI_API_KEY}"
+        )
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 900},
+        }
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.post(url, json=payload)
+        if r.status_code >= 400:
+            return ToolResult(ok=False, confidence=0.0, error=f"Gemini {r.status_code}: {r.text[:180]}")
+        j = r.json()
+        text = (
+            (((j.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text")
+            or ""
+        ).strip()
+        conf = 0.85 if len(text) > 80 else 0.45
+        return ToolResult(ok=True, confidence=conf, data={"text": text, "model": settings.GEMINI_MODEL})
+    except Exception as e:
+        return ToolResult(ok=False, confidence=0.0, error=str(e))
+
+
+async def tavily_search(settings: ToolSettings, query: str, max_results: int = 5) -> ToolResult:
+    """Description: Tavily search (Corrective RAG).
+    Layer: L4-L6
+    """
+    if not settings.TAVILY_API_KEY:
+        return ToolResult(ok=False, confidence=0.0, error="TAVILY_API_KEY missing")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(
+                "https://api.tavily.com/search",
+                json={"api_key": settings.TAVILY_API_KEY, "query": query, "max_results": int(max_results), "include_answer": False},
+            )
+        if r.status_code >= 400:
+            return ToolResult(ok=False, confidence=0.0, error=f"Tavily {r.status_code}: {r.text[:180]}")
+        j = r.json()
+        conf = 0.75 if (j.get("results") or []) else 0.35
+        return ToolResult(ok=True, confidence=conf, data=j)
     except Exception as e:
         return ToolResult(ok=False, confidence=0.0, error=str(e))

@@ -6,6 +6,81 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+def _write_docx_from_md(path: Path, md: str) -> None:
+    """Description: Convert markdown to simple ATS DOCX.
+    Layer: L6
+    Input: md
+    Output: saved file
+    """
+    try:
+        import docx  # type: ignore
+        doc = docx.Document()
+        for ln in (md or "").splitlines():
+            ln = ln.rstrip()
+            if not ln.strip():
+                continue
+            if ln.startswith("# "):
+                doc.add_heading(ln[2:].strip(), level=0)
+            elif ln.startswith("## "):
+                doc.add_heading(ln[3:].strip(), level=1)
+            elif ln.lstrip().startswith("- "):
+                doc.add_paragraph(ln.lstrip()[2:].strip(), style="List Bullet")
+            else:
+                doc.add_paragraph(ln.strip())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(path))
+    except Exception:
+        return
+
+
+def _write_pdf_from_md(path: Path, md: str) -> None:
+    """Description: Convert markdown to simple single-column PDF.
+    Layer: L6
+    Input: md
+    Output: saved file
+    """
+    try:
+        from reportlab.lib.pagesizes import LETTER  # type: ignore
+        from reportlab.pdfgen import canvas  # type: ignore
+        path.parent.mkdir(parents=True, exist_ok=True)
+        c = canvas.Canvas(str(path), pagesize=LETTER)
+        w, h = LETTER
+        x, y = 50, h - 50
+        lh = 12
+
+        def draw(text: str) -> None:
+            nonlocal y
+            c.setFont("Helvetica", 10)
+            c.drawString(x, y, text)
+            y -= lh
+
+        for ln in (md or "").splitlines():
+            if y < 60:
+                c.showPage()
+                y = h - 50
+            ln = ln.rstrip()
+            if not ln.strip():
+                y -= lh
+                continue
+            if ln.startswith("# "):
+                c.setFont("Helvetica-Bold", 16)
+                c.drawString(x, y, ln[2:].strip())
+                y -= 18
+                continue
+            if ln.startswith("## "):
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(x, y, ln[3:].strip())
+                y -= 14
+                continue
+            if ln.lstrip().startswith("- "):
+                draw("• " + ln.lstrip()[2:].strip())
+                continue
+            draw(ln.strip())
+        c.save()
+    except Exception:
+        return
+
+
 def _artifacts_root() -> Path:
     return Path("src/careeragent/artifacts").resolve()
 
@@ -127,8 +202,29 @@ async def approve_ranking_flow(state: Dict[str, Any]) -> Dict[str, Any]:
             resume_p = run_dir / f"resume_{key}.md"
             cover_p = run_dir / f"cover_{key}.md"
 
-            artifacts[f"resume_{key}"] = {"path": _write_text(resume_p, _fallback_resume_md(prof, job)), "content_type": "text/markdown"}
-            artifacts[f"cover_{key}"] = {"path": _write_text(cover_p, _fallback_cover_md(prof, job, country)), "content_type": "text/markdown"}
+            resume_md = _fallback_resume_md(prof, job)
+            cover_md = _fallback_cover_md(prof, job, country)
+            artifacts[f"resume_{key}"] = {"path": _write_text(resume_p, resume_md), "content_type": "text/markdown"}
+            artifacts[f"cover_{key}"] = {"path": _write_text(cover_p, cover_md), "content_type": "text/markdown"}
+
+            # Also export DOCX/PDF for demo
+            resume_docx = run_dir / f"resume_{key}.docx"
+            resume_pdf = run_dir / f"resume_{key}.pdf"
+            cover_docx = run_dir / f"cover_{key}.docx"
+            cover_pdf = run_dir / f"cover_{key}.pdf"
+            _write_docx_from_md(resume_docx, resume_md)
+            _write_pdf_from_md(resume_pdf, resume_md)
+            _write_docx_from_md(cover_docx, cover_md)
+            _write_pdf_from_md(cover_pdf, cover_md)
+
+            if resume_docx.exists():
+                artifacts[f"resume_docx_{key}"] = {"path": str(resume_docx), "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+            if resume_pdf.exists():
+                artifacts[f"resume_pdf_{key}"] = {"path": str(resume_pdf), "content_type": "application/pdf"}
+            if cover_docx.exists():
+                artifacts[f"cover_docx_{key}"] = {"path": str(cover_docx), "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+            if cover_pdf.exists():
+                artifacts[f"cover_pdf_{key}"] = {"path": str(cover_pdf), "content_type": "application/pdf"}
 
             drafts.append({"job_url": url, "job_title": job.get("title"), "resume_path": artifacts[f"resume_{key}"]["path"], "cover_path": artifacts[f"cover_{key}"]["path"]})
 

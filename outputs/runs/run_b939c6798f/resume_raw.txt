@@ -1,0 +1,58 @@
+Ganesh Prasad Bhandari
+508-365-9302 | gbhandari@clarku.com
+https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/
+https://medium.com/@ganeshprasadbhandari79
+Professional Summary
+Dynamic and results-driven AI/ML professional with 16+ years of experience, including 6+ years specializing in AI, ML, and Generative AI solutions. Expertise in designing AI architectures, developing advanced analytic solutions, and leading AI-driven automation projects.
+Education
+Master of Science in Information Technology (Healthcare Technology)             May 2026
+Clark University; Worcester, MA
+Master of Data Science (Global)							  JULY 2024
+Deakin University, Australia
+Post Graduate Program in Artificial Intelligence and Machine Learning	  January 2021
+University of Texas at Austin; Austin, TX
+Master of Business Administration (MBA)
+Swami Vivekanand Subharti University, India | 					  December 2018
+Key Skills
+Programming and Tools: Python, TensorFlow, Scikit-learn, SQL, Power BI, Tableau
+Cloud Platforms: Azure OpenAI, AWS, Azure ML Studio, LLM Ops
+Academic Knowledge: Big Data Analytics, Spark, R
+Leadership & Training: Team mentoring, AI training sessions, public speaking (NTT Data NTalks)
+Regulatory & Security: AI governance, BFSI fraud detection, compliance and ethics
+Certifications: Generative AI Certification (SAP, 2023 Edition), AI on Cloud, Great Learning (2020), Mastering Big Data Analytics, Great Learning (2020)
+Professional Experience
+NTT DATA Business Solutions; Bangalore, India        October 2023 – October 2024
+Senior Solution Architect
+Led the development of Copilot and AI Assistants, completing proof-of-concept (POC) to drive AI adoption.
+Collaborated for AI-driven document automation workflows for MAKIRA, optimizing enterprise document processing.
+Collaborated with 7 different cross functional team member, contributed to AI training programs
+Presented to over 500 employees on emerging technologies for Ntalks and Global AI innovation team to…
+Data Science Team Lead (Python)
+Modefin Server Pvt. Ltd, Bangalore, India		December 2022 – July 2023
+Built fraud detection models for BFSI clients, improving fraudulent transaction detection rates by 25%.
+Developed AI-powered fraud detection for CBZ & BOK banks in Africa using MTCNN, face detection, and computer vision.
+Developed chatbot solutions using Rasa NLU, enhancing customer interactions in banking and finance.
+Implemented predictive analytics for risk scoring, improving decision-making for financial institutions.
+Managed and mentored a team of 5 professionals in AI development and deployment.
+Senior Data Scientist
+Powerweave Software Solutions Pvt. Ltd, Mumbai, India          February 2022 – December 2022
+Designed deep learning-based recommendation systems, increasing customer engagement by 20%.
+Developed NLP-based sentiment analysis tools to analyze market trends in BFSI.
+Conducted AI proof-of-concepts (POCs) for image generation using DCGAN models.
+Notable Projects
+AI-Powered Copilot & AI Assistants – NTT DATA 		October 2023 - October 2024
+Designed and developed AI-driven Copilot using Generative AI on Azure OpenAI platform.
+Showcased POC, pending full-scale implementation due to data security concerns.
+BFSI Fraud Detection – CBZ & BOK Banks - Modefin Server    December 2022 - July 2024
+Implemented AI models to detect fraudulent attempts in digital banking using MTCNN & computer vision.
+Enhanced fraud detection accuracy, mitigating potential security breaches.
+AI-Powered Chatbots – Modefin Server 				  March 2024 - July 2024
+Built AI-driven customer support chatbots using Rasa NLU for BFSI clients.
+Automated banking workflows, reducing human intervention by 40%.
+Professional Affiliations
+Contributor to LinkedIn Newsletter AI Vanguard
+Speaker at industry events on AI/ML and emerging technologies
+Rotary International Member – Active volunteer and social contributor, having donated blood 17+ times to support community health initiatives.
+Publications & Thought Leadership
+Articles on Generative AI, NLP, and BFSI AI adoption (Medium, LinkedIn)
+Regular contributor to AI Innovations Digest (Medium)

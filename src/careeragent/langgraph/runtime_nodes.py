@@ -82,6 +82,33 @@ def log_gate(st: Dict[str, Any], *, layer: str, target: str, score: float, thres
     st.setdefault("gates", [])
     st["gates"].append({"layer_id": layer, "target": target, "score": float(score), "threshold": float(threshold_v), "decision": decision, "feedback": feedback, "reasoning_chain": reasoning_chain or []})
 
+    # UI compatibility: Mission Control reads `evaluations`.
+    st.setdefault("evaluations", [])
+    st["evaluations"].append(
+        {
+            "layer_id": layer,
+            "target_id": target,
+            "evaluation_score": float(score),
+            "threshold": float(threshold_v),
+            "decision": decision,
+            "feedback": feedback,
+            "reasoning_chain": reasoning_chain or [],
+        }
+    )
+
+    # Engineer view transparency: keep a plain decision log list.
+    st.setdefault("evaluation_logs", [])
+    st["evaluation_logs"].append(
+        {
+            "layer": layer,
+            "target": target,
+            "score": float(score),
+            "threshold": float(threshold_v),
+            "decision": decision,
+            "feedback": feedback,
+        }
+    )
+
 def tokenize(text: str) -> List[str]:
     return re.findall(r"[a-zA-Z][a-zA-Z0-9\\+\\#\\.-]{1,}", (text or "").lower())
 
@@ -167,7 +194,53 @@ async def L2_parse(st: Dict[str, Any]) -> Dict[str, Any]:
     parser = ParserAgentService()
     txt = st.get("resume_text") or ""
     prof = parser.parse(raw_text=txt, orchestration_state=None, feedback=[])
-    st["profile"] = prof.to_json_dict()
+    prof_d = prof.to_json_dict()
+
+    # --- Hardening: fill missing fields from raw resume text ---
+    # The UI + ATS drafting depend on these being present.
+    contact = (prof_d.get("contact") or {}) if isinstance(prof_d.get("contact"), dict) else {}
+
+    # Email
+    if not contact.get("email"):
+        m = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", txt)
+        if m:
+            contact["email"] = m.group(0)
+
+    # Phone (US/international)
+    if not contact.get("phone"):
+        m = re.search(r"(\+?\d{1,3}[-\s]?)?(\(?\d{3}\)?[-\s]?)?\d{3}[-\s]?\d{4}", txt)
+        if m and len(m.group(0).strip()) >= 10:
+            contact["phone"] = m.group(0).strip()
+
+    # Location
+    if not contact.get("location"):
+        if re.search(r"\b(united states|usa|u\.s\.)\b", txt.lower()):
+            contact["location"] = "United States"
+
+    # Links → normalize linkedin/github/medium where possible
+    links = contact.get("links")
+    if not isinstance(links, list):
+        links = []
+    # Extract links from raw text too
+    for u in re.findall(r"https?://\S+", txt):
+        u = u.strip().rstrip(").,]")
+        if u and u not in links:
+            links.append(u)
+    contact["links"] = links
+    # Convenience keys (downstream nodes sometimes expect these)
+    if not contact.get("linkedin"):
+        for u in links:
+            if "linkedin.com" in u:
+                contact["linkedin"] = u
+                break
+    if not contact.get("github"):
+        for u in links:
+            if "github.com" in u:
+                contact["github"] = u
+                break
+
+    prof_d["contact"] = contact
+    st["profile"] = prof_d
     log_attempt(st, layer="L2", agent="ParserAgent", tool="local.regex_parser", model=None, status="ok", confidence=0.65, error=None)
     feed(st, "L2", "ParserAgent", "Intake bundle created.")
     return st
@@ -210,9 +283,45 @@ async def L3_discovery(st: Dict[str, Any]) -> Dict[str, Any]:
     prof = st.get("profile") or {}
     skills_hint = " ".join((prof.get("skills") or [])[:6])
 
+    # Phase-2 refinement support (Evaluator → Discovery loop)
+    qmods = st.get("query_modifiers") or {}
+    neg_terms = [str(x).strip() for x in (qmods.get("neg_terms") or []) if str(x).strip()]
+    must_include = [str(x).strip() for x in (qmods.get("must_include") or []) if str(x).strip()]
+    refinement_feedback = str(st.get("refinement_feedback") or "").strip()
+    strategy = str(st.get("search_strategy") or "default").strip().lower()
+
+    country = str(prefs.get("country") or "US").strip().upper()
+    if country == "US":
+        # Common India/foreign noise exclusions
+        neg_terms.extend(["India", "Bangalore", "Nashik", "Pune", "Hyderabad", "Chennai", "Mumbai", "Shine", "Naukri"])
+
+    neg_clause = " ".join([f"-{t}" for t in list(dict.fromkeys(neg_terms))[:18]])
+    include_clause = " ".join(list(dict.fromkeys(must_include))[:10])
+
+    ats_sites = "(site:greenhouse.io OR site:lever.co OR site:workdayjobs.com OR site:myworkdayjobs.com OR site:icims.com OR site:successfactors.com OR site:jobvite.com OR site:smartrecruiters.com)"
+
     def build_query(role: str) -> str:
         visa_part = '"visa sponsorship" OR h1b OR opt OR cpt' if visa_req else ""
-        return f'{role} {location} {skills_hint} ({visa_part}) apply'
+        # Strong geo intent: if US, force US synonyms in query.
+        geo = location
+        if country == "US":
+            geo = f"{location} (United States OR USA OR \"United States\")"
+
+        base = f"{role} {geo} {skills_hint} {include_clause}".strip()
+        if visa_part:
+            base += f" ({visa_part})"
+
+        # Recency intent (Serper tbs handles most of it; keep explicit hint)
+        if recency_h <= 36:
+            base += " posted today OR posted in last 1 day OR posted in last 24 hours"
+
+        if strategy in ("ats_only", "ats_strict"):
+            base = f"{base} {ats_sites}"
+
+        if refinement_feedback:
+            base = f"{base} {refinement_feedback}"
+
+        return f"{base} {neg_clause} apply".strip()
 
     queries = [build_query(r) for r in roles]
     st["discovery_queries"] = queries
@@ -248,6 +357,22 @@ async def L3_discovery(st: Dict[str, Any]) -> Dict[str, Any]:
         if link and link not in seen:
             seen.add(link)
             uniq.append({"title": it.get("title") or "", "link": link, "snippet": it.get("snippet") or "", "source": it.get("source") or "unknown"})
+
+    # Strategy enforcement: when evaluator sets ats_only, filter to ATS/career pages.
+    strategy = str(st.get("search_strategy") or "default").strip().lower()
+    if strategy in ("ats_only", "ats_strict"):
+        allow = (
+            "greenhouse.io",
+            "jobs.lever.co",
+            "workdayjobs.com",
+            "myworkdayjobs.com",
+            "icims.com",
+            "successfactors.com",
+            "jobvite.com",
+            "smartrecruiters.com",
+            "careers.",
+        )
+        uniq = [j for j in uniq if any(a in str(j.get("link") or "").lower() for a in allow)]
     st["jobs_raw"] = uniq
     feed(st, "L3", "DiscoveryAgent", f"Found {len(uniq)} unique jobs.")
     return st
@@ -304,6 +429,11 @@ async def L4_match(st: Dict[str, Any]) -> Dict[str, Any]:
         snippet = j.get("snippet") or ""
         title = j.get("title") or ""
         source = j.get("source") or "unknown"
+
+        # quick domain hygiene
+        low_url = str(url).lower()
+        if any(bad in low_url for bad in ["in.talent.com", "shine.com", "naukri", ".in/"]):
+            continue
 
         ok, conf, data, err = await scrape_http(url)
         log_attempt(st, layer="L4", agent="ScraperAgent", tool="httpx.scrape", model=None,

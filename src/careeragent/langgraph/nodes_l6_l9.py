@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ from careeragent.langgraph.tools import (
     ToolSettings,
     ToolResult,
     ollama_generate,
+    gemini_generate,
     serper_search,
     requests_scrape,
     firecrawl_scrape,
@@ -53,6 +55,118 @@ def _safe_write(path: Path, text: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return str(path)
+
+
+def _job_key(job: Dict[str, Any]) -> str:
+    """Description: Stable, filesystem-safe key for job artifacts.
+    Layer: L6
+    Input: job dict
+    Output: short hash string
+    """
+    raw = str(job.get("url") or job.get("job_id") or job.get("link") or job.get("title") or "job")
+    return hashlib.md5(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]  # noqa: S324
+
+
+def _md_lines(md: str) -> List[str]:
+    return [ln.rstrip() for ln in (md or "").splitlines()]
+
+
+def _write_docx_from_md(path: Path, md: str) -> Optional[str]:
+    """Description: Convert ATS markdown to simple DOCX.
+    Layer: L6
+    Input: markdown
+    Output: path or None
+    """
+    try:
+        import docx  # type: ignore
+
+        doc = docx.Document()
+        for ln in _md_lines(md):
+            if not ln.strip():
+                continue
+            if ln.startswith("# "):
+                doc.add_heading(ln[2:].strip(), level=0)
+                continue
+            if ln.startswith("## "):
+                doc.add_heading(ln[3:].strip(), level=1)
+                continue
+            if ln.startswith("### "):
+                doc.add_heading(ln[4:].strip(), level=2)
+                continue
+            if ln.lstrip().startswith("- "):
+                doc.add_paragraph(ln.lstrip()[2:].strip(), style="List Bullet")
+                continue
+            doc.add_paragraph(ln.strip())
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(path))
+        return str(path)
+    except Exception:
+        return None
+
+
+def _write_pdf_from_md(path: Path, md: str) -> Optional[str]:
+    """Description: Convert ATS markdown to a simple single-column PDF.
+    Layer: L6
+    Input: markdown
+    Output: path or None
+    """
+    try:
+        from reportlab.lib.pagesizes import LETTER  # type: ignore
+        from reportlab.pdfgen import canvas  # type: ignore
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        c = canvas.Canvas(str(path), pagesize=LETTER)
+        width, height = LETTER
+        x = 50
+        y = height - 50
+        line_height = 12
+
+        def draw_wrapped(text: str) -> None:
+            nonlocal y
+            # naive wrap
+            words = text.split()
+            line = ""
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, "Helvetica", 10) > (width - 100):
+                    c.setFont("Helvetica", 10)
+                    c.drawString(x, y, line)
+                    y -= line_height
+                    line = w
+                else:
+                    line = test
+            if line:
+                c.setFont("Helvetica", 10)
+                c.drawString(x, y, line)
+                y -= line_height
+
+        for ln in _md_lines(md):
+            if y < 60:
+                c.showPage()
+                y = height - 50
+            if not ln.strip():
+                y -= line_height
+                continue
+            if ln.startswith("# "):
+                c.setFont("Helvetica-Bold", 16)
+                c.drawString(x, y, ln[2:].strip())
+                y -= 18
+                continue
+            if ln.startswith("## "):
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(x, y, ln[3:].strip())
+                y -= 14
+                continue
+            if ln.lstrip().startswith("- "):
+                draw_wrapped("• " + ln.lstrip()[2:].strip())
+                continue
+            draw_wrapped(ln.strip())
+
+        c.save()
+        return str(path)
+    except Exception:
+        return None
 
 
 def _score_ats(text: str) -> float:
@@ -163,7 +277,8 @@ Sincerely,
     artifacts_delta: Dict[str, Any] = {}
 
     for i, job in enumerate(ranking, start=1):
-        jid = str(job.get("job_id") or job.get("url") or f"job_{i}")
+        key = _job_key(job)
+        jid = str(job.get("job_id") or job.get("url") or job.get("link") or f"job_{i}")
 
         # --- Tool A: local template ---
         async def tool_a() -> ToolResult:
@@ -171,8 +286,33 @@ Sincerely,
             conf = 0.65
             return ToolResult(ok=True, confidence=conf, data=pkg)
 
-        # --- Tool B: Ollama ---
+        # --- Tool B: Gemini (cloud) ---
         async def tool_b() -> ToolResult:
+            title = str(job.get("title") or "Role")
+            company = str(job.get("company") or job.get("board") or "Company")
+            jd = (job.get("full_text") or job.get("snippet") or "")[:4500]
+            prompt = (
+                "You are writing an ATS-friendly resume and cover letter.\n"
+                "Rules: Use ONLY facts from the provided profile. Do NOT invent employers, dates, degrees, or projects.\n"
+                "If a detail is missing, insert a placeholder like [ADD METRIC].\n"
+                "Return STRICT JSON with keys: resume_md, cover_md.\n\n"
+                f"PROFILE_JSON:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
+                f"JOB_TITLE: {title}\nCOMPANY: {company}\nJOB_DESC:\n{jd}\n"
+            )
+            r = await gemini_generate(settings, prompt)
+            if not r.ok:
+                return r
+            try:
+                j = json.loads(re.search(r"\{.*\}", r.data.get("text") or "", flags=re.S).group(0))  # type: ignore[union-attr]
+                resume_md = str(j.get("resume_md") or "")
+                cover_md = str(j.get("cover_md") or "")
+                conf = 0.85 if (len(resume_md) > 900 and len(cover_md) > 220) else 0.55
+                return ToolResult(ok=True, confidence=conf, data={"resume_md": resume_md, "cover_md": cover_md})
+            except Exception as e:
+                return ToolResult(ok=False, confidence=0.0, error=str(e))
+
+        # --- Tool C: Ollama ---
+        async def tool_c() -> ToolResult:
             title = str(job.get("title") or "Role")
             company = str(job.get("company") or job.get("board") or "Company")
             jd = (job.get("full_text") or job.get("snippet") or "")[:3500]
@@ -195,8 +335,8 @@ Sincerely,
             except Exception as e:
                 return ToolResult(ok=False, confidence=0.0, error=str(e))
 
-        # --- Tool C: MCP high-fidelity drafting ---
-        async def tool_c() -> ToolResult:
+        # --- Tool D: MCP high-fidelity drafting ---
+        async def tool_d() -> ToolResult:
             return await mcp.invoke(tool="draft.generate", payload={"profile": profile, "job": job})
 
         res = await ToolSelector.run(
@@ -204,8 +344,9 @@ Sincerely,
             agent="DraftAgent",
             calls=[
                 ("local.template_draft", None, tool_a),
-                ("ollama.draft.generate", settings.OLLAMA_MODEL, tool_b),
-                ("mcp.draft.generate", None, tool_c),
+                ("gemini.draft.generate", settings.GEMINI_MODEL, tool_b),
+                ("ollama.draft.generate", settings.OLLAMA_MODEL, tool_c),
+                ("mcp.draft.generate", None, tool_d),
             ],
             min_conf=0.55,
             attempts_log=attempts,
@@ -217,10 +358,25 @@ Sincerely,
         resume_md = str((res.data or {}).get("resume_md") or "")
         cover_md = str((res.data or {}).get("cover_md") or "")
 
-        resume_path = Path(run_dir) / f"resume_{jid[:12]}.md"
-        cover_path = Path(run_dir) / f"cover_{jid[:12]}.md"
-        artifacts_delta[f"resume_{jid[:12]}"] = {"path": _safe_write(resume_path, resume_md), "content_type": "text/markdown"}
-        artifacts_delta[f"cover_{jid[:12]}"] = {"path": _safe_write(cover_path, cover_md), "content_type": "text/markdown"}
+        resume_path = Path(run_dir) / f"resume_{key}.md"
+        cover_path = Path(run_dir) / f"cover_{key}.md"
+        artifacts_delta[f"resume_{key}"] = {"path": _safe_write(resume_path, resume_md), "content_type": "text/markdown"}
+        artifacts_delta[f"cover_{key}"] = {"path": _safe_write(cover_path, cover_md), "content_type": "text/markdown"}
+
+        # ATS-friendly export formats for demo: DOCX + PDF
+        resume_docx = _write_docx_from_md(Path(run_dir) / f"resume_{key}.docx", resume_md)
+        resume_pdf = _write_pdf_from_md(Path(run_dir) / f"resume_{key}.pdf", resume_md)
+        cover_docx = _write_docx_from_md(Path(run_dir) / f"cover_{key}.docx", cover_md)
+        cover_pdf = _write_pdf_from_md(Path(run_dir) / f"cover_{key}.pdf", cover_md)
+
+        if resume_docx:
+            artifacts_delta[f"resume_docx_{key}"] = {"path": resume_docx, "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+        if resume_pdf:
+            artifacts_delta[f"resume_pdf_{key}"] = {"path": resume_pdf, "content_type": "application/pdf"}
+        if cover_docx:
+            artifacts_delta[f"cover_docx_{key}"] = {"path": cover_docx, "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+        if cover_pdf:
+            artifacts_delta[f"cover_pdf_{key}"] = {"path": cover_pdf, "content_type": "application/pdf"}
 
         drafts.append({
             "job_id": jid,

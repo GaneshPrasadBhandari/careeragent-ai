@@ -1,0 +1,6 @@
+{
+  "score": 0.2,
+  "reason": "All jobs rejected (soft-fence) \u2014 shifting strategy",
+  "action": "RETRY_SEARCH",
+  "refinement_feedback": "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+}

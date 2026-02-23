@@ -1,0 +1,101 @@
+{
+  "name": "Ganesh Prasad Bhandari",
+  "contact": {
+    "email": "gbhandari@clarku.com",
+    "phone": "508-365-9302",
+    "location": "years specializing in AI, ML",
+    "links": [
+      "https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/",
+      "https://medium.com/@ganeshprasadbhandari79"
+    ],
+    "linkedin": "https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/",
+    "github": null,
+    "medium": "https://medium.com/@ganeshprasadbhandari79"
+  },
+  "summary": "Dynamic and results-driven AI/ML professional with 16+ years of",
+  "skills": [
+    "Python",
+    "TensorFlow",
+    "Scikit-learn",
+    "SQL",
+    "Power BI",
+    "Tableau",
+    "Azure OpenAI",
+    "AWS",
+    "Azure ML Studio",
+    "LLM Ops",
+    "Big Data Analytics",
+    "Spark",
+    "Team mentoring",
+    "AI training sessions",
+    "public speaking (NTT Data NTalks)",
+    "AI governance",
+    "BFSI fraud detection",
+    "compliance and ethics"
+  ],
+  "experience": [
+    {
+      "title": "Dynamic and results-driven AI/ML professional with 16+ years of experience, including 6+ years specializing in AI, ML, and Generative AI solutions. Expertise in designing AI architectures, developing advanced analytic solutions, and leading AI-driven automation projects.",
+      "company": "Education",
+      "start_date": null,
+      "end_date": null,
+      "bullets": []
+    },
+    {
+      "title": "Senior Solution Architect",
+      "company": "Led the development of Copilot and AI Assistants, completing proof-of-concept (POC) to drive AI adoption.",
+      "start_date": null,
+      "end_date": null,
+      "bullets": []
+    },
+    {
+      "title": "Senior Data Scientist",
+      "company": "Powerweave Software Solutions Pvt. Ltd, Mumbai, India          February 2022 \u2013 December 2022",
+      "start_date": null,
+      "end_date": null,
+      "bullets": []
+    }
+  ],
+  "education": [
+    {
+      "degree": null,
+      "institution": "Master of Science in Information Technology (Healthcare Technology)             May 2026",
+      "graduation_year": "2026"
+    },
+    {
+      "degree": null,
+      "institution": "Clark University; Worcester, MA",
+      "graduation_year": null
+    },
+    {
+      "degree": null,
+      "institution": "Master of Data Science (Global)\t\t\t\t\t\t\t  JULY 2024",
+      "graduation_year": "2024"
+    },
+    {
+      "degree": null,
+      "institution": "Deakin University, Australia",
+      "graduation_year": null
+    },
+    {
+      "degree": null,
+      "institution": "Post Graduate Program in Artificial Intelligence and Machine Learning\t  January 2021",
+      "graduation_year": "2021"
+    },
+    {
+      "degree": null,
+      "institution": "University of Texas at Austin; Austin, TX",
+      "graduation_year": null
+    },
+    {
+      "degree": null,
+      "institution": "Master of Business Administration (MBA)",
+      "graduation_year": null
+    },
+    {
+      "degree": null,
+      "institution": "Swami Vivekanand Subharti University, India | \t\t\t\t\t  December 2018",
+      "graduation_year": "2018"
+    }
+  ]
+}
