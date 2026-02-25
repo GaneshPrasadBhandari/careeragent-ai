@@ -258,7 +258,7 @@ def main() -> None:
     draft_count = st.sidebar.slider("Draft packages (top jobs)", 3, 20, 10, 1)
 
     st.sidebar.subheader("Notifications")
-    user_phone = st.sidebar.text_input("Phone for SMS (optional)", value="")
+    user_phone = st.sidebar.text_input("ntfy topic (optional)", value="")
 
     # ✅ red button (Streamlit "primary" respects theme; your screenshot shows it red)
     run_btn = st.sidebar.button(

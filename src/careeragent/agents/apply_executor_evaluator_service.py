@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from careeragent.orchestration.state import AgentState
+from careeragent.core.state import AgentState
 from careeragent.agents.apply_executor_schema import ApplicationSubmission
 
 

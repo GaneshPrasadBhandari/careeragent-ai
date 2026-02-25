@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from careeragent.orchestration.state import OrchestrationState, _iso_utc, _utc_now
+from careeragent.core.state import AgentState, _iso_utc, _utc_now
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class SanitizeAgent:
     def sanitize_before_llm(
         self,
         *,
-        state: OrchestrationState,
+        state: AgentState,
         step_id: str,
         tool_name: str,
         user_text: str,

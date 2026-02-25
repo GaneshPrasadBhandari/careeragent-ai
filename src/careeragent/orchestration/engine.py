@@ -210,7 +210,7 @@ class OneClickAutomationEngine:
         self._s = get_settings()
         self._store = SqliteStateStore()
         self._health = HealthService()
-        self._notifier = NotificationService(dry_run=not bool(getattr(self._s, "twilio_account_sid", None)))
+        self._notifier = NotificationService(dry_run=not bool(getattr(self._s, "ntfy_topic", None)))
         self._sanitize = SanitizeAgent()
         self._parser = ParserAgentService()
         self._parser_eval = ParserEvaluatorService()

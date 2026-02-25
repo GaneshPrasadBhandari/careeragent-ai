@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 from typing import Dict, List, Optional
 
-from careeragent.orchestration.state import AgentState, _iso_utc, _utc_now
+from careeragent.core.state import AgentState, _iso_utc, _utc_now
 from careeragent.agents.application_tracker_schema import ApplicationStatus, StatusUpdateEvent
 
 

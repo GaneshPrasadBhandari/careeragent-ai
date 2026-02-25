@@ -55,9 +55,9 @@ class Settings(BaseSettings):
     serper_api_key: Optional[str] = None
 
     # Notifications
-    twilio_account_sid: Optional[str] = None
-    twilio_auth_token: Optional[str] = None
-    twilio_phone: Optional[str] = None  # From number
+    ntfy_topic: Optional[str] = None
+    ntfy_auth_token: Optional[str] = None
+    ntfy_endpoint: Optional[str] = None  # From number
     user_phone: Optional[str] = None    # To number for local testing
 
     # Runtime

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from careeragent.orchestration.state import AgentState
+from careeragent.core.state import AgentState
 from careeragent.agents.cover_letter_agent_schema import CoverLetterDraft
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.matcher_agent_schema import JobDescription, MatchReport

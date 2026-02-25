@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 from careeragent.agents.strategy_agent_schema import PivotStrategy
 from careeragent.agents.matcher_agent_schema import MatchReport
 
@@ -18,7 +18,7 @@ class StrategyEvaluatorService:
     def evaluate(
         self,
         *,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         match_report: MatchReport,
         strategy: PivotStrategy,
         target_id: str,

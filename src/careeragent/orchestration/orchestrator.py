@@ -22,6 +22,7 @@ from careeragent.core.state_store import StateStore
 from careeragent.managers.l3_managers import ExtractionManager, GeoFenceManager, LeadScout
 from careeragent.orchestration.planner_director import Director, Planner
 from careeragent.nlp.skills import compute_jd_alignment
+from careeragent.services.notification_service import NotificationService
 
 
 class Orchestrator:
@@ -44,7 +45,7 @@ class Orchestrator:
         self.geo = GeoFenceManager()
         self.extract = ExtractionManager(settings)
 
-        self.matcher = MatcherAgentService()
+        self.matcher = MatcherAgentService(settings)
         self.ranker = RankerAgentService()
         self.eval2 = Phase2EvaluatorAgentService(settings)
 
@@ -55,7 +56,8 @@ class Orchestrator:
         self.learner = SelfLearningAgent(settings, mcp)
         self.coach = CareerCoach(settings)
         self.memory = MemoryManager(settings, mcp)
-        self.gov = GovernanceAuditor()
+        self.gov = GovernanceAuditor(settings, mcp)
+        self.notify = NotificationService(settings=settings)
 
     # --------------------------
     # High-level entrypoints
@@ -128,6 +130,7 @@ class Orchestrator:
                 pass
             state.pending_action = "review_ranking"
             state.status = "needs_human_approval"
+            self.notify.send_alert(message=f"Run {state.run_id}: HITL required at L5 ranking review.")
             self.store.save(state)
             return state
 
@@ -163,6 +166,7 @@ class Orchestrator:
 
             state.pending_action = "review_drafts"
             state.status = "needs_human_approval"
+            self.notify.send_alert(message=f"Run {state.run_id}: HITL required at L6 draft review.")
             self.store.save(state)
             return state
 
@@ -181,8 +185,11 @@ class Orchestrator:
         self.store.save(state)
 
         try:
-            # L7 analytics
-            state.start_step("L7", "Analytics+Learning", "Recording tracker, learning, roadmap", PROGRESS_MAP["L7"])  # type: ignore
+            # L7 auto-apply + analytics
+            state.start_step("L7", "AutoApplier+Analytics", "Applying and recording learning", PROGRESS_MAP["L7"])  # type: ignore
+            self.notify.send_alert(message=f"Run {state.run_id}: final submission gate reached before apply.")
+            apply_results = self.applier.apply(state, dry_run=dry_run_apply)
+            state.meta["apply_results"] = [r.__dict__ for r in apply_results]
             self.dashboard_mgr.record_approved(state)
             self.learner.ingest_failure(state)
             roadmap = self.coach.build_roadmap(state)
@@ -328,6 +335,14 @@ class Orchestrator:
             state.end_step_ok("L4", f"jobs_scored={len(state.jobs_scored)}")
             self.store.save(state)
 
+            if state.meta.get("l4_recursive_loop_required"):
+                state.retry_count += 1
+                state.log_eval("[L4] Top interview chance below 0.70; looping back to L3 discovery.")
+                state.active_persona_id = self.director.next_persona(state)
+                self.director.relax_constraints(state)
+                self.store.save(state)
+                continue
+
             # L5
             state.start_step("L5", "Ranker+Evaluator", "Ranking and evaluating", PROGRESS_MAP["L5"])  # type: ignore
             state.ranking = self.ranker.rank(state)
@@ -388,6 +403,7 @@ class Orchestrator:
                 state.pending_action = "relax_constraints"
                 state.status = "needs_human_approval"
                 state.log_eval(f"[HITL] Approval required to relax constraints: {proposal}")
+                self.notify.send_alert(message=f"Run {state.run_id}: HITL needed to relax constraints at L5.")
 
                 # Write shortlist snapshot even though we’re paused.
                 try:

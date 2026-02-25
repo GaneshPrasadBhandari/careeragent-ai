@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from careeragent.orchestration.state import AgentState
+from careeragent.core.state import AgentState
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.matcher_agent_schema import MatchReport
 

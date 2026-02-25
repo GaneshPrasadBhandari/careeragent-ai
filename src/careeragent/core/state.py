@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
+
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -72,6 +73,65 @@ class EvaluationEntry(BaseModel):
     ts_utc: str = Field(default_factory=utc_now_iso)
 
 
+class InterviewChanceWeights(BaseModel):
+    """Weighted blend for interview chance scoring."""
+
+    w1_skill_overlap: float = 0.45
+    w2_experience_alignment: float = 0.35
+    w3_ats_score: float = 0.20
+
+
+class InterviewChanceComponents(BaseModel):
+    """Normalized L4 components."""
+
+    skill_overlap: float = 0.0
+    experience_alignment: float = 0.0
+    ats_score: float = 0.0
+    market_competition_factor: float = 1.0
+
+
+class InterviewChanceBreakdown(BaseModel):
+    """Final interview chance deterministic breakdown."""
+
+    weights: InterviewChanceWeights = Field(default_factory=InterviewChanceWeights)
+    components: InterviewChanceComponents = Field(default_factory=InterviewChanceComponents)
+
+    @property
+    def interview_chance_score(self) -> float:
+        base = (
+            self.weights.w1_skill_overlap * self.components.skill_overlap
+            + self.weights.w2_experience_alignment * self.components.experience_alignment
+            + self.weights.w3_ats_score * self.components.ats_score
+        )
+        m = max(1.0, float(self.components.market_competition_factor or 1.0))
+        return max(0.0, min(1.0, base / m))
+
+
+class EvaluationEvent(BaseModel):
+    """Recursive-Gate evaluation event audit record."""
+
+    eval_id: str = Field(default_factory=lambda: uuid4().hex)
+    layer_id: str
+    target_id: str
+    generator_agent: str
+    evaluator_agent: str
+    evaluation_score: float
+    threshold: float
+    feedback: List[str] = Field(default_factory=list)
+    retry_count: int = 0
+    max_retries: int = 3
+    interview_chance: Optional[InterviewChanceBreakdown] = None
+    started_at_utc: str = Field(default_factory=utc_now_iso)
+    finished_at_utc: str = Field(default_factory=utc_now_iso)
+
+    @property
+    def passed(self) -> bool:
+        return float(self.evaluation_score) >= float(self.threshold)
+
+    def should_retry(self) -> bool:
+        return (not self.passed) and int(self.retry_count) < int(self.max_retries)
+
+
 class Preferences(BaseModel):
     """Description: User constraints and targets.
     Layer: L1
@@ -96,6 +156,7 @@ class Preferences(BaseModel):
     draft_count: int = 10
 
     user_phone: Optional[str] = None
+    linkedin_url: Optional[str] = None
 
 
 class PlannerPersona(BaseModel):
@@ -165,7 +226,7 @@ class AgentState(BaseModel):
 
     # --- Evaluations / logs
     evaluation: Dict[str, Any] = Field(default_factory=dict)
-    evaluations: List[EvaluationEntry] = Field(default_factory=list)
+    evaluations: List[Any] = Field(default_factory=list)
     evaluation_logs: List[str] = Field(default_factory=list)
 
     # --- UI trace
@@ -198,6 +259,10 @@ class AgentState(BaseModel):
         Output: state.evaluation_logs
         """
         self.evaluation_logs.append(msg)
+
+    def touch(self) -> None:
+        """Compatibility no-op timestamp hook used by legacy services."""
+        self.meta["updated_at_utc"] = utc_now_iso()
 
     def start_step(self, layer_id: LayerId, agent: str, message: str, progress: int) -> None:
         """Description: Start a step and update progress.
@@ -240,6 +305,67 @@ class AgentState(BaseModel):
                 s.message = message
                 break
         self.feed(layer_id, "orchestrator", f"{layer_id} error: {message}")
+
+    def record_evaluation(
+        self,
+        *,
+        layer_id: str,
+        target_id: str,
+        generator_agent: str,
+        evaluator_agent: str,
+        evaluation_score: float,
+        threshold: float,
+        feedback: Optional[List[str]] = None,
+        retry_count: int = 0,
+        max_retries: int = 3,
+        interview_chance: Optional[InterviewChanceBreakdown] = None,
+    ) -> EvaluationEvent:
+        ev = EvaluationEvent(
+            layer_id=layer_id,
+            target_id=target_id,
+            generator_agent=generator_agent,
+            evaluator_agent=evaluator_agent,
+            evaluation_score=float(evaluation_score),
+            threshold=float(threshold),
+            feedback=feedback or [],
+            retry_count=int(retry_count),
+            max_retries=int(max_retries),
+            interview_chance=interview_chance,
+        )
+        self.evaluations.append(ev)
+        self.touch()
+        return ev
+
+    def latest_evaluation(self, *, target_id: str, layer_id: Optional[str] = None) -> Optional[EvaluationEvent]:
+        for ev in reversed(self.evaluations):
+            if not isinstance(ev, EvaluationEvent):
+                continue
+            if ev.target_id != target_id:
+                continue
+            if layer_id and ev.layer_id != layer_id:
+                continue
+            return ev
+        return None
+
+    def apply_recursive_gate(self, *, target_id: str, layer_id: str) -> Literal["pass", "retry", "human_approval"]:
+        ev = self.latest_evaluation(target_id=target_id, layer_id=layer_id)
+        if ev is None:
+            return "retry"
+        if ev.passed:
+            return "pass"
+        if ev.should_retry():
+            return "retry"
+        self.status = "needs_human_approval"
+        self.touch()
+        return "human_approval"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 PROGRESS_MAP: Dict[str, int] = {

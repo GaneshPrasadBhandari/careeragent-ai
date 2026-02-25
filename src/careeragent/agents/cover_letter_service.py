@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 
-from careeragent.orchestration.state import AgentState
+from careeragent.core.state import AgentState
 from careeragent.agents.matcher_agent_schema import JobDescription, MatchReport
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.cover_letter_agent_schema import CoverLetterDraft

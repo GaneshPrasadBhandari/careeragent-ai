@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from careeragent.orchestration.state import AgentState
+from careeragent.core.state import AgentState
 from careeragent.services.health_service import get_artifacts_root
 
 
