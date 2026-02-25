@@ -46,6 +46,15 @@ ml = [
 ]
 docs = ["mkdocs-material>=9.5"]
 
+[dependency-groups]
+dev = [
+  "pytest>=8.0",              # Unit and integration testing
+  "pytest-cov>=5.0",          # Test coverage reporting
+  "ruff>=0.6.0",              # Fast linting and formatting
+  "mypy>=1.8",                # Static type checking
+  "pre-commit>=3.6",          # Git hooks for code quality
+]
+
 [build-system]
 requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
@@ -55,10 +64,3 @@ packages = ["src/careeragent"]
 
 [tool.uv]
 managed = true
-dev-dependencies = [
-  "pytest>=8.0",              # Unit and integration testing
-  "pytest-cov>=5.0",          # Test coverage reporting
-  "ruff>=0.6.0",              # Fast linting and formatting
-  "mypy>=1.8",                # Static type checking
-  "pre-commit>=3.6",          # Git hooks for code quality
-]
