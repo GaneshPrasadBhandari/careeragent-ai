@@ -23,7 +23,7 @@ from careeragent.langgraph.nodes_l6_l9 import (
 
 # Optional artifacts root
 try:
-    from careeragent.config import artifacts_root  # type: ignore
+    from careeragent.core.settings import artifacts_root  # type: ignore
 except Exception:
     def artifacts_root() -> Path:
         return Path("src/careeragent/artifacts").resolve()

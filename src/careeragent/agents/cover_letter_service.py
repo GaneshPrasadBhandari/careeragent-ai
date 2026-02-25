@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.orchestration.state import AgentState
 from careeragent.agents.matcher_agent_schema import JobDescription, MatchReport
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.cover_letter_agent_schema import CoverLetterDraft
@@ -24,7 +24,7 @@ class _CoverGraphState(TypedDict):
     job: JobDescription
     match_report: MatchReport
     feedback: List[str]
-    orchestration_state: OrchestrationState
+    orchestration_state: AgentState
     draft: Optional[CoverLetterDraft]
 
 
@@ -83,7 +83,7 @@ class CoverLetterService:
         resume: ExtractedResume,
         job: JobDescription,
         match_report: MatchReport,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         feedback: Optional[List[str]] = None,
     ) -> CoverLetterDraft:
         """

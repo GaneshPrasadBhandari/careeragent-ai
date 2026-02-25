@@ -101,6 +101,13 @@ class StateStore:
             );
             """,
         )
+
+        # Idempotent uniqueness guard so we can upsert shortlist/draft rows without duplicates.
+        # Safe to run even if the index already exists.
+        self.mcp.sqlite_exec(
+            db_path,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_tracker_run_url ON job_tracker(run_id, job_url);",
+        )
         self.mcp.sqlite_exec(
             db_path,
             """

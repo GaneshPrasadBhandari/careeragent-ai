@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.orchestration.state import AgentState
 
 
 class ExtractedContact(BaseModel):
@@ -89,7 +89,7 @@ class ParserConfig:
     Output: Deterministic parsing behavior
     """
 
-    # conservative defaults; can be overridden via OrchestrationState.meta
+    # conservative defaults; can be overridden via AgentState.meta
     skill_dictionary: tuple[str, ...] = (
         "python",
         "sql",
@@ -125,7 +125,7 @@ class _ParserGraphState(TypedDict):
 
     raw_text: str
     feedback: List[str]
-    orchestration_state: OrchestrationState
+    orchestration_state: AgentState
     parsed: Optional[ExtractedResume]
 
 
@@ -162,7 +162,7 @@ class ParserAgentService:
         def _run(payload: Dict[str, Any]) -> ExtractedResume:
             raw_text = payload["raw_text"]
             feedback = payload.get("feedback") or []
-            st: OrchestrationState = payload["orchestration_state"]
+            st: AgentState = payload["orchestration_state"]
             return self.parse(raw_text=raw_text, orchestration_state=st, feedback=feedback)
 
         return RunnableLambda(_run)
@@ -193,12 +193,12 @@ class ParserAgentService:
         self,
         *,
         raw_text: str,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         feedback: Optional[List[str]] = None,
     ) -> ExtractedResume:
         """Description: Parse raw resume text into ExtractedResume.
         Layer: L2
-        Input: raw_text + feedback + OrchestrationState
+        Input: raw_text + feedback + AgentState
         Output: ExtractedResume
         """
         fb = [f.strip() for f in (feedback or []) if f and str(f).strip()]
@@ -274,7 +274,7 @@ class ParserAgentService:
         self,
         skill_lines: List[str],
         full_text: str,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         feedback: List[str],
     ) -> List[str]:
         """Description: Extract skills list from Skills section, with fallback inference.
@@ -301,10 +301,10 @@ class ParserAgentService:
             cleaned.append(s2)
         return list(dict.fromkeys(cleaned))
 
-    def _infer_skills_from_dictionary(self, text: str, orchestration_state: OrchestrationState) -> List[str]:
+    def _infer_skills_from_dictionary(self, text: str, orchestration_state: AgentState) -> List[str]:
         """Description: Infer skills by scanning a skill dictionary against raw text.
         Layer: L2
-        Input: text + OrchestrationState.meta
+        Input: text + AgentState.meta
         Output: list[str] inferred skills
         """
         custom = orchestration_state.meta.get("skill_dictionary")

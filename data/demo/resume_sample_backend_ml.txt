@@ -1,0 +1,28 @@
+Riya Patel
+Email: riya.patel@example.com | LinkedIn: linkedin.com/in/riyapatel | GitHub: github.com/riyapatel
+Location: Dallas, TX (Open to remote)
+
+SUMMARY
+Backend + ML Engineer with 4+ years building Python microservices, retrieval pipelines, and production ML features.
+
+SKILLS
+Python, FastAPI, SQL, PostgreSQL, Docker, Kubernetes, GitHub Actions, AWS, REST APIs,
+Pandas, scikit-learn, PyTorch, NLP, LangChain, LangGraph, Streamlit, Redis, Elasticsearch
+
+EXPERIENCE
+Senior Software Engineer, NovaTalent (2023–Present)
+- Built FastAPI services for job-matching workflows handling 1.2M API calls/day.
+- Designed retrieval + ranking pipeline using embeddings and vector search, improving top-3 precision by 22%.
+- Added CI/CD and test automation (pytest, integration smoke tests), cutting release failures by 35%.
+
+Software Engineer, JobSprint (2021–2023)
+- Implemented resume parser and skills extractor with NLP heuristics and model-assisted entity resolution.
+- Built orchestration flows for profile -> matching -> ranking -> package generation.
+- Maintained PostgreSQL + Redis-backed state services and audit artifacts.
+
+PROJECTS
+- CareerCopilot: End-to-end AI application assistant with Streamlit UI + FastAPI backend.
+- Document Parser Toolkit: PDF + DOCX parser service with OCR fallback for image-based resumes.
+
+EDUCATION
+B.Tech Computer Science

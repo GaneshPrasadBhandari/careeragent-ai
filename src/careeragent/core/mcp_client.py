@@ -36,11 +36,46 @@ class MCPClient:
         self.s = settings
         self._lock = threading.Lock()
 
+    def _remote_invoke(self, tool: str, args: Dict[str, Any]) -> Optional[MCPResult]:
+        """Best-effort remote MCP invocation.
+
+        Description:
+          If MCP_SERVER_URL is configured, attempt a simple HTTP invocation.
+          We intentionally keep this flexible: different MCP servers expose
+          different shapes. We try a very small contract first:
+            POST {MCP_SERVER_URL}/invoke  {tool: str, args: dict}
+
+        Layer: L8
+        Input: tool + args
+        Output: MCPResult or None if not available
+        """
+
+        base = (self.s.MCP_SERVER_URL or "").rstrip("/")
+        if not base:
+            return None
+
+        try:
+            with httpx.Client(timeout=self.s.MAX_HTTP_SECONDS) as client:
+                r = client.post(f"{base}/invoke", json={"tool": tool, "args": args})
+            if r.status_code >= 400:
+                return MCPResult(ok=False, error=f"MCP remote {tool} failed: {r.status_code} {r.text[:200]}")
+            return MCPResult(ok=True, data=r.json())
+        except Exception as e:
+            # Fall back to local implementation.
+            return MCPResult(ok=False, error=f"MCP remote unavailable: {e}")
+
     # ------------------------
     # Files
     # ------------------------
     def write_file(self, path: str, content: bytes) -> MCPResult:
         """Write bytes to disk."""
+        try:
+            import base64
+
+            _ = self._remote_invoke("write_file", {"path": path, "content_b64": base64.b64encode(content).decode("ascii")})
+        except Exception:
+            pass
+        # If remote is configured but fails, continue locally.
         try:
             p = Path(path)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +86,14 @@ class MCPClient:
 
     def read_file(self, path: str) -> MCPResult:
         """Read bytes from disk."""
+        remote = self._remote_invoke("read_file", {"path": path})
+        if remote and remote.ok and isinstance(remote.data, dict) and remote.data.get("content_b64"):
+            try:
+                import base64
+
+                return MCPResult(ok=True, data=base64.b64decode(remote.data["content_b64"]))
+            except Exception:
+                pass
         try:
             p = Path(path)
             return MCPResult(ok=True, data=p.read_bytes())
@@ -62,6 +105,11 @@ class MCPClient:
     # ------------------------
     def sqlite_exec(self, db_path: str, sql: str, params: Tuple[Any, ...] = ()) -> MCPResult:
         """Execute SQL and return rows if SELECT."""
+        # Best-effort remote DB execution if MCP server supports it.
+        # We do not require this for local development.
+        remote = self._remote_invoke("sqlite_exec", {"db_path": db_path, "sql": sql, "params": list(params)})
+        if remote and remote.ok and isinstance(remote.data, dict) and ("rows" in remote.data or "rowcount" in remote.data):
+            return MCPResult(ok=True, data=remote.data)
         try:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(db_path) as conn:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from careeragent.agents.auto_applier_agent_service import AutoApplierAgentService
-from careeragent.agents.drafting_agent_service import DraftingAgentService, ats_keyword_match
+from careeragent.agents.drafting_agent_service import DraftingAgentService
 from careeragent.agents.governance_auditor_service import GovernanceAuditor
 from careeragent.agents.l2_intake_evaluator_service import L2IntakeEvaluatorService
 from careeragent.agents.l7_analytics_learning_service import CareerCoach, DashboardManager, SelfLearningAgent
@@ -21,6 +21,7 @@ from careeragent.core.state import AgentState, ArtifactRef, PROGRESS_MAP
 from careeragent.core.state_store import StateStore
 from careeragent.managers.l3_managers import ExtractionManager, GeoFenceManager, LeadScout
 from careeragent.orchestration.planner_director import Director, Planner
+from careeragent.nlp.skills import compute_jd_alignment
 
 
 class Orchestrator:
@@ -114,7 +115,17 @@ class Orchestrator:
             # L3-L5 loop with soft fencing
             state = self._discovery_match_rank_loop(state)
 
+            # If the loop already paused for a HITL gate (e.g., relax_constraints), respect it.
+            if state.status == "needs_human_approval" and state.pending_action:
+                self.store.save(state)
+                return state
+
             # Stop at HITL ranking
+            # Write shortlist snapshot for dashboards even if we pause here.
+            try:
+                self.dashboard_mgr.record_shortlist(state, status="awaiting_ranking_approval")
+            except Exception:
+                pass
             state.pending_action = "review_ranking"
             state.status = "needs_human_approval"
             self.store.save(state)
@@ -142,9 +153,10 @@ class Orchestrator:
             draft_meta = self.drafter.generate_for_jobs(state)
 
             # ATS evaluator gate for auto-apply readiness
-            below = [d for d in draft_meta if d.get("ats_keyword_match", 0.0) < 0.90]
+            # Entity-based match is a percent now.
+            below = [d for d in draft_meta if float(d.get("ats_keyword_match_percent") or 0.0) < 70.0]
             if below:
-                state.log_eval(f"[L6 ATS] {len(below)} drafts below 0.90 keyword match; HITL review required")
+                state.log_eval(f"[L6 ATS] {len(below)} drafts below 70% entity keyword match; HITL review required")
 
             state.end_step_ok("L6", f"drafts={len(draft_meta)}")
             self.store.save(state)
@@ -236,6 +248,65 @@ class Orchestrator:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         state.artifacts[key] = ArtifactRef(path=str(path), mime="application/json")
 
+    def _decorate_hitl_scorecard(self, state: AgentState) -> None:
+        """Compute UI scorecard fields for HITL.
+
+        Description:
+          Adds Interview Probability % and Missing Skills Gap % to each ranked job.
+          These are rendered by the dashboard before approvals.
+
+        Layer: L5
+        Input: state.ranking + profile skills
+        Output: mutated ranking entries + state.meta['hitl_summary']
+        """
+
+        prof = state.extracted_profile or {}
+        resume_skills = prof.get("skills") or []
+
+        best_prob = 0.0
+        best_gap = 100.0
+
+        for job in state.ranking[:60]:
+            match_pct = float(job.get("overall_match_percent") or 0.0)
+
+            # Ensure JD alignment exists (L4 should provide it; this is a safety net)
+            align_pct = job.get("jd_alignment_percent")
+            gap_pct = job.get("missing_skills_gap_percent")
+            if align_pct is None or gap_pct is None:
+                jd_text = (job.get("full_text_md") or job.get("snippet") or "")
+                sc = compute_jd_alignment(jd_text=jd_text, resume_skills=resume_skills)
+                align_pct = sc.jd_alignment_percent
+                gap_pct = sc.missing_skills_gap_percent
+                job["jd_alignment_percent"] = align_pct
+                job["missing_skills_gap_percent"] = gap_pct
+                job["matched_jd_skills"] = sc.matched_jd_skills[:40]
+                job["missing_jd_skills"] = sc.missing_jd_skills[:40]
+
+            align_pct_f = float(align_pct or 0.0)
+            gap_pct_f = float(gap_pct or (100.0 - align_pct_f))
+
+            # Interview probability is a calibrated heuristic for UX.
+            # It is *not* a claim about any employer decision.
+            prob = 0.60 * match_pct + 0.40 * align_pct_f
+
+            # guardrails / penalties for weak alignment
+            if align_pct_f < 35:
+                prob -= 10
+            if match_pct < 50:
+                prob -= 6
+
+            prob = max(0.0, min(100.0, prob))
+            job["interview_probability_percent"] = round(prob, 2)
+
+            best_prob = max(best_prob, prob)
+            best_gap = min(best_gap, gap_pct_f)
+
+        state.meta["hitl_summary"] = {
+            "top_interview_probability_percent": round(best_prob, 2),
+            "best_missing_skills_gap_percent": round(best_gap, 2),
+            "note": "Heuristic scorecard for prioritization (not a guarantee).",
+        }
+
     def _discovery_match_rank_loop(self, state: AgentState) -> AgentState:
         min_viable = 3
 
@@ -261,6 +332,10 @@ class Orchestrator:
             state.start_step("L5", "Ranker+Evaluator", "Ranking and evaluating", PROGRESS_MAP["L5"])  # type: ignore
             state.ranking = self.ranker.rank(state)
             self._persist_json_artifact(state, "ranking", state.ranking)
+
+            # Build HITL scorecard fields used by the UI (Interview Probability + Missing Skills Gap)
+            self._decorate_hitl_scorecard(state)
+            self._persist_json_artifact(state, "hitl_scorecard", {"top": state.ranking[:12]})
 
             # evaluate
             score, reason, action, feedback = self.eval2.evaluate(state)
@@ -297,7 +372,32 @@ class Orchestrator:
                 except Exception:
                     pass
 
-            # Retry path: increment and shift persona/relax constraints
+            # Retry path: if we’re going to relax constraints repeatedly, force a HITL gate.
+            # This prevents the UI from looking like it is "stuck" at L5 while refinements churn.
+            max_auto = max(1, int(state.preferences.max_refinements))
+
+            if state.retry_count >= max_auto:
+                proposal = {
+                    "reason": why,
+                    "current_persona": state.active_persona_id,
+                    "next_persona": self.director.next_persona(state),
+                    "current_recency_hours": float(state.preferences.recency_hours),
+                    "proposed_recency_hours": float(min(168.0, max(state.preferences.recency_hours, 72.0))),
+                }
+                state.meta["relax_proposal"] = proposal
+                state.pending_action = "relax_constraints"
+                state.status = "needs_human_approval"
+                state.log_eval(f"[HITL] Approval required to relax constraints: {proposal}")
+
+                # Write shortlist snapshot even though we’re paused.
+                try:
+                    self.dashboard_mgr.record_shortlist(state, status="awaiting_relax_approval")
+                except Exception:
+                    pass
+                self.store.save(state)
+                return state
+
+            # Auto-retry path (bounded)
             state.retry_count += 1
             state.log_eval(f"[Director] retry={state.retry_count} reason={why}")
             state.active_persona_id = self.director.next_persona(state)

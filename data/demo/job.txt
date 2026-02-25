@@ -1,0 +1,3 @@
+Role: Senior Backend Developer
+Requirements: 5+ years of experience with Python and web frameworks like FastAPI. Strong understanding of cloud services (AWS preferred). Experience with containerization using Docker.
+Responsibilities: Build and maintain high-performance APIs. Collaborate with the DevOps team on deployment strategies.

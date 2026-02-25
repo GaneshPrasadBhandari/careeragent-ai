@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from careeragent.orchestration.state import OrchestrationState, InterviewChanceBreakdown
+from careeragent.orchestration.state import AgentState, InterviewChanceBreakdown
 from careeragent.agents.matcher_agent_schema import JobDescription, MatchReport
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.matcher_agent_service import MatcherAgentService
@@ -13,13 +13,13 @@ class MatchEvaluatorService:
     Description: L4 evaluator twin that verifies scoring math consistency and report integrity.
     Layer: L4
     Input: Resume + Job + MatchReport
-    Output: EvaluationEvent logged to OrchestrationState
+    Output: EvaluationEvent logged to AgentState
     """
 
     def evaluate(
         self,
         *,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         resume: ExtractedResume,
         job: JobDescription,
         report: MatchReport,

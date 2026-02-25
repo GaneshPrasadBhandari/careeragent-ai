@@ -32,10 +32,43 @@ class DashboardManager:
             job = next((j for j in state.ranking if str(j.get("url") or "") == url), {})
             company = str(job.get("company") or job.get("source") or "")
             priority = "high" if float(job.get("overall_match_percent") or 0.0) >= 75 else "med"
+            # Create if missing, then update status.
             self.mcp.sqlite_exec(
                 db_path,
-                "INSERT INTO job_tracker(run_id, applied_date, company, job_url, priority, interview_status) VALUES(?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO job_tracker(run_id, applied_date, company, job_url, priority, interview_status) VALUES(?,?,?,?,?,?)",
                 (state.run_id, utc_now_iso(), company, url, priority, "drafted"),
+            )
+            self.mcp.sqlite_exec(
+                db_path,
+                "UPDATE job_tracker SET interview_status=? WHERE run_id=? AND job_url=?",
+                ("drafted", state.run_id, url),
+            )
+
+    def record_shortlist(self, state: AgentState, *, status: str = "shortlisted", top_n: int = 8) -> None:
+        """Record a shortlist snapshot even if the run pauses.
+
+        Description: Ensures the dashboard has a row even when HITL pauses at L5.
+        Layer: L7
+        Input: state.ranking
+        Output: job_tracker rows (upsert)
+        """
+
+        db_path = sqlite_path_from_database_url(self.s.DATABASE_URL)
+        for job in (state.ranking or [])[: max(1, int(top_n))]:
+            url = str(job.get("url") or job.get("job_id") or "")
+            if not url:
+                continue
+            company = str(job.get("company") or job.get("source") or "")
+            priority = "high" if float(job.get("overall_match_percent") or 0.0) >= 75 else "med"
+            self.mcp.sqlite_exec(
+                db_path,
+                "INSERT OR IGNORE INTO job_tracker(run_id, applied_date, company, job_url, priority, interview_status) VALUES(?,?,?,?,?,?)",
+                (state.run_id, utc_now_iso(), company, url, priority, status),
+            )
+            self.mcp.sqlite_exec(
+                db_path,
+                "UPDATE job_tracker SET interview_status=? WHERE run_id=? AND job_url=?",
+                (status, state.run_id, url),
             )
 
 
@@ -82,7 +115,8 @@ class CareerCoach:
         # aggregate missing skills across ranking
         missing: Dict[str, int] = {}
         for j in state.ranking[:25]:
-            for s in (j.get("missing_skills") or [])[:15]:
+            # v2 matcher uses missing_jd_skills (JD skills not in resume)
+            for s in (j.get("missing_jd_skills") or j.get("missing_skills") or [])[:15]:
                 missing[str(s)] = missing.get(str(s), 0) + 1
         top = sorted(missing.items(), key=lambda x: x[1], reverse=True)[:18]
         gaps = [k for (k, _) in top]

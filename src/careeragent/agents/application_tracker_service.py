@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 from typing import Dict, List, Optional
 
-from careeragent.orchestration.state import OrchestrationState, _iso_utc, _utc_now
+from careeragent.orchestration.state import AgentState, _iso_utc, _utc_now
 from careeragent.agents.application_tracker_schema import ApplicationStatus, StatusUpdateEvent
 
 
@@ -11,8 +11,8 @@ class ApplicationTrackerService:
     """
     Description: L8 tracker that records and monitors application statuses.
     Layer: L8
-    Input: OrchestrationState + submission_id + status
-    Output: StatusUpdateEvent list stored in OrchestrationState.meta
+    Input: AgentState + submission_id + status
+    Output: StatusUpdateEvent list stored in AgentState.meta
     """
 
     _ALLOWED_TRANSITIONS: Dict[ApplicationStatus, List[ApplicationStatus]] = {
@@ -24,7 +24,7 @@ class ApplicationTrackerService:
     def record_status_update(
         self,
         *,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         submission_id: str,
         job_id: str,
         new_status: ApplicationStatus,
@@ -61,7 +61,7 @@ class ApplicationTrackerService:
         orchestration_state.touch()
         return ev
 
-    def get_current_status(self, *, orchestration_state: OrchestrationState, submission_id: str) -> Optional[ApplicationStatus]:
+    def get_current_status(self, *, orchestration_state: AgentState, submission_id: str) -> Optional[ApplicationStatus]:
         """
         Description: Return the most recent status for a submission.
         Layer: L8

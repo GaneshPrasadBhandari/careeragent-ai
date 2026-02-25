@@ -119,10 +119,11 @@ def _job_match_percent(job: Dict[str, Any]) -> float:
 
 def _job_components(job: Dict[str, Any]) -> Dict[str, float]:
     comp = job.get("components") or {}
-    skill = float(comp.get("skill_overlap") or 0.0) * 100.0
+    # v2 matcher uses jd_alignment + ats_proxy
+    jd_align = float(job.get("jd_alignment_percent") or 0.0)
     exp = float(comp.get("experience_alignment") or 0.0) * 100.0
-    ats = float(comp.get("ats_score") or 0.0) * 100.0
-    return {"skill": skill, "exp": exp, "ats": ats}
+    ats = float(comp.get("ats_proxy") or 0.0) * 100.0
+    return {"jd_align": jd_align, "exp": exp, "ats": ats}
 
 
 def _artifact_btn(col, artifacts: Dict[str, Any], key: str, label: str, filename: str, mime: str) -> None:
@@ -311,12 +312,44 @@ def main() -> None:
         for idx, x in enumerate(ranking[:40], start=1):
             mp = _job_match_percent(x)
             comp = _job_components(x)
-            rows.append({"rank": idx, "match_%": mp, "skill_%": comp["skill"], "ats_%": comp["ats"], "title": _job_title(x), "url": _job_url(x)})
+            rows.append(
+                {
+                    "rank": idx,
+                    "interview_%": float(x.get("interview_probability_percent") or 0.0),
+                    "missing_gap_%": float(x.get("missing_skills_gap_percent") or 0.0),
+                    "match_%": mp,
+                    "jd_align_%": comp["jd_align"],
+                    "ats_proxy_%": comp["ats"],
+                    "title": _job_title(x),
+                    "url": _job_url(x),
+                }
+            )
         st.dataframe(rows, use_container_width=True)
 
     # HITL ranking
     st.markdown("### Human-in-the-Loop")
-    if status == "needs_human_approval" and pending == "review_ranking":
+    # Show scorecard summary (top probability + best gap)
+    hitl = (state.get("meta") or {}).get("hitl_summary") or {}
+    if hitl:
+        st.caption(
+            f"Interview Probability (best): {hitl.get('top_interview_probability_percent', 0)}%  |  "
+            f"Missing Skills Gap (best): {hitl.get('best_missing_skills_gap_percent', 0)}%"
+        )
+
+    if status == "needs_human_approval" and pending == "relax_constraints":
+        st.warning("Director recommends relaxing constraints to improve discovery volume.")
+        proposal = (state.get("meta") or {}).get("relax_proposal") or {}
+        if proposal:
+            st.json(proposal)
+        c1, c2 = st.columns(2)
+        if c1.button("✅ Approve Relax Constraints (Widen Search)", type="primary", use_container_width=True):
+            _api_post(api, f"/action/{run_id}", json={"action_type": "relax_constraints", "payload": {}}, timeout=120)
+            st.success("Relax applied. Refresh.")
+        if c2.button("➡️ Continue Without Relax (Review Current Ranking)", use_container_width=True):
+            # Just switch to ranking review by reloading; backend already has ranking.
+            st.info("Proceed to ranking review below.")
+
+    if status == "needs_human_approval" and pending in ("review_ranking", "relax_constraints"):
         if not ranking:
             st.warning("Ranking not loaded yet. Refresh.")
         else:

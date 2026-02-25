@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.orchestration.state import AgentState
 from careeragent.services.health_service import get_artifacts_root
 
 
@@ -182,7 +182,7 @@ class FeedbackEvaluatorService:
         reasons.append("Low-signal feedback without reproducible details; treated as spam/fake by policy.")
         return FeedbackClassification(label="spam_fake", confidence=0.60, reasons=reasons)
 
-    def ingest(self, *, state: OrchestrationState, item: FeedbackItem) -> FeedbackIngestResult:
+    def ingest(self, *, state: AgentState, item: FeedbackItem) -> FeedbackIngestResult:
         """
         Description: Store legitimate feedback into RAG store for refinement and log classification to state.
         Layer: L8

@@ -74,18 +74,28 @@ class Director:
     """
 
     def soft_fence(self, state: AgentState, *, viable_count: int, batch_score: float) -> Tuple[bool, str]:
-        """Return (should_retry, action_reason)."""
+        """Return (should_retry, action_reason).
 
-        # If we have any viable jobs, NEVER wipe out to 0; proceed to HITL.
-        if viable_count >= 3:
-            return False, "enough viable jobs"
+        Description:
+          Prevent endless refinement loops that hide the HITL approval gate.
 
-        # If some jobs exist but low, try persona shift before retrying same plan.
-        if viable_count > 0:
-            return True, "low viable count; shift persona / relax"
+        Layer: L3/L5
+        Input: viable_count + batch_score
+        Output: should_retry + reason
 
-        # 0 results: retry, but with relaxed constraints
-        return True, "no results; relax constraints"
+        Policy:
+          - If ANY viable jobs exist, proceed to HITL.
+          - Only retry/refine when we truly have *zero* viable jobs.
+
+        Why:
+          Phase2Evaluator already provides soft feedback when viable_count is low.
+          Forcing retries in that case makes the UI look stuck at L5.
+        """
+
+        if viable_count >= 1:
+            return False, "viable jobs exist; proceed to HITL with advisory"
+
+        return True, "no viable jobs; relax constraints"
 
     def next_persona(self, state: AgentState) -> str:
         personas = [p.persona_id for p in state.search_personas]

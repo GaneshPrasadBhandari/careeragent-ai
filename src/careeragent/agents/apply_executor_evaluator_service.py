@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.orchestration.state import AgentState
 from careeragent.agents.apply_executor_schema import ApplicationSubmission
 
 
@@ -10,14 +10,14 @@ class ApplyExecutorEvaluatorService:
     """
     Description: L7 evaluator twin that verifies submission integrity and state recording.
     Layer: L7
-    Input: OrchestrationState + ApplicationSubmission
-    Output: EvaluationEvent logged to OrchestrationState (Recursive Gate compatible)
+    Input: AgentState + ApplicationSubmission
+    Output: EvaluationEvent logged to AgentState (Recursive Gate compatible)
     """
 
     def evaluate(
         self,
         *,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         submission: ApplicationSubmission,
         target_id: str,
         threshold: float = 0.90,

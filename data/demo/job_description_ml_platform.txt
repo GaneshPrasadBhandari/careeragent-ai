@@ -1,0 +1,23 @@
+Job Title: Senior ML Platform Engineer
+Company: AtlasHire
+Location: Remote (US)
+
+We are hiring a Senior ML Platform Engineer to build and scale our AI-powered hiring platform.
+
+Responsibilities
+- Build backend services with Python and FastAPI.
+- Develop and maintain data pipelines and ranking services for candidate-job matching.
+- Integrate vector search, embeddings, and LLM-enabled workflows for recommendation quality.
+- Own CI/CD, test automation, and observability for production services.
+- Collaborate with product and data teams to improve matching precision and response latency.
+
+Requirements
+- 3+ years experience with Python, SQL, and backend API development.
+- Hands-on with Docker and cloud deployment (AWS preferred).
+- Experience with NLP / retrieval / ranking systems.
+- Familiarity with LangChain, LangGraph, or agent orchestration frameworks.
+- Strong communication and documentation skills.
+
+Preferred
+- Experience with PostgreSQL, Redis, Elasticsearch.
+- Prior work on resume parsing, job intelligence, or HRTech systems.

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.orchestration.state import AgentState
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.matcher_agent_schema import MatchReport
 
@@ -52,7 +52,7 @@ class InputGuard:
     def inspect(
         self,
         *,
-        state: OrchestrationState,
+        state: AgentState,
         text: str,
         context: Literal["resume", "job", "chat", "feedback"] = "chat",
         allow_resume_contact_pii: bool = True,
@@ -112,7 +112,7 @@ class InputGuard:
         return GuardResult(action="allow", issues=issues, sanitized_text=t)
 
     @staticmethod
-    def _log_security_event(state: OrchestrationState, *, event_type: str, details: Dict[str, Any]) -> None:
+    def _log_security_event(state: AgentState, *, event_type: str, details: Dict[str, Any]) -> None:
         """
         Description: Record security events for compliance and deep analytics.
         Layer: L0
@@ -152,7 +152,7 @@ class OutputGuard:
     def check_cover_letter(
         self,
         *,
-        state: OrchestrationState,
+        state: AgentState,
         draft_text: str,
         resume: ExtractedResume,
         match_report: MatchReport,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.orchestration.state import AgentState
 from careeragent.agents.cover_letter_agent_schema import CoverLetterDraft
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.matcher_agent_schema import JobDescription, MatchReport
@@ -14,13 +14,13 @@ class CoverLetterEvaluatorService:
     Description: L6 evaluator twin for cover letter quality + compliance.
     Layer: L6
     Input: Resume + Job + MatchReport + Draft
-    Output: EvaluationEvent logged to OrchestrationState (Recursive Gate)
+    Output: EvaluationEvent logged to AgentState (Recursive Gate)
     """
 
     def evaluate(
         self,
         *,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         resume: ExtractedResume,
         job: JobDescription,
         match_report: MatchReport,

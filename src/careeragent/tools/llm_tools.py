@@ -9,6 +9,17 @@ import httpx
 from careeragent.core.settings import Settings
 
 
+# Optional LangSmith tracing.
+try:  # pragma: no cover
+    from langsmith.run_helpers import traceable  # type: ignore
+except Exception:  # pragma: no cover
+    def traceable(*args, **kwargs):  # type: ignore
+        def _wrap(fn):
+            return fn
+
+        return _wrap
+
+
 class GeminiClient:
     """Description: Minimal Gemini REST client (no SDK dependency).
     Layer: L2-L7
@@ -18,6 +29,7 @@ class GeminiClient:
         self.s = settings
         self.model = model
 
+    @traceable(name="gemini.generate_json")
     def generate_json(self, prompt: str, *, temperature: float = 0.2, max_tokens: int = 1200) -> Optional[Dict[str, Any]]:
         if not self.s.GEMINI_API_KEY:
             return None
@@ -40,6 +52,7 @@ class GeminiClient:
         except Exception:
             return None
 
+    @traceable(name="gemini.generate_text")
     def generate_text(self, prompt: str, *, temperature: float = 0.4, max_tokens: int = 1400) -> Optional[str]:
         if not self.s.GEMINI_API_KEY:
             return None

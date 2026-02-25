@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, TypedDict
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 
-from careeragent.orchestration.state import OrchestrationState, _iso_utc, _utc_now
+from careeragent.orchestration.state import AgentState, _iso_utc, _utc_now
 from careeragent.agents.apply_executor_schema import ApplicationSubmission
 
 
@@ -18,7 +18,7 @@ class _ApplyGraphState(TypedDict):
     Output: ApplicationSubmission
     """
 
-    orchestration_state: OrchestrationState
+    orchestration_state: AgentState
     job_id: str
     resume_artifact_key: str
     cover_letter_artifact_key: str
@@ -30,7 +30,7 @@ class ApplyExecutorService:
     Description: L7 executor that simulates an "Application Submit" action.
     Layer: L7
     Input: Final resume + cover letter artifact keys and job_id
-    Output: ApplicationSubmission recorded into OrchestrationState
+    Output: ApplicationSubmission recorded into AgentState
     """
 
     def as_runnable(self) -> RunnableLambda:
@@ -76,7 +76,7 @@ class ApplyExecutorService:
     def submit(
         self,
         *,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         job_id: str,
         resume_artifact_key: str,
         cover_letter_artifact_key: str,
@@ -85,7 +85,7 @@ class ApplyExecutorService:
         """
         Description: Simulate an application submission and record submission_id + timestamp in state.
         Layer: L7
-        Input: OrchestrationState + job_id + artifact keys
+        Input: AgentState + job_id + artifact keys
         Output: ApplicationSubmission
         """
         submission_id = uuid4().hex

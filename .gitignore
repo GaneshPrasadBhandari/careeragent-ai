@@ -30,3 +30,16 @@ src/careeragent/artifacts/runs/
 src/careeragent/artifacts/db/*.db
 uv.lock
 *.zip
+
+
+# Secrets & Config
+.env
+*.env
+credentials.json
+
+# Large Archives & Artifacts
+*.zip
+*.pdf
+outputs/
+logs/
+
