@@ -1,57 +1,63 @@
 from __future__ import annotations
 
+import os
 from typing import Optional
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel
 
 
-class Settings(BaseSettings):
-    """Description: Global settings loaded from .env.
-    Layer: L0
-    Input: environment
-    Output: typed settings
-    """
+class Settings(BaseModel):
+    """Global settings loaded from environment."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    # Keys
     GEMINI_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     TAVILY_API_KEY: Optional[str] = None
     SERPER_API_KEY: Optional[str] = None
 
-    # LangSmith
     LANGSMITH_API_KEY: Optional[str] = None
     LANGSMITH_PROJECT: str = "careeragent-ai-phase2"
 
-    # Storage
     DATABASE_URL: str = "sqlite:///outputs/careeragent.db"
 
-    # Qdrant
     QDRANT_URL: Optional[str] = None
     QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION: str = "careeragent_memory"
 
-    # MCP
     MCP_SERVER_URL: Optional[str] = None
-
-    # Jina Reader
     JINA_READER_PREFIX: str = "https://r.jina.ai/"
 
-    # Limits
+    NTFY_TOPIC: Optional[str] = None
+    NTFY_BASE_URL: str = "https://ntfy.sh"
+
     MAX_HTTP_SECONDS: float = 40.0
+
+    def __init__(self, **data):
+        env_data = {
+            k: os.getenv(k)
+            for k in [
+                "GEMINI_API_KEY",
+                "OPENAI_API_KEY",
+                "TAVILY_API_KEY",
+                "SERPER_API_KEY",
+                "LANGSMITH_API_KEY",
+                "LANGSMITH_PROJECT",
+                "DATABASE_URL",
+                "QDRANT_URL",
+                "QDRANT_API_KEY",
+                "QDRANT_COLLECTION",
+                "MCP_SERVER_URL",
+                "JINA_READER_PREFIX",
+                "NTFY_TOPIC",
+                "NTFY_BASE_URL",
+                "MAX_HTTP_SECONDS",
+            ]
+        }
+        env_data = {k: v for k, v in env_data.items() if v is not None}
+        merged = {**env_data, **data}
+        super().__init__(**merged)
 
 
 def bootstrap_langsmith(s: Settings) -> None:
-    """Description: Enable LangChain/LangSmith tracing via env.
-    Layer: L0
-    Input: Settings
-    Output: environment flags
-    """
-
-    # We avoid hard dependency on langsmith package; LangChain uses env flags.
-    import os
-
     if s.LANGSMITH_API_KEY:
         os.environ.setdefault("LANGSMITH_API_KEY", s.LANGSMITH_API_KEY)
         os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")

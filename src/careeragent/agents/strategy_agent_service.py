@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 from careeragent.agents.matcher_agent_schema import MatchReport, JobDescription
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.strategy_agent_schema import ActionItem, PivotStrategy
@@ -23,7 +23,7 @@ class _StrategyGraphState(TypedDict):
     job: JobDescription
     match_report: MatchReport
     feedback: List[str]
-    orchestration_state: OrchestrationState
+    orchestration_state: AgentState
     strategy: Optional[PivotStrategy]
 
 
@@ -82,7 +82,7 @@ class StrategyAgentService:
         resume: ExtractedResume,
         job: JobDescription,
         match_report: MatchReport,
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         feedback: Optional[List[str]] = None,
     ) -> PivotStrategy:
         """

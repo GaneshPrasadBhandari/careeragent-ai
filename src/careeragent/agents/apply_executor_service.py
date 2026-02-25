@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, TypedDict
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 
-from careeragent.orchestration.state import AgentState, _iso_utc, _utc_now
+from careeragent.core.state import AgentState, _iso_utc, _utc_now
 from careeragent.agents.apply_executor_schema import ApplicationSubmission
 
 

@@ -613,7 +613,7 @@ def main() -> None:
         th_match = st.slider("Match threshold", 0.40, 0.90, 0.70, 0.05)
         max_refinements = st.slider("Max retries / refinements", 1, 6, 3, 1)
 
-        user_phone = st.text_input("Phone for SMS (optional)", value="")
+        user_phone = st.text_input("ntfy topic (optional)", value="")
 
         start_btn = st.button("🚀 Start Hunt", type="primary", use_container_width=True, disabled=(resume_file is None))
 

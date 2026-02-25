@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 from careeragent.agents.analytics_schema import AnalyticsReport
 
 
@@ -18,7 +18,7 @@ class AnalyticsService:
 
     SCORE_BINS: List[Tuple[float, float]] = [(0.0, 0.3), (0.3, 0.6), (0.6, 0.8), (0.8, 1.01)]
 
-    def build_report(self, *, orchestration_state: OrchestrationState) -> AnalyticsReport:
+    def build_report(self, *, orchestration_state: AgentState) -> AnalyticsReport:
         """
         Description: Aggregate submission outcomes against predicted interview chance scores.
         Layer: L9
@@ -85,7 +85,7 @@ class AnalyticsService:
 
     @staticmethod
     def _resolve_score(
-        orchestration_state: OrchestrationState,
+        orchestration_state: AgentState,
         job_id: str,
         job_scores: Dict[str, Any],
     ) -> float:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from careeragent.orchestration.state import AgentState, InterviewChanceBreakdown
+from careeragent.core.state import AgentState, InterviewChanceBreakdown
 from careeragent.agents.matcher_agent_schema import JobDescription, MatchReport
 from careeragent.agents.parser_agent_service import ExtractedResume
 from careeragent.agents.matcher_agent_service import MatcherAgentService
