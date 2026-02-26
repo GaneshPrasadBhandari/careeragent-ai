@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 
 
 @dataclass
@@ -16,7 +16,7 @@ class QuotaManager:
     serper_quota_exceeded: bool = False
     last_error: Optional[str] = None
 
-    def handle_serper_response(self, *, state: OrchestrationState, step_id: str, status_code: int, tool_name: str, error_detail: str) -> bool:
+    def handle_serper_response(self, *, state: AgentState, step_id: str, status_code: int, tool_name: str, error_detail: str) -> bool:
         if status_code == 403:
             self.serper_quota_exceeded = True
             self.last_error = error_detail

@@ -12,7 +12,7 @@ from uuid import uuid4
 import httpx
 
 from careeragent.config import artifacts_root, get_settings
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 from careeragent.services.db_service import SqliteStateStore
 from careeragent.services.health_service import HealthService
 from careeragent.services.notification_service import NotificationService
@@ -63,7 +63,7 @@ def _save_json(p: Path, obj: Any) -> None:
 
 class LiveFeed:
     @staticmethod
-    def emit(st: OrchestrationState, *, layer: str, agent: str, message: str) -> None:
+    def emit(st: AgentState, *, layer: str, agent: str, message: str) -> None:
         st.meta.setdefault("live_feed", [])
         st.meta["live_feed"].append({"layer": layer, "agent": agent, "message": message})
         st.touch()
@@ -95,7 +95,7 @@ class SerperDiscovery:
         self._key = api_key
         self._health = health
 
-    def search(self, *, st: OrchestrationState, step_id: str, query: str, num: int = 10, tbs: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(self, *, st: AgentState, step_id: str, query: str, num: int = 10, tbs: Optional[str] = None) -> List[Dict[str, Any]]:
         headers = {"X-API-KEY": self._key, "Content-Type": "application/json"}
         body: Dict[str, Any] = {"q": query, "num": num}
         if tbs:
@@ -216,7 +216,7 @@ class OneClickAutomationEngine:
         self._parser_eval = ParserEvaluatorService()
         self._learn = LearningResourceService(serper_api_key=getattr(self._s, "serper_api_key", None))
 
-    def _persist(self, st: OrchestrationState) -> None:
+    def _persist(self, st: AgentState) -> None:
         d = _run_dir(st.run_id)
         _save_json(d / "state.json", st.model_dump())
         self._store.upsert_state(run_id=st.run_id, status=st.status, state=st.model_dump(), updated_at_utc=st.updated_at_utc)
@@ -224,8 +224,8 @@ class OneClickAutomationEngine:
     def load(self, run_id: str) -> Optional[Dict[str, Any]]:
         return self._store.get_state(run_id=run_id)
 
-    def start_run(self, *, filename: str, data: bytes, prefs: Dict[str, Any]) -> OrchestrationState:
-        st = OrchestrationState.new(env=self._s.environment, mode="agentic", git_sha=None)
+    def start_run(self, *, filename: str, data: bytes, prefs: Dict[str, Any]) -> AgentState:
+        st = AgentState.new(env=self._s.environment, mode="agentic", git_sha=None)
         st.meta["preferences"] = prefs
         st.meta.setdefault("job_scores", {})
         st.meta.setdefault("job_components", {})
@@ -236,11 +236,11 @@ class OneClickAutomationEngine:
         t.start()
         return st
 
-    def submit_action(self, *, run_id: str, action_type: str, payload: Dict[str, Any]) -> OrchestrationState:
+    def submit_action(self, *, run_id: str, action_type: str, payload: Dict[str, Any]) -> AgentState:
         raw = self.load(run_id)
         if not raw:
             raise ValueError("run_id not found")
-        st = OrchestrationState(**raw)
+        st = AgentState(**raw)
         st.meta["last_user_action"] = {"type": action_type, "payload": payload}
         LiveFeed.emit(st, layer="L5", agent="HITL", message=f"User action received: {action_type}")
         self._persist(st)
@@ -253,7 +253,7 @@ class OneClickAutomationEngine:
         raw = self.load(run_id)
         if not raw:
             return
-        st = OrchestrationState(**raw)
+        st = AgentState(**raw)
         run_dir = _run_dir(run_id)
         prefs = st.meta.get("preferences", {}) or {}
 
@@ -458,14 +458,16 @@ class OneClickAutomationEngine:
             # Gate decision
             top_score = float(ranked[0]["interview_chance_score"]) if ranked else 0.0
             if top_score >= discovery_threshold and len(ranked) >= min(20, max_jobs):
-                st.status = "needs_human_approval"
+                st.status = "Pending"
+                st.current_layer = 5
                 st.meta["pending_action"] = "review_ranking"
                 LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message="Ranking ready for approval (HITL).")
                 self._persist(st)
                 return
 
             if attempt >= max_refinements:
-                st.status = "needs_human_approval"
+                st.status = "Pending"
+                st.current_layer = 5
                 st.meta["pending_action"] = "low_confidence_discovery"
                 LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message="Low confidence after retries. Needs guidance.")
                 self._persist(st)
@@ -484,7 +486,7 @@ class OneClickAutomationEngine:
         raw = self.load(run_id)
         if not raw:
             return
-        st = OrchestrationState(**raw)
+        st = AgentState(**raw)
         run_dir = _run_dir(run_id)
         pending = st.meta.get("pending_action")
         action = (st.meta.get("last_user_action") or {}).get("type")

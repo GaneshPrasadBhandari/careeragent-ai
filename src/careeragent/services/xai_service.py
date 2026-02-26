@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 from careeragent.services.health_service import get_artifacts_root
 
 
@@ -46,7 +46,7 @@ class TransparencyMatrix(BaseModel):
     """
     Description: Transparency matrix for all jobs in a run.
     Layer: L9
-    Input: OrchestrationState meta (job_components, weights)
+    Input: AgentState meta (job_components, weights)
     Output: Matrix JSON stored alongside XAI PDF
     """
     model_config = ConfigDict(extra="forbid")
@@ -59,7 +59,7 @@ class XAIService:
     """
     Description: L9 explainable analytics enhancement for DeepMilestoneReport.
     Layer: L9
-    Input: OrchestrationState
+    Input: AgentState
     Output: Transparency Matrix JSON + reportlab PDF (preferred) under artifacts/reports/<run_id>/
     """
 
@@ -72,11 +72,11 @@ class XAIService:
         """
         self._root = artifacts_root or get_artifacts_root()
 
-    def build_transparency_matrix(self, *, state: OrchestrationState) -> TransparencyMatrix:
+    def build_transparency_matrix(self, *, state: AgentState) -> TransparencyMatrix:
         """
         Description: Build a transparency matrix from state meta.
         Layer: L9
-        Input: OrchestrationState
+        Input: AgentState
         Output: TransparencyMatrix
         """
         w1 = float(state.meta.get("w1_skill_overlap", 0.45))
@@ -144,7 +144,7 @@ class XAIService:
 
         return TransparencyMatrix(run_id=state.run_id, rows=rows)
 
-    def write_outputs(self, *, state: OrchestrationState, require_reportlab: bool = False) -> Dict[str, str]:
+    def write_outputs(self, *, state: AgentState, require_reportlab: bool = False) -> Dict[str, str]:
         """
         Description: Write transparency JSON + PDF to artifacts/reports/<run_id>/.
         Layer: L9
