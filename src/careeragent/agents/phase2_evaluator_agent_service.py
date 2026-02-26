@@ -6,8 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from careeragent.core.settings import Settings
 from careeragent.core.state import AgentState, EvaluationEntry
 from careeragent.tools.llm_tools import GeminiClient
-from careeragent.tools.web_tools import extract_explicit_location, is_non_us_location
-from careeragent.tools.web_tools import TavilyClient
+from careeragent.tools.web_tools import TavilyClient, extract_explicit_location, is_outside_target_geo
 
 
 def _detect_posted_hours(text: str) -> Optional[float]:
@@ -56,9 +55,9 @@ class Phase2EvaluatorAgentService:
 
             # Geo-Fence: reject only if explicit location metadata is non-US
             loc = job.get("location_hint") or extract_explicit_location(snippet, title, "")
-            if prefs.country.upper() == "US" and loc and is_non_us_location(loc):
+            if is_outside_target_geo(url, [prefs.location, prefs.country], explicit_location=str(loc or "")):
                 job["phase2_score"] = 0.0
-                job["phase2_reason"] = f"Rejected: explicit non-US location '{loc}'"
+                job["phase2_reason"] = f"Rejected: explicit location outside target geo '{loc}'"
                 rejected_reasons.append(job["phase2_reason"])
                 continue
 

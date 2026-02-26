@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 # --- Path bootstrap
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -268,6 +268,7 @@ def main() -> None:
 
     view = st.radio("View mode", ["Pilot View", "Engineer View (Fire Engine)"], horizontal=True)
     st.button("🔄 Refresh", use_container_width=True)
+    st.caption("Auto-refresh runs every 5s while waiting for HITL states.")
 
     r = _api_get(api, f"/status/{run_id}", timeout=25)
     state = _safe_json(r)
@@ -278,12 +279,7 @@ def main() -> None:
     # Emergency auto-refresh for Waiting/HITL states so controls appear immediately.
     is_waiting_hitl = _is_pending_status(status)
     if is_waiting_hitl:
-        last_poll_ts = float(st.session_state.get("_last_hitl_poll_ts", 0.0) or 0.0)
-        now_ts = time.time()
-        if now_ts - last_poll_ts >= 2.0:
-            st.session_state["_last_hitl_poll_ts"] = now_ts
-            time.sleep(2)
-            st.rerun()
+        st_autorefresh(interval=5000, key=f"hitl_refresh_{run_id}")
     feed = _get_feed(state)
     artifacts = state.get("artifacts", {}) or {}
     evals = state.get("evaluations", []) or []
@@ -371,11 +367,13 @@ def main() -> None:
             st.info("Proceed to ranking review below.")
 
 
+    jobs_raw_len = len(state.get("jobs_raw") or [])
     jobs_scored_len = len(state.get("jobs_scored") or [])
     retry_count = int(state.get("retry_count") or 0)
     force_manual = bool((state.get("meta") or {}).get("force_manual_job_link"))
     show_manual = (
-        jobs_scored_len == 0
+        (jobs_raw_len == 0 and retry_count >= 2)
+        or jobs_scored_len == 0
         and (
             force_manual
             or retry_count >= 2
@@ -384,15 +382,16 @@ def main() -> None:
         )
     )
     if show_manual:
-        st.info("No scored jobs are currently available. Use Manual Job Link to break the loop.")
-        manual_url = st.text_input("Manual Job Link", key=f"manual_job_url_{run_id}", placeholder="https://...")
-        if st.button("🚀 Submit Manual Job Link", use_container_width=True):
-            clean = (manual_url or "").strip()
-            if not clean:
-                st.warning("Enter a valid job URL before submitting.")
-            else:
-                _api_post(api, f"/action/{run_id}", json={"action_type": "approve_ranking", "payload": {"selected_job_urls": [clean]}}, timeout=120)
-                st.success("Manual URL submitted. Refresh to continue L6/L7 flow.")
+        with st.expander("⚡ Manual Job Link (HITL Fallback)", expanded=_is_pending_status(status)):
+            st.warning("No scored jobs are currently available. Manual link input is now prioritized for HITL recovery.")
+            manual_url = st.text_input("Manual Job Link", key=f"manual_job_url_{run_id}", placeholder="https://...")
+            if st.button("🚀 Submit Manual Job Link", use_container_width=True, type="primary"):
+                clean = (manual_url or "").strip()
+                if not clean:
+                    st.warning("Enter a valid job URL before submitting.")
+                else:
+                    _api_post(api, f"/action/{run_id}", json={"action_type": "approve_ranking", "payload": {"selected_job_urls": [clean]}}, timeout=120)
+                    st.success("Manual URL submitted. Refresh to continue L6/L7 flow.")
 
     if _is_pending_status(status) and pending in ("review_ranking", "relax_constraints"):
         if not ranking:

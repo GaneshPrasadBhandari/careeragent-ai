@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import time
 import urllib.parse
 import urllib.robotparser
 from dataclasses import dataclass
@@ -21,7 +20,6 @@ def canonical_url(url: str) -> str:
     """
     try:
         u = urllib.parse.urlsplit(url)
-        # strip tracking
         q = urllib.parse.parse_qsl(u.query, keep_blank_values=True)
         q = [(k, v) for (k, v) in q if not k.lower().startswith("utm_")]
         query = urllib.parse.urlencode(q)
@@ -65,7 +63,6 @@ class RobotsGuard:
             ok = self._cache[base].can_fetch(user_agent, url)
             return RobotsDecision(allowed=bool(ok), reason="ok" if ok else "blocked by robots.txt")
         except Exception:
-            # If robots fails to load, be conservative: allow read-only fetch, block apply.
             return RobotsDecision(allowed=True, reason="robots check failed; allowed")
 
 
@@ -156,7 +153,6 @@ class JinaReader:
         if r.status_code >= 400:
             return None, f"jina status {r.status_code}"
         text = r.text
-        # basic sanity
         if len(text.strip()) < 200:
             return text, "short"
         return text, None
@@ -169,40 +165,56 @@ def extract_explicit_location(snippet: str, title: str = "", body_head: str = ""
     Output: location string or None
     """
     blob = "\n".join([snippet or "", title or "", body_head or ""]).strip()
-    # Location: City, ST
     m = re.search(r"\bLocation\s*[:\-]\s*([^\n|]{2,80})", blob, flags=re.I)
     if m:
         return m.group(1).strip()
-    # City, ST
+    if re.search(r"\b(remote|work\s*from\s*home|wfh|anywhere)\b", blob, flags=re.I):
+        return "Remote"
     m2 = re.search(r"\b([A-Za-z][A-Za-z .'-]{2,}),\s*([A-Z]{2})\b", blob)
     if m2:
         return f"{m2.group(1).strip()}, {m2.group(2).strip()}"
-    # United States
     if re.search(r"\b(United States|USA|U\.S\.)\b", blob, flags=re.I):
         return "United States"
     return None
 
 
-def is_non_us_location(loc: str) -> bool:
-    if not loc:
+def is_outside_target_geo(url: str, target_locations: Optional[List[str]] = None, *, explicit_location: str = "") -> bool:
+    """Return True when URL/location appears outside target geographies.
+
+    This helper is the single dynamic gate for geo-fencing.
+    """
+    targets = [str(x or "").lower() for x in (target_locations or ["US", "Remote"])]
+    target_blob = " ".join(targets)
+    allow_global = any(tok in target_blob for tok in ["global", "worldwide", "anywhere"])
+    if allow_global:
         return False
-    l = loc.lower()
-    # Hard non-US mentions
-    for bad in ["nashik", "pune", "hyderabad", "chennai", "mumbai", "karachi", "moscow"]:
-        if bad in l:
-            return True
-    return False
 
+    loc = str(explicit_location or "").lower().strip()
+    if loc:
+        if "remote" in loc and "remote" in target_blob:
+            return False
+        if any(tok in target_blob for tok in ["us", "usa", "united states"]):
+            if not any(tok in loc for tok in ["us", "usa", "united states", "remote"]):
+                return True
 
-def is_outside_target_geo(url: str, allowed_geos: list) -> bool:
-    """
-    Checks if a URL belongs to a blocked top-level domain based on
-    the user's allowed locations.
-    """
-    blocked_tlds = [".in", ".pk", ".ru"]
-    # If allowed_geos includes 'US' or 'Remote', we block specific non-target TLDs
-    if any(url.lower().endswith(tld) for tld in blocked_tlds):
-        # Check if the blocked TLD is actually in our allowed list (unlikely for India/US mix)
-        if not any(g.lower() in ["india", "in"] for g in allowed_geos):
-            return True
+    host = urllib.parse.urlsplit(url).netloc.lower().split(":")[0]
+    if not host:
+        return False
+    suffix = host.rsplit(".", 1)[-1] if "." in host else ""
+    tld_map = {
+        "us": ["us", "usa", "united states"],
+        "in": ["india"],
+        "uk": ["uk", "united kingdom", "england"],
+        "de": ["germany"],
+        "ca": ["canada"],
+        "au": ["australia"],
+        "sg": ["singapore"],
+    }
+    if suffix in tld_map:
+        mapped = tld_map[suffix]
+        if suffix == "us":
+            return False
+        if "remote" in target_blob:
+            return False
+        return not any(any(token in t for token in mapped) for t in targets)
     return False

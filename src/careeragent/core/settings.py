@@ -29,6 +29,10 @@ class Settings(BaseModel):
     NTFY_TOPIC: Optional[str] = None
     NTFY_BASE_URL: str = "https://ntfy.sh"
 
+    GMAIL_TO_EMAIL: Optional[str] = None
+    GMAIL_FROM_EMAIL: Optional[str] = None
+    GMAIL_SERVICE_ACCOUNT_JSON: Optional[str] = None
+
     MAX_HTTP_SECONDS: float = 40.0
 
     def __init__(self, **data):
@@ -49,6 +53,9 @@ class Settings(BaseModel):
                 "JINA_READER_PREFIX",
                 "NTFY_TOPIC",
                 "NTFY_BASE_URL",
+                "GMAIL_TO_EMAIL",
+                "GMAIL_FROM_EMAIL",
+                "GMAIL_SERVICE_ACCOUNT_JSON",
                 "MAX_HTTP_SECONDS",
             ]
         }

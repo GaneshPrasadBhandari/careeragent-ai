@@ -20,6 +20,7 @@ from careeragent.core.settings import Settings
 from careeragent.core.state import AgentState, ArtifactRef, PROGRESS_MAP
 from careeragent.core.state_store import StateStore
 from careeragent.managers.l3_managers import ExtractionManager, GeoFenceManager, LeadScout
+from careeragent.langgraph.graph_full import build_l0_l9_graph
 from careeragent.orchestration.planner_director import Director, Planner
 from careeragent.nlp.skills import compute_jd_alignment
 from careeragent.services.notification_service import NotificationService
@@ -58,6 +59,11 @@ class Orchestrator:
         self.memory = MemoryManager(settings, mcp)
         self.gov = GovernanceAuditor(settings, mcp)
         self.notify = NotificationService(settings=settings)
+        self.langgraph = None
+        try:
+            self.langgraph = build_l0_l9_graph()
+        except Exception:
+            self.langgraph = None
 
     # --------------------------
     # High-level entrypoints
@@ -65,6 +71,7 @@ class Orchestrator:
     def run_phase1_to_hitl(self, state: AgentState, *, resume_filename: str, resume_bytes: bytes) -> AgentState:
         """Run L0-L5 and stop at ranking HITL."""
         state.meta.setdefault("plan_layers", ["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"])
+        state.meta["orchestration_engine"] = "langgraph+lifecycle" if self.langgraph else "lifecycle"
         state.status = "running"
         self.store.save(state)
 
@@ -338,6 +345,12 @@ class Orchestrator:
             self._persist_json_artifact(state, "jobs_scored", state.jobs_scored)
             state.end_step_ok("L4", f"jobs_scored={len(state.jobs_scored)}")
             self.store.save(state)
+
+            # Self-correction loop: if L4 yields zero, broaden L3 query and retry automatically.
+            if len(state.jobs_scored) == 0:
+                broaden = int(state.query_modifiers.get("broadening_level") or 0) + 1
+                state.query_modifiers["broadening_level"] = broaden
+                state.log_eval(f"[Self-Correction] L4 returned 0 jobs_scored; broadening query to level={broaden} and retrying L3.")
 
             # Emergency loop breaker: after 2 refinements with zero scored jobs, force manual path.
             if len(state.jobs_scored) == 0 and int(state.retry_count) >= 2:
