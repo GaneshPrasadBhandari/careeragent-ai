@@ -324,6 +324,10 @@ class Orchestrator:
             kept, rejected = self.geo.filter(state, raw)
             enriched, notes = self.extract.enrich(state, kept, max_jobs=state.preferences.max_jobs)
             state.jobs_raw = enriched
+            if len(enriched) == 0:
+                current_broadening = int(state.query_modifiers.get("broadening_level") or 0)
+                state.query_modifiers["broadening_level"] = current_broadening + 1
+                state.log_eval(f"[L3] Zero jobs discovered; increasing broadening_level to {current_broadening + 1}")
             self._persist_json_artifact(state, "jobs_raw", state.jobs_raw)
             state.end_step_ok("L3", f"jobs_raw={len(enriched)} rejected={len(rejected)}")
             self.store.save(state)

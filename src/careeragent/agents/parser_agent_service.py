@@ -170,6 +170,23 @@ def _regex_skill_fallback(text: str, master: List[str]) -> List[str]:
     return found
 
 
+def _extract_responsibility_signals(text: str) -> List[str]:
+    """Promote seniority and architecture responsibilities into skill-like tags."""
+    patterns = {
+        "Principal Leadership": r"\bprincipal\b",
+        "Architecture Strategy": r"\b(architect|architecture|solution architect|enterprise architect)\b",
+        "Technical Leadership": r"\b(tech lead|technical lead|leadership|mentorship|mentoring)\b",
+        "System Design": r"\b(system design|distributed systems|reference architecture)\b",
+        "Stakeholder Management": r"\b(stakeholder|executive|cross-functional|roadmap)\b",
+    }
+    found: List[str] = []
+    low = text or ""
+    for label, pattern in patterns.items():
+        if re.search(pattern, low, flags=re.I):
+            found.append(label)
+    return found
+
+
 def _extract_skill_like_lines(text: str) -> List[str]:
     out: List[str] = []
     capture = False
@@ -225,6 +242,13 @@ def _validate_and_backfill_skills(text: str, current_skills: List[str]) -> List[
                 continue
             seen.add(key)
             deduped.append(skill)
+
+    for signal in _extract_responsibility_signals(text):
+        key = signal.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(signal)
     return deduped[:100]
 
 
@@ -233,7 +257,7 @@ def _parse_experience(text: str) -> List[ExperienceModel]:
     out: List[ExperienceModel] = []
     # very light heuristic: look for "Company" in next line
     for i, ln in enumerate(lines[:400]):
-        if re.search(r"(Solution Architect|Data Scientist|Engineer|Architect|Consultant)", ln, flags=re.I):
+        if re.search(r"(Principal|Staff|Lead|Manager|Director|Solution Architect|Data Scientist|Engineer|Architect|Consultant)", ln, flags=re.I):
             title = ln
             company = None
             if i + 1 < len(lines):
