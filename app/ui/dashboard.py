@@ -58,6 +58,16 @@ def _get_pending(state: Dict[str, Any]) -> Optional[str]:
     return meta.get("pending_action")
 
 
+def _is_pending_status(status: Any) -> bool:
+    s = str(status or "").strip().lower()
+    return s in {"pending", "needs_human_approval"}
+
+
+def _layer_is_l5(state: Dict[str, Any]) -> bool:
+    cur = str(state.get("current_layer") or "").strip().upper()
+    return cur in {"5", "L5"}
+
+
 def _get_feed(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     if isinstance(state.get("live_feed"), list):
         return state.get("live_feed") or []
@@ -349,7 +359,7 @@ def main() -> None:
             # Just switch to ranking review by reloading; backend already has ranking.
             st.info("Proceed to ranking review below.")
 
-    if status == "needs_human_approval" and pending in ("review_ranking", "relax_constraints"):
+    if _is_pending_status(status) and pending in ("review_ranking", "relax_constraints"):
         if not ranking:
             st.warning("Ranking not loaded yet. Refresh.")
         else:
@@ -370,12 +380,24 @@ def main() -> None:
                 _api_post(api, f"/action/{run_id}", json={"action_type": "approve_ranking", "payload": {"selected_job_urls": sorted(list(st.session_state["selected_urls"]))}}, timeout=120)
                 st.success("Approved. Refresh.")
 
-    if status == "needs_human_approval" and pending == "review_drafts":
+    if _is_pending_status(status) and pending == "review_drafts":
         st.info("Drafts ready. Review and approve to finalize L7–L9.")
         _draft_picker(artifacts)
         if st.button("✅ Approve Drafts → Finalize", type="primary", use_container_width=True):
             _api_post(api, f"/action/{run_id}", json={"action_type": "approve_drafts", "payload": {}}, timeout=120)
             st.success("Finalizing. Refresh.")
+
+    hard_override = _layer_is_l5(state) and _is_pending_status(status)
+    if hard_override and pending not in {"review_ranking", "review_drafts", "relax_constraints"}:
+        st.warning("L5 pending with unrecognized pending_action format. Hard-override controls enabled.")
+        c1, c2 = st.columns(2)
+        if c1.button("✅ Approve (Hard Override)", type="primary", use_container_width=True):
+            payload = {"selected_job_urls": sorted(list(st.session_state.get("selected_urls") or []))}
+            _api_post(api, f"/action/{run_id}", json={"action_type": "approve_ranking", "payload": payload}, timeout=120)
+            st.success("Approval submitted. Refresh.")
+        if c2.button("❌ Reject (Hard Override)", use_container_width=True):
+            _api_post(api, f"/action/{run_id}", json={"action_type": "request_refine", "payload": {"reason": "Manual reject via L5 override"}}, timeout=120)
+            st.info("Rejection submitted. Refresh.")
 
     with st.expander("Full State JSON"):
         st.json(state)
