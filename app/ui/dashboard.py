@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -273,6 +274,16 @@ def main() -> None:
 
     status = state.get("status")
     pending = _get_pending(state)
+
+    # Emergency auto-refresh for Waiting/HITL states so controls appear immediately.
+    is_waiting_hitl = _is_pending_status(status)
+    if is_waiting_hitl:
+        last_poll_ts = float(st.session_state.get("_last_hitl_poll_ts", 0.0) or 0.0)
+        now_ts = time.time()
+        if now_ts - last_poll_ts >= 2.0:
+            st.session_state["_last_hitl_poll_ts"] = now_ts
+            time.sleep(2)
+            st.rerun()
     feed = _get_feed(state)
     artifacts = state.get("artifacts", {}) or {}
     evals = state.get("evaluations", []) or []
@@ -361,7 +372,18 @@ def main() -> None:
 
 
     jobs_scored_len = len(state.get("jobs_scored") or [])
-    if _is_pending_status(status) and pending in ("review_ranking", "relax_constraints") and jobs_scored_len == 0:
+    retry_count = int(state.get("retry_count") or 0)
+    force_manual = bool((state.get("meta") or {}).get("force_manual_job_link"))
+    show_manual = (
+        jobs_scored_len == 0
+        and (
+            force_manual
+            or retry_count >= 2
+            or _is_pending_status(status)
+            or pending in ("review_ranking", "relax_constraints")
+        )
+    )
+    if show_manual:
         st.info("No scored jobs are currently available. Use Manual Job Link to break the loop.")
         manual_url = st.text_input("Manual Job Link", key=f"manual_job_url_{run_id}", placeholder="https://...")
         if st.button("🚀 Submit Manual Job Link", use_container_width=True):

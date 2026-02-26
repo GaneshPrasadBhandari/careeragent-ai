@@ -401,6 +401,10 @@ class ParserAgentService:
         prompt = (
             "Extract a concise SKILLS list from the resume text. Include both technical and non-technical skills "
             "if explicitly present. Return STRICT JSON: {skills: string[]}. Do not invent data.\n\n"
+            "Few-shot quality labeling examples:\n"
+            "Example A: 'Principal AI Architect' -> skills include ['Principal Leadership', 'Architecture Strategy'] and quality_signal='10/10'.\n"
+            "Example B: 'Solutions Architecture' -> skills include ['Solutions Architecture', 'System Design'] and quality_signal='10/10'.\n"
+            "Only output JSON with key 'skills'.\n\n"
             f"CURRENT_SKILLS: {current_skills}\n\nRESUME_TEXT:\n{text[:10000]}"
         )
         j = self._coerce_llm_json(self.gemini.generate_json(prompt, temperature=0.0, max_tokens=500))

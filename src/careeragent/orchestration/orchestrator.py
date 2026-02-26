@@ -339,6 +339,15 @@ class Orchestrator:
             state.end_step_ok("L4", f"jobs_scored={len(state.jobs_scored)}")
             self.store.save(state)
 
+            # Emergency loop breaker: after 2 refinements with zero scored jobs, force manual path.
+            if len(state.jobs_scored) == 0 and int(state.retry_count) >= 2:
+                state.status = "needs_human_approval"
+                state.pending_action = "review_ranking"
+                state.meta["force_manual_job_link"] = True
+                state.log_eval("[L3/L4] Zero scored jobs after 2 refinements; forcing Manual Job Link fallback.")
+                self.store.save(state)
+                return state
+
             if state.meta.get("l4_recursive_loop_required"):
                 state.retry_count += 1
                 state.log_eval("[L4] Top interview chance below 0.70; looping back to L3 discovery.")

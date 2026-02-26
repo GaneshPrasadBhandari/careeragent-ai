@@ -451,6 +451,16 @@ class OneClickAutomationEngine:
             for i, r in enumerate(ranked, start=1):
                 r["rank"] = i
 
+            # Emergency loop breaker: after 2 refinements with zero scored jobs, force manual path.
+            if len(ranked) == 0 and attempt >= 1:
+                st.status = "needs_human_approval"
+                st.current_layer = 5
+                st.meta["pending_action"] = "review_ranking"
+                st.meta["force_manual_job_link"] = True
+                LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message="Zero scored jobs after 2 refinements. Manual Job Link required.")
+                self._persist(st)
+                return
+
             _save_json(run_dir / "ranking.json", ranked)
             st.add_artifact("ranking", str(run_dir / "ranking.json"), content_type="application/json")
             LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message=f"Ranked {len(ranked)} jobs. Top={ranked[0]['overall_match_percent'] if ranked else 'n/a'}%")
