@@ -359,6 +359,19 @@ def main() -> None:
             # Just switch to ranking review by reloading; backend already has ranking.
             st.info("Proceed to ranking review below.")
 
+
+    jobs_scored_len = len(state.get("jobs_scored") or [])
+    if _is_pending_status(status) and pending in ("review_ranking", "relax_constraints") and jobs_scored_len == 0:
+        st.info("No scored jobs are currently available. Use Manual Job Link to break the loop.")
+        manual_url = st.text_input("Manual Job Link", key=f"manual_job_url_{run_id}", placeholder="https://...")
+        if st.button("🚀 Submit Manual Job Link", use_container_width=True):
+            clean = (manual_url or "").strip()
+            if not clean:
+                st.warning("Enter a valid job URL before submitting.")
+            else:
+                _api_post(api, f"/action/{run_id}", json={"action_type": "approve_ranking", "payload": {"selected_job_urls": [clean]}}, timeout=120)
+                st.success("Manual URL submitted. Refresh to continue L6/L7 flow.")
+
     if _is_pending_status(status) and pending in ("review_ranking", "relax_constraints"):
         if not ranking:
             st.warning("Ranking not loaded yet. Refresh.")

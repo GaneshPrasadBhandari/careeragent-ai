@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
 from careeragent.core.settings import Settings
@@ -15,6 +15,23 @@ class LeadScoutService:
     def __init__(self, settings: Settings) -> None:
         self.s = settings
 
+    @staticmethod
+    def _resolve_location(state: AgentState) -> str:
+        pref_loc = (state.preferences.location or "").strip()
+        profile_loc = str((state.extracted_profile or {}).get("contact", {}).get("location") or "").strip()
+        return pref_loc or profile_loc or "United States, Remote"
+
+    @staticmethod
+    def _resolve_country_code(state: AgentState) -> str:
+        raw = (state.preferences.country or "").strip().upper()
+        if not raw:
+            return "US"
+        if raw in {"US", "USA", "UNITED STATES"}:
+            return "US"
+        if len(raw) == 2:
+            return raw
+        return "US"
+
     def build_query(self, state: AgentState) -> str:
         persona = next((p for p in state.search_personas if p.persona_id == state.active_persona_id), None)
         if not persona:
@@ -23,7 +40,8 @@ class LeadScoutService:
 
         must = " ".join([f'"{x}"' for x in persona.must_include if x])
         neg = " ".join([f"-{x}" for x in persona.negative_terms if x])
-        geo = '"United States" OR USA OR Remote' if state.preferences.country.upper() == "US" else ""
+        location = self._resolve_location(state)
+        geo = f'"{location}" OR Remote'
         return " ".join([must, geo, neg]).strip()
 
     def search(self, state: AgentState, limit: int = 25) -> List[Dict[str, Any]]:
@@ -31,8 +49,10 @@ class LeadScoutService:
         state.query_modifiers["last_query"] = query
 
         aggregated: List[Dict[str, Any]] = []
+        location = self._resolve_location(state)
+        country_code = self._resolve_country_code(state)
         for board in ("linkedin", "indeed"):
-            board_results = self._retry_scrape(board, query, timeout_s=30, attempts=3)
+            board_results = self._retry_scrape(board, query, timeout_s=30, attempts=3, location=location, country_code=country_code)
             aggregated.extend(board_results)
 
         seen = set()
@@ -47,29 +67,35 @@ class LeadScoutService:
                 break
         return deduped
 
-    def _retry_scrape(self, board: str, query: str, timeout_s: int, attempts: int) -> List[Dict[str, Any]]:
+    def _retry_scrape(self, board: str, query: str, timeout_s: int, attempts: int, *, location: str, country_code: str) -> List[Dict[str, Any]]:
         last_error = ""
         for attempt in range(1, attempts + 1):
             try:
                 jitter = random.uniform(0.4, 1.3) * attempt
                 time.sleep(jitter)
-                return self._scrape_board(board=board, query=query, timeout_s=timeout_s)
+                return self._scrape_board(board=board, query=query, timeout_s=timeout_s, location=location, country_code=country_code)
             except Exception as exc:
                 last_error = str(exc)
         return [{"title": f"{board} scrape failed", "url": "", "snippet": f"Read Timeout/blocked: {last_error}"}]
 
-    def _search_url(self, board: str, query: str) -> str:
+    def _search_url(self, board: str, query: str, *, location: str, country_code: str) -> str:
         q = quote_plus(query)
         if board == "linkedin":
-            return f"https://www.linkedin.com/jobs/search/?keywords={q}&f_TPR=r86400"
-        return f"https://www.indeed.com/jobs?q={q}&fromage=1"
+            return (
+                "https://www.linkedin.com/jobs/search/"
+                f"?keywords={q}&location={quote_plus(location)}&f_TPR=r86400"
+            )
+        return (
+            f"https://www.indeed.com/jobs?q={q}&l={quote_plus(location)}"
+            f"&fromage=1&country={quote_plus(country_code.lower())}"
+        )
 
-    def _scrape_board(self, board: str, query: str, timeout_s: int) -> List[Dict[str, Any]]:
+    def _scrape_board(self, board: str, query: str, timeout_s: int, *, location: str, country_code: str) -> List[Dict[str, Any]]:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
 
         timeout_ms = timeout_s * 1000
-        url = self._search_url(board, query)
+        url = self._search_url(board, query, location=location, country_code=country_code)
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)

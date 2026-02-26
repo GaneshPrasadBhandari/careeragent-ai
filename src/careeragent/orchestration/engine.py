@@ -457,6 +457,15 @@ class OneClickAutomationEngine:
 
             # Gate decision
             top_score = float(ranked[0]["interview_chance_score"]) if ranked else 0.0
+            if top_score > 0.85 and ranked:
+                LiveFeed.emit(st, layer="L5", agent="EvaluatorAgent", message="Auto-pilot engaged (top score > 0.85). Skipping HITL ranking gate.")
+                self._generate_drafts_from_ranking(st=st, run_dir=run_dir, ranked=ranked, intake=extracted)
+                st.status = "completed"
+                st.meta["pending_action"] = None
+                LiveFeed.emit(st, layer="L7", agent="ApplyExecutor", message="Auto-pilot completed draft generation and simulated submission.")
+                self._persist(st)
+                return
+
             if top_score >= discovery_threshold and len(ranked) >= min(20, max_jobs):
                 st.status = "Pending"
                 st.current_layer = 5
@@ -517,52 +526,7 @@ class OneClickAutomationEngine:
 
             ranked = json.loads(ranking_path.read_text(encoding="utf-8"))
             intake = ExtractedResume(**json.loads(intake_path.read_text(encoding="utf-8")))
-            top_n = int((st.meta.get("preferences", {}) or {}).get("draft_count", 10))
-            ranked = ranked[:top_n]
-
-            # Drafts (ATS resume + cover letter) + learning plan
-            drafts: List[Dict[str, Any]] = []
-            learning: Dict[str, Any] = {}
-
-            # ATS resume template built from intake (no user ATS required)
-            base_resume = self._build_ats_resume(intake)
-            (run_dir / "ats_resume_base.md").write_text(base_resume, encoding="utf-8")
-            st.add_artifact("ats_resume_base", str(run_dir / "ats_resume_base.md"), content_type="text/markdown")
-
-            for j in ranked:
-                jid = j["job_id"]
-                title = j.get("title") or "Role"
-                company = j.get("board") or "Company"
-                missing = j.get("missing_skills") or []
-
-                # Tailored resume (keyword injection + bullets)
-                tailored = self._tailor_resume(base_resume, title, company, j.get("matched_skills") or [], missing)
-                resume_path = run_dir / f"resume_{jid[:10]}.md"
-                resume_path.write_text(tailored, encoding="utf-8")
-                st.add_artifact(f"resume_{jid[:10]}", str(resume_path), content_type="text/markdown")
-
-                # Cover letter
-                cover = self._cover_letter(intake, title, company, j.get("matched_skills") or [])
-                cover_path = run_dir / f"cover_{jid[:10]}.md"
-                cover_path.write_text(cover, encoding="utf-8")
-                st.add_artifact(f"cover_{jid[:10]}", str(cover_path), content_type="text/markdown")
-
-                # Learning plan for missing skills
-                if missing:
-                    learning[jid] = self._learn.build_learning_plan(missing_skills=missing)
-
-                drafts.append({
-                    "job_id": jid,
-                    "title": title,
-                    "company": company,
-                    "url": j.get("url"),
-                    "resume_path": str(resume_path),
-                    "cover_path": str(cover_path),
-                    "missing_skills": missing,
-                })
-
-            _save_json(run_dir / "drafts_bundle.json", {"drafts": drafts, "learning_plan": learning})
-            st.add_artifact("drafts_bundle", str(run_dir / "drafts_bundle.json"), content_type="application/json")
+            self._generate_drafts_from_ranking(st=st, run_dir=run_dir, ranked=ranked, intake=intake)
 
             st.status = "needs_human_approval"
             st.meta["pending_action"] = "review_drafts"
@@ -603,6 +567,49 @@ class OneClickAutomationEngine:
             return
 
         self._persist(st)
+
+    def _generate_drafts_from_ranking(self, *, st: AgentState, run_dir: Path, ranked: List[Dict[str, Any]], intake: ExtractedResume) -> None:
+        top_n = int((st.meta.get("preferences", {}) or {}).get("draft_count", 10))
+        ranked = (ranked or [])[:top_n]
+
+        drafts: List[Dict[str, Any]] = []
+        learning: Dict[str, Any] = {}
+
+        base_resume = self._build_ats_resume(intake)
+        (run_dir / "ats_resume_base.md").write_text(base_resume, encoding="utf-8")
+        st.add_artifact("ats_resume_base", str(run_dir / "ats_resume_base.md"), content_type="text/markdown")
+
+        for j in ranked:
+            jid = j["job_id"]
+            title = j.get("title") or "Role"
+            company = j.get("board") or "Company"
+            missing = j.get("missing_skills") or []
+
+            tailored = self._tailor_resume(base_resume, title, company, j.get("matched_skills") or [], missing)
+            resume_path = run_dir / f"resume_{jid[:10]}.md"
+            resume_path.write_text(tailored, encoding="utf-8")
+            st.add_artifact(f"resume_{jid[:10]}", str(resume_path), content_type="text/markdown")
+
+            cover = self._cover_letter(intake, title, company, j.get("matched_skills") or [])
+            cover_path = run_dir / f"cover_{jid[:10]}.md"
+            cover_path.write_text(cover, encoding="utf-8")
+            st.add_artifact(f"cover_{jid[:10]}", str(cover_path), content_type="text/markdown")
+
+            if missing:
+                learning[jid] = self._learn.build_learning_plan(missing_skills=missing)
+
+            drafts.append({
+                "job_id": jid,
+                "title": title,
+                "company": company,
+                "url": j.get("url"),
+                "resume_path": str(resume_path),
+                "cover_path": str(cover_path),
+                "missing_skills": missing,
+            })
+
+        _save_json(run_dir / "drafts_bundle.json", {"drafts": drafts, "learning_plan": learning})
+        st.add_artifact("drafts_bundle", str(run_dir / "drafts_bundle.json"), content_type="application/json")
 
     # -------- ATS Resume generation (no user ATS needed) --------
     def _build_ats_resume(self, intake: ExtractedResume) -> str:
