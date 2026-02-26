@@ -195,9 +195,17 @@ class AgentState(BaseModel):
     Output: full run state JSON
     """
 
-    run_id: str
+    version: str = "v1"
+    run_id: str = Field(default_factory=lambda: uuid4().hex)
 
-    status: Literal["queued", "running", "needs_human_approval", "completed", "failed"] = "queued"
+    created_at_utc: str = Field(default_factory=utc_now_iso)
+    updated_at_utc: str = Field(default_factory=utc_now_iso)
+
+    mode: str = "agentic"
+    env: Optional[str] = None
+    git_sha: Optional[str] = None
+
+    status: str = "queued"
     pending_action: Optional[str] = None
 
     current_layer: Optional[str] = None
@@ -260,23 +268,61 @@ class AgentState(BaseModel):
         """
         self.evaluation_logs.append(msg)
 
-    def touch(self) -> None:
-        """Compatibility no-op timestamp hook used by legacy services."""
-        self.meta["updated_at_utc"] = utc_now_iso()
+    @classmethod
+    def new(cls, *, env: Optional[str] = None, mode: str = "agentic", git_sha: Optional[str] = None) -> "AgentState":
+        st = cls(env=env, mode=mode, git_sha=git_sha, status="running")
+        st.touch()
+        return st
 
-    def start_step(self, layer_id: LayerId, agent: str, message: str, progress: int) -> None:
-        """Description: Start a step and update progress.
-        Layer: L2
-        Input: layer id, agent
-        Output: steps + progress
-        """
+    def touch(self) -> None:
+        """Compatibility timestamp hook used by legacy services."""
+        self.updated_at_utc = utc_now_iso()
+        self.meta["updated_at_utc"] = self.updated_at_utc
+
+    def add_artifact(self, key: str, path: str, *, content_type: Optional[str] = None, sha256: Optional[str] = None) -> ArtifactRef:
+        ref = ArtifactRef(path=path, mime=content_type or "application/json")
+        self.artifacts[key] = ref
+        self.touch()
+        return ref
+
+    def start_step(self, step_or_layer: str, *args: Any, **kwargs: Any) -> None:
+        """Start a step with compatibility for legacy and orchestration call styles."""
+        # Legacy style: start_step("L2", "Agent", "message", 20)
+        if args and len(args) >= 3:
+            layer_id = str(step_or_layer)
+            agent = str(args[0])
+            message = str(args[1])
+            progress = int(args[2])
+            self.current_layer = layer_id
+            self.progress_percent = progress
+            st = StepTrace(layer_id=layer_id, status="running", agent=agent, started_at_utc=utc_now_iso(), message=message)
+            self.steps = [s for s in self.steps if not (s.layer_id == layer_id and s.status == "running")]
+            self.steps.append(st)
+            self.feed(layer_id, agent, message)
+            self.touch()
+            return
+
+        # Orchestration engine style: start_step("step_id", layer_id="L3", tool_name="x", input_ref={})
+        layer_id = str(kwargs.get("layer_id") or "L2")
+        agent = str(kwargs.get("tool_name") or kwargs.get("agent") or "orchestrator")
+        message = str(step_or_layer)
         self.current_layer = layer_id
-        self.progress_percent = int(progress)
-        st = StepTrace(layer_id=layer_id, status="running", agent=agent, started_at_utc=utc_now_iso(), message=message)
-        # replace any existing same layer running
-        self.steps = [s for s in self.steps if not (s.layer_id == layer_id and s.status == "running")]
-        self.steps.append(st)
+        self.progress_percent = int(PROGRESS_MAP.get(layer_id, self.progress_percent))
+        self.steps.append(StepTrace(layer_id=layer_id, status="running", agent=agent, started_at_utc=utc_now_iso(), message=message))
         self.feed(layer_id, agent, message)
+        self.touch()
+
+    def end_step(self, step_id: str, *, status: str = "ok", output_ref: Optional[Dict[str, Any]] = None, message: Any = "") -> None:
+        _ = output_ref
+        for s in reversed(self.steps):
+            if s.message == step_id and s.status == "running":
+                s.status = "ok" if status == "ok" else "error"
+                s.finished_at_utc = utc_now_iso()
+                s.message = str(message)
+                self.touch()
+                return
+        self.steps.append(StepTrace(layer_id="L2", status="ok" if status == "ok" else "error", agent="orchestrator", started_at_utc=utc_now_iso(), finished_at_utc=utc_now_iso(), message=str(message)))
+        self.touch()
 
     def end_step_ok(self, layer_id: LayerId, message: str = "ok") -> None:
         """Description: Mark step ok.

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from careeragent.orchestration.state import OrchestrationState
+from careeragent.core.state import AgentState
 from careeragent.services.health_service import get_artifacts_root
 
 
@@ -37,7 +37,7 @@ class DeepMilestoneReport(BaseModel):
     """
     Description: Deep milestone report: XAI + market trends + security + quota + outcomes.
     Layer: L9
-    Input: OrchestrationState (audit trail)
+    Input: AgentState (audit trail)
     Output: JSON + PDF report artifacts
     """
 
@@ -57,7 +57,7 @@ class DeepAnalyticsService:
     """
     Description: Generates a Deep Milestone Report (JSON + PDF) with XAI and compliance signals.
     Layer: L9
-    Input: OrchestrationState
+    Input: AgentState
     Output: Writes artifacts under src/careeragent/artifacts/reports/<run_id>/
     """
 
@@ -70,11 +70,11 @@ class DeepAnalyticsService:
         """
         self._root = artifacts_root or get_artifacts_root()
 
-    def generate(self, *, state: OrchestrationState) -> Dict[str, str]:
+    def generate(self, *, state: AgentState) -> Dict[str, str]:
         """
         Description: Build report and write JSON + PDF artifacts.
         Layer: L9
-        Input: OrchestrationState
+        Input: AgentState
         Output: dict with artifact paths
         """
         report = self._build_report(state=state)
@@ -89,11 +89,11 @@ class DeepAnalyticsService:
 
         return {"json": str(json_path), "pdf": str(pdf_path)}
 
-    def _build_report(self, *, state: OrchestrationState) -> DeepMilestoneReport:
+    def _build_report(self, *, state: AgentState) -> DeepMilestoneReport:
         """
-        Description: Construct report fields from OrchestrationState.
+        Description: Construct report fields from AgentState.
         Layer: L9
-        Input: OrchestrationState
+        Input: AgentState
         Output: DeepMilestoneReport
         """
         # XAI: derive explanations from match report artifacts if present in state.meta['job_scores'] and artifacts
