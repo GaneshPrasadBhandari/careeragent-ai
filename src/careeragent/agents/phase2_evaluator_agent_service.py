@@ -98,13 +98,13 @@ class Phase2EvaluatorAgentService:
         # Soft-fence: if some accepted but not enough, do NOT collapse to 0; proceed but advise relax.
         if len(accepted) > 0:
             feedback = "Low viable count. Suggest widen recency to 7 days and ATS-preferred remote roles." \
-                       " Exclude India job boards (-India -Shine -Naukri)."
+                       " Exclude low-signal aggregator boards and widen ATS-preferred sources."
             return batch_score, f"Only {len(accepted)} viable jobs", "PROCEED", feedback
 
         # None accepted: retry with strategy shift (not hard fail)
         feedback = (
             "No viable jobs after strict filtering. Shift strategy: ATS-preferred (not ATS-only), widen to 7 days, "
-            "require Solution Architect keywords, add negatives: -India -Bangalore -Nashik -Shine -Naukri."
+            "keep role-specific keywords, and suppress low-signal aggregator board noise."
         )
         return 0.2, "All jobs rejected (soft-fence) — shifting strategy", "RETRY_SEARCH", feedback
 
