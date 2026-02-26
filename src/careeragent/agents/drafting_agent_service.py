@@ -4,10 +4,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import httpx
-from docx import Document
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 
 from careeragent.core.settings import Settings
 from careeragent.core.state import AgentState, ArtifactRef
@@ -18,6 +14,8 @@ from careeragent.tools.web_tools import stable_key
 
 def _write_usa_ats_docx(text: str, path: Path) -> None:
     """Write strict single-column ATS-safe docx (no tables, no images)."""
+    from docx import Document
+
     doc = Document()
     for raw in text.splitlines():
         line = raw.strip()
@@ -38,8 +36,27 @@ def _write_usa_ats_docx(text: str, path: Path) -> None:
     doc.save(str(path))
 
 
+def _strip_markdown(text: str) -> str:
+    """Remove markdown formatting so generated documents remain ATS-safe plain text."""
+    cleaned_lines: List[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^[-*+]\s+", "", line)
+        line = re.sub(r"^\d+\.\s+", "", line)
+        line = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
+        line = re.sub(r"\*(.*?)\*", r"\1", line)
+        line = re.sub(r"`([^`]*)`", r"\1", line)
+        line = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
+
 def _write_pdf(text: str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
     c = canvas.Canvas(str(path), pagesize=letter)
     width, height = letter
     y = height - 50
@@ -56,6 +73,8 @@ def _fetch_linkedin_achievements(linkedin_url: str) -> List[str]:
     if not linkedin_url:
         return []
     try:
+        import httpx
+
         r = httpx.get(linkedin_url, timeout=15.0, follow_redirects=True, headers={"User-Agent": "CareerAgentAI/1.0"})
         if r.status_code >= 400:
             return []
@@ -124,7 +143,10 @@ class DraftingAgentService:
             jd = (job.get("full_text_md") or job.get("snippet") or "")
             title = job.get("title") or "Target Role"
 
-            resume_md, cover_md = self._gen_with_llm(prof, jd, title, linkedin_achievements=linkedin_achievements)
+            revision_notes = str((state.meta or {}).get("draft_revision_feedback") or "")
+            resume_md, cover_md = self._gen_with_llm(prof, jd, title, linkedin_achievements=linkedin_achievements, revision_notes=revision_notes)
+            resume_plain = _strip_markdown(resume_md)
+            cover_plain = _strip_markdown(cover_md)
 
             layout_pct = ats_format_check_percent(resume_md)
             align = compute_jd_alignment(jd_text=jd, resume_skills=extract_skills(resume_md, extra_candidates=profile_skills))
@@ -150,10 +172,10 @@ class DraftingAgentService:
             run_dir.mkdir(parents=True, exist_ok=True)
             resume_md_path.write_text(resume_md, encoding="utf-8")
             cover_md_path.write_text(cover_md, encoding="utf-8")
-            _write_usa_ats_docx(resume_md, resume_docx)
-            _write_usa_ats_docx(cover_md, cover_docx)
-            _write_pdf(resume_md, resume_pdf)
-            _write_pdf(cover_md, cover_pdf)
+            _write_usa_ats_docx(resume_plain, resume_docx)
+            _write_usa_ats_docx(cover_plain, cover_docx)
+            _write_pdf(resume_plain, resume_pdf)
+            _write_pdf(cover_plain, cover_pdf)
 
             state.artifacts[f"resume_{key}"] = ArtifactRef(path=str(resume_md_path), mime="text/markdown")
             state.artifacts[f"cover_{key}"] = ArtifactRef(path=str(cover_md_path), mime="text/markdown")
@@ -166,7 +188,7 @@ class DraftingAgentService:
 
         return out
 
-    def _gen_with_llm(self, profile: Dict[str, Any], jd: str, title: str, *, linkedin_achievements: List[str]) -> Tuple[str, str]:
+    def _gen_with_llm(self, profile: Dict[str, Any], jd: str, title: str, *, linkedin_achievements: List[str], revision_notes: str = "") -> Tuple[str, str]:
         name = str(profile.get("name") or "Candidate")
         exp = (profile.get("experience") or [])
         best = exp[0] if exp else {}
@@ -207,6 +229,7 @@ class DraftingAgentService:
             "Use only candidate facts, no fabrication. Return STRICT JSON: {resume_md: string, cover_md: string}.\n\n"
             f"CANDIDATE_PROFILE_JSON: {profile}\n\n"
             f"RECENT_ACHIEVEMENTS_FROM_LINKEDIN: {linkedin_achievements}\n\n"
+            f"HITL_REVISION_NOTES: {revision_notes or 'None'}\n\n"
             f"JOB_TITLE: {title}\nJOB_DESCRIPTION:\n{jd[:9000]}\n"
         )
         j = self.gemini.generate_json(prompt, temperature=0.2, max_tokens=1600)
