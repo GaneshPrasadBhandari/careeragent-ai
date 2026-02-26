@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import quote_plus
 
 from careeragent.core.settings import Settings
 from careeragent.core.state import AgentState
-from careeragent.tools.web_tools import (
-    JinaReader,
-    RobotsGuard,
-    canonical_url,
-    extract_explicit_location,
-    is_outside_target_geo,
-)
+from careeragent.tools.web_tools import JinaReader, RobotsGuard, SerperClient, canonical_url, extract_explicit_location, is_outside_target_geo
 
 
 class LeadScout:
@@ -25,6 +19,7 @@ class LeadScout:
 
     def __init__(self, settings: Settings) -> None:
         self.s = settings
+        self.serper = SerperClient(settings)
 
     @staticmethod
     def _resolve_location(state: AgentState) -> str:
@@ -47,16 +42,42 @@ class LeadScout:
     def _profile_skill_terms(state: AgentState, limit: int = 36) -> List[str]:
         skills = (state.extracted_profile or {}).get("skills") or []
         cleaned: List[str] = []
+        seen = set()
         for skill in skills:
             sk = str(skill or "").strip()
             if len(sk) < 2:
                 continue
-            if sk.lower() in {x.lower() for x in cleaned}:
+            key = sk.lower()
+            if key in seen:
                 continue
+            seen.add(key)
             cleaned.append(sk)
             if len(cleaned) >= limit:
                 break
         return cleaned
+
+    @staticmethod
+    def _cluster_skills(skills: List[str]) -> Dict[str, List[str]]:
+        taxonomy = {
+            "cloud": ["aws", "azure", "gcp", "cloud", "kubernetes", "docker", "ec2"],
+            "data": ["sql", "spark", "airflow", "dbt", "etl", "warehouse", "snowflake"],
+            "backend": ["python", "java", "golang", "node", "api", "microservices", "fastapi"],
+            "frontend": ["react", "typescript", "javascript", "next", "ui", "css", "html"],
+            "ai_ml": ["llm", "langchain", "langgraph", "ml", "ai", "pytorch", "tensorflow", "rag"],
+            "devops": ["terraform", "ansible", "jenkins", "github actions", "ci/cd", "prometheus"],
+        }
+        clusters: Dict[str, List[str]] = {k: [] for k in taxonomy}
+        clusters["general"] = []
+        for sk in skills:
+            low = sk.lower()
+            matched = False
+            for group, hints in taxonomy.items():
+                if any(h in low for h in hints):
+                    clusters[group].append(sk)
+                    matched = True
+            if not matched:
+                clusters["general"].append(sk)
+        return {k: v for k, v in clusters.items() if v}
 
     def build_query(self, state: AgentState) -> str:
         persona = next((p for p in state.search_personas if p.persona_id == state.active_persona_id), None)
@@ -64,61 +85,67 @@ class LeadScout:
             persona = state.search_personas[0]
             state.active_persona_id = persona.persona_id
 
-        must = " ".join([f'"{x}"' for x in persona.must_include if x])
+        must_terms = [x for x in persona.must_include if x]
         neg = " ".join([f"-{x}" for x in persona.negative_terms if x])
 
-        profile_skills = self._profile_skill_terms(state, limit=36)
-        skill_groups: List[str] = []
-        for i in range(0, len(profile_skills), 6):
-            batch = profile_skills[i:i + 6]
-            if batch:
-                skill_groups.append("(" + " OR ".join([f'\"{x}\"' for x in batch]) + ")")
-        skill_query = " ".join(skill_groups[:6])
+        broadening_level = int(state.query_modifiers.get("broadening_level") or 0)
+        if broadening_level > 0 and must_terms:
+            keep_count = max(1, len(must_terms) - broadening_level)
+            must_terms = must_terms[:keep_count]
 
-        recency = ""
-        if persona.recency_hours <= 36:
-            recency = '("posted today" OR "last 24 hours" OR "1 day ago" OR "24 hours")'
-        else:
-            recency = '("posted" OR "days ago" OR "this week")'
+        must = " ".join([f'"{x}"' for x in must_terms])
+
+        profile_skills = self._profile_skill_terms(state, limit=36)
+        clusters = self._cluster_skills(profile_skills)
+        cluster_exprs: List[str] = []
+        for _, items in clusters.items():
+            cluster_exprs.append("(" + " OR ".join([f'"{x}"' for x in items[:6]]) + ")")
+        skill_query = "(" + " OR ".join(cluster_exprs[:5]) + ")" if cluster_exprs else ""
+
+        recency = '("posted today" OR "last 24 hours" OR "1 day ago" OR "24 hours")'
+        if persona.recency_hours > 36 or broadening_level >= 2:
+            recency = '("posted" OR "days ago" OR "this week" OR "last week")'
 
         sites = ""
         if persona.strategy in ("ats_only", "ats_preferred") and persona.site_filters:
-            # ATS-preferred: add sites as OR terms but do not hard filter unless ats_only
             ors = " OR ".join([f"site:{d}" for d in persona.site_filters])
             sites = f"({ors})"
 
         location = self._resolve_location(state)
         geo = f'("{location}" OR "Remote")'
 
-        # refinement feedback injection
         fb = (state.refinement_feedback or "").strip()
-        extra_neg = ""
-        if fb:
-            # crude extraction: any '-X' terms already present
-            extra_neg = " ".join([t for t in fb.split() if t.startswith("-")])
-
-        broadening_level = int(state.query_modifiers.get("broadening_level") or 0)
-        if broadening_level > 0 and persona.must_include:
-            keep_count = max(1, len(persona.must_include) - broadening_level)
-            must = " ".join([f'"{x}"' for x in persona.must_include[:keep_count] if x])
-            if broadening_level >= 2:
-                recency = '("posted" OR "days ago" OR "this week" OR "last week")'
+        extra_neg = " ".join([t for t in fb.split() if t.startswith("-")]) if fb else ""
 
         q = " ".join([must, skill_query, geo, recency, sites, neg, extra_neg]).strip()
         state.query_modifiers["broadening_level"] = broadening_level
+        state.query_modifiers["last_query"] = q
         return q
 
     def search(self, state: AgentState, limit: int = 25) -> List[Dict[str, Any]]:
-        query = self.build_query(state)
-        state.query_modifiers["last_query"] = query
-
         results: List[Dict[str, Any]] = []
         location = self._resolve_location(state)
         country_code = self._resolve_country_code(state)
-        for board in ("linkedin", "indeed"):
-            results.extend(self._retry_scrape(board, query, attempts=3, timeout_s=30, location=location, country_code=country_code))
 
-        # dedupe and clean
+        for corrective_attempt in range(0, 3):
+            query = self.build_query(state)
+            for board in ("linkedin", "indeed"):
+                results.extend(self._retry_scrape(board, query, attempts=2, timeout_s=30, location=location, country_code=country_code))
+            results.extend(self.serper.search(query=f"{query} jobs", num=12))
+
+            deduped = self._dedupe(results, limit=limit)
+            if deduped:
+                return deduped
+
+            state.query_modifiers["broadening_level"] = int(state.query_modifiers.get("broadening_level") or 0) + 1
+            state.log_eval(
+                f"[L3 Self-Correction] jobs_raw=0, increasing broadening_level to {state.query_modifiers['broadening_level']} (attempt {corrective_attempt + 1}/3)"
+            )
+
+        return self._dedupe(results, limit=limit)
+
+    @staticmethod
+    def _dedupe(results: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
         seen = set()
         out: List[Dict[str, Any]] = []
         for r in results:
@@ -145,14 +172,8 @@ class LeadScout:
     def _search_url(board: str, query: str, *, location: str, country_code: str) -> str:
         q = quote_plus(query)
         if board == "linkedin":
-            return (
-                "https://www.linkedin.com/jobs/search/"
-                f"?keywords={q}&location={quote_plus(location)}&f_TPR=r86400"
-            )
-        return (
-            f"https://www.indeed.com/jobs?q={q}&l={quote_plus(location)}"
-            f"&fromage=1&country={quote_plus(country_code.lower())}"
-        )
+            return "https://www.linkedin.com/jobs/search/" f"?keywords={q}&location={quote_plus(location)}&f_TPR=r86400"
+        return f"https://www.indeed.com/jobs?q={q}&l={quote_plus(location)}" f"&fromage=1&country={quote_plus(country_code.lower())}"
 
     def _scrape_board(self, board: str, query: str, timeout_s: int, *, location: str, country_code: str) -> List[Dict[str, Any]]:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -170,14 +191,16 @@ class LeadScout:
                 ),
                 locale="en-US",
                 viewport={"width": 1366, "height": 900},
-                extra_http_headers={
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Upgrade-Insecure-Requests": "1",
-                    "DNT": "1",
-                },
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9", "Upgrade-Insecure-Requests": "1", "DNT": "1"},
             )
             page = context.new_page()
             try:
+                try:
+                    from playwright_stealth import stealth_sync
+
+                    stealth_sync(page)
+                except Exception:
+                    pass
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             except PlaywrightTimeoutError as exc:
                 browser.close()
@@ -225,7 +248,6 @@ class GeoFenceManager:
 
         for j in jobs:
             url = j.get("url") or ""
-            # Only use explicit metadata: snippet/title/head; NOT full body mentions.
             loc = extract_explicit_location(j.get("snippet") or "", j.get("title") or "", "")
             if is_outside_target_geo(url, [state.preferences.location, state.preferences.country], explicit_location=loc or ""):
                 rejected.append(f"reject outside target geo: {url} loc='{loc or 'unknown'}'")

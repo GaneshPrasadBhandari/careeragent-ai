@@ -28,6 +28,7 @@ dependencies = [
   "langsmith>=0.7.5",         # Tracing and observability for agent debugging
   "firecrawl-py>=4.16.3",     # Advanced web scraping/job data extraction
   "playwright>=1.40.0",       # L7: Browser automation for auto-applying
+  "playwright-stealth>=1.0.6",
   "ntfy>=0.3.0",              # L5/L8: Push notifications for HITL events
   "twilio>=9.10.2",
   "google-api-python-client>=2.177.0",
@@ -52,6 +53,8 @@ docs = ["mkdocs-material>=9.5"]
 
 [dependency-groups]
 dev = [
+  "pydantic>=2.0",
+  "pydantic-settings>=2.2",
   "pytest>=8.0",              # Unit and integration testing
   "pytest-cov>=5.0",          # Test coverage reporting
   "ruff>=0.6.0",              # Fast linting and formatting
@@ -68,3 +71,8 @@ packages = ["src/careeragent"]
 
 [tool.uv]
 managed = true
+
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests/unit", "tests/integration"]
