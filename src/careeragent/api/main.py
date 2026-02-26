@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware

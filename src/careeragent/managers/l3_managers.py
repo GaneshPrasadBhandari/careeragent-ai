@@ -11,9 +11,9 @@ from careeragent.tools.web_tools import (
     JinaReader,
     RobotsGuard,
     canonical_url,
-    domain_is_india,
     extract_explicit_location,
     is_non_us_location,
+    is_outside_target_geo,
 )
 
 
@@ -203,8 +203,8 @@ class GeoFenceManager:
 
         for j in jobs:
             url = j.get("url") or ""
-            if domain_is_india(url):
-                rejected.append(f"reject domain india: {url}")
+            if is_outside_target_geo(url, [state.preferences.location]):
+                rejected.append(f"reject outside target geo: {url}")
                 continue
 
             # Only use explicit metadata: snippet/title/head; NOT full body mentions.

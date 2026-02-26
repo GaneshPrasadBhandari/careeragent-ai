@@ -188,19 +188,19 @@ def is_non_us_location(loc: str) -> bool:
         return False
     l = loc.lower()
     # Hard non-US mentions
-    for bad in ["india", "bangalore", "nashik", "pune", "hyderabad", "chennai", "mumbai"]:
+    for bad in ["nashik", "pune", "hyderabad", "chennai", "mumbai", "karachi", "moscow"]:
         if bad in l:
             return True
     return False
 
 
-def domain_is_india(url: str) -> bool:
-    try:
-        host = urllib.parse.urlsplit(url).netloc.lower()
-        if host.endswith(".in"):
-            return True
-        if any(x in host for x in ["shine.", "naukri.", "timesjobs."]):
-            return True
-        return False
-    except Exception:
-        return False
+def is_outside_target_geo(url: str, allowed_geos: list) -> bool:
+    """
+    Dynamic geo-fencing. Checks if the URL belongs to a region NOT
+    in the allowed_geos list.
+    """
+    normalized_allowed_geos = [str(g).lower() for g in allowed_geos if g]
+    # Check for top-level domains like .in, .uk if they aren't in allowed_geos
+    if any(url.endswith(f".{geo.lower()}") for geo in ["in", "pk", "ru"] if geo.lower() not in normalized_allowed_geos):
+        return True
+    return False
