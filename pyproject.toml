@@ -28,6 +28,7 @@ dependencies = [
   "firecrawl-py>=4.16.3",     # Advanced web scraping/job data extraction
   "playwright>=1.40.0",       # L7: Browser automation for auto-applying
   "ntfy>=0.3.0",              # L5/L8: Push notifications for HITL events
+  "twilio>=9.10.2",
 ]
 
 [project.optional-dependencies]
