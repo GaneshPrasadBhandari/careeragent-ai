@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import zipfile
+from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -59,6 +60,14 @@ class SkillExtractionValidator(BaseModel):
     skills: List[str] = Field(default_factory=list)
 
 
+DEFAULT_MASTER_TECH_STACK = [
+    "Python", "Java", "JavaScript", "TypeScript", "SQL", "NoSQL", "PostgreSQL", "MySQL", "MongoDB", "Redis",
+    "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "Airflow", "Spark", "Hadoop", "Kafka",
+    "REST", "GraphQL", "FastAPI", "Django", "Flask", "React", "Node.js", "Pandas", "NumPy", "PyTorch",
+    "TensorFlow", "Scikit-learn", "LLM", "Prompt Engineering", "CI/CD", "Git", "Linux", "Tableau", "Power BI",
+]
+
+
 def _rx_email(text: str) -> Optional[str]:
     m = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
     return m.group(0) if m else None
@@ -106,6 +115,61 @@ def _clean_skill_token(token: str) -> Optional[str]:
     return s
 
 
+def _load_master_tech_stack() -> List[str]:
+    candidates = [
+        Path("master_tech_stack.json"),
+        Path("src/careeragent/artifacts/master_tech_stack.json"),
+        Path(__file__).resolve().parents[3] / "master_tech_stack.json",
+    ]
+    for p in candidates:
+        if not p.exists():
+            continue
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            raw = payload.get("skills") or payload.get("tech_stack") or []
+        else:
+            raw = payload
+        if not isinstance(raw, list):
+            continue
+        cleaned = [_clean_skill_token(str(x) or "") for x in raw]
+        items = [x for x in cleaned if x]
+        if items:
+            return items
+    return DEFAULT_MASTER_TECH_STACK
+
+
+def _fuzzy_match_token(token: str, master: List[str], threshold: float = 0.84) -> Optional[str]:
+    t = _clean_skill_token(token)
+    if not t:
+        return None
+    low = t.lower()
+    for m in master:
+        if low == m.lower():
+            return m
+    best: Optional[str] = None
+    score = 0.0
+    for m in master:
+        s = SequenceMatcher(None, low, m.lower()).ratio()
+        if s > score:
+            score = s
+            best = m
+    if best and score >= threshold:
+        return best
+    return t
+
+
+def _regex_skill_fallback(text: str, master: List[str]) -> List[str]:
+    found: List[str] = []
+    for skill in master:
+        pattern = r"(?<!\w)" + re.escape(skill).replace(r"\ ", r"[\s\-/]+") + r"(?!\w)"
+        if re.search(pattern, text or "", flags=re.I):
+            found.append(skill)
+    return found
+
+
 def _extract_skill_like_lines(text: str) -> List[str]:
     out: List[str] = []
     capture = False
@@ -140,12 +204,13 @@ def _parse_skills(text: str) -> List[str]:
 
 def _validate_and_backfill_skills(text: str, current_skills: List[str]) -> List[str]:
     """Recover missing skills without hard-coded domain assumptions."""
+    master = _load_master_tech_stack()
     recovered = _extract_skill_like_lines(text)
     validated = SkillExtractionValidator.model_validate({"skills": list(current_skills or []) + recovered})
     deduped: List[str] = []
     seen = set()
     for skill in validated.skills:
-        clean = _clean_skill_token(skill)
+        clean = _fuzzy_match_token(skill, master)
         if not clean:
             continue
         key = clean.lower()
@@ -153,6 +218,13 @@ def _validate_and_backfill_skills(text: str, current_skills: List[str]) -> List[
             continue
         seen.add(key)
         deduped.append(clean)
+    if not deduped:
+        for skill in _regex_skill_fallback(text, master):
+            key = skill.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(skill)
     return deduped[:100]
 
 
@@ -285,6 +357,20 @@ class ParserAgentService:
         self.s = settings
         self.gemini = GeminiClient(settings)
 
+    @staticmethod
+    def _coerce_llm_json(payload: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            txt = payload.strip()
+            txt = re.sub(r"^```(?:json)?\s*|\s*```$", "", txt, flags=re.I | re.S).strip()
+            try:
+                j = json.loads(txt)
+            except Exception:
+                return None
+            return j if isinstance(j, dict) else None
+        return None
+
     def _llm_skill_backfill(self, text: str, current_skills: List[str]) -> List[str]:
         if not self.s.GEMINI_API_KEY:
             return current_skills
@@ -293,7 +379,7 @@ class ParserAgentService:
             "if explicitly present. Return STRICT JSON: {skills: string[]}. Do not invent data.\n\n"
             f"CURRENT_SKILLS: {current_skills}\n\nRESUME_TEXT:\n{text[:10000]}"
         )
-        j = self.gemini.generate_json(prompt, temperature=0.0, max_tokens=500)
+        j = self._coerce_llm_json(self.gemini.generate_json(prompt, temperature=0.0, max_tokens=500))
         if not isinstance(j, dict):
             return current_skills
         try:
@@ -371,7 +457,7 @@ class ParserAgentService:
                 "summary, skills(list), experience(list of {title,company,start_date,end_date,bullets}), education(list). "
                 "Do NOT invent data; use null if unknown.\n\nRESUME_TEXT:\n" + text[:12000]
             )
-            j = self.gemini.generate_json(prompt, temperature=0.1, max_tokens=1000)
+            j = self._coerce_llm_json(self.gemini.generate_json(prompt, temperature=0.1, max_tokens=1000))
             if isinstance(j, dict):
                 try:
                     llm = ExtractedResume.model_validate(j)
