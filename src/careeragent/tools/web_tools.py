@@ -196,11 +196,13 @@ def is_non_us_location(loc: str) -> bool:
 
 def is_outside_target_geo(url: str, allowed_geos: list) -> bool:
     """
-    Dynamic geo-fencing. Checks if the URL belongs to a region NOT
-    in the allowed_geos list.
+    Checks if a URL belongs to a blocked top-level domain based on
+    the user's allowed locations.
     """
-    normalized_allowed_geos = [str(g).lower() for g in allowed_geos if g]
-    # Check for top-level domains like .in, .uk if they aren't in allowed_geos
-    if any(url.endswith(f".{geo.lower()}") for geo in ["in", "pk", "ru"] if geo.lower() not in normalized_allowed_geos):
-        return True
+    blocked_tlds = [".in", ".pk", ".ru"]
+    # If allowed_geos includes 'US' or 'Remote', we block specific non-target TLDs
+    if any(url.lower().endswith(tld) for tld in blocked_tlds):
+        # Check if the blocked TLD is actually in our allowed list (unlikely for India/US mix)
+        if not any(g.lower() in ["india", "in"] for g in allowed_geos):
+            return True
     return False
