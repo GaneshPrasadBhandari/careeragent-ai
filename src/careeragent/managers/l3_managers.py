@@ -12,7 +12,6 @@ from careeragent.tools.web_tools import (
     RobotsGuard,
     canonical_url,
     extract_explicit_location,
-    is_non_us_location,
     is_outside_target_geo,
 )
 
@@ -44,6 +43,21 @@ class LeadScout:
             return raw
         return "US"
 
+    @staticmethod
+    def _profile_skill_terms(state: AgentState, limit: int = 36) -> List[str]:
+        skills = (state.extracted_profile or {}).get("skills") or []
+        cleaned: List[str] = []
+        for skill in skills:
+            sk = str(skill or "").strip()
+            if len(sk) < 2:
+                continue
+            if sk.lower() in {x.lower() for x in cleaned}:
+                continue
+            cleaned.append(sk)
+            if len(cleaned) >= limit:
+                break
+        return cleaned
+
     def build_query(self, state: AgentState) -> str:
         persona = next((p for p in state.search_personas if p.persona_id == state.active_persona_id), None)
         if not persona:
@@ -52,6 +66,14 @@ class LeadScout:
 
         must = " ".join([f'"{x}"' for x in persona.must_include if x])
         neg = " ".join([f"-{x}" for x in persona.negative_terms if x])
+
+        profile_skills = self._profile_skill_terms(state, limit=36)
+        skill_groups: List[str] = []
+        for i in range(0, len(profile_skills), 6):
+            batch = profile_skills[i:i + 6]
+            if batch:
+                skill_groups.append("(" + " OR ".join([f'\"{x}\"' for x in batch]) + ")")
+        skill_query = " ".join(skill_groups[:6])
 
         recency = ""
         if persona.recency_hours <= 36:
@@ -82,7 +104,7 @@ class LeadScout:
             if broadening_level >= 2:
                 recency = '("posted" OR "days ago" OR "this week" OR "last week")'
 
-        q = " ".join([must, geo, recency, sites, neg, extra_neg]).strip()
+        q = " ".join([must, skill_query, geo, recency, sites, neg, extra_neg]).strip()
         state.query_modifiers["broadening_level"] = broadening_level
         return q
 
@@ -203,14 +225,10 @@ class GeoFenceManager:
 
         for j in jobs:
             url = j.get("url") or ""
-            if is_outside_target_geo(url, [state.preferences.location]):
-                rejected.append(f"reject outside target geo: {url}")
-                continue
-
             # Only use explicit metadata: snippet/title/head; NOT full body mentions.
             loc = extract_explicit_location(j.get("snippet") or "", j.get("title") or "", "")
-            if state.preferences.country.upper() == "US" and loc and is_non_us_location(loc):
-                rejected.append(f"reject non-us location '{loc}': {url}")
+            if is_outside_target_geo(url, [state.preferences.location, state.preferences.country], explicit_location=loc or ""):
+                rejected.append(f"reject outside target geo: {url} loc='{loc or 'unknown'}'")
                 continue
 
             j["location_hint"] = loc
