@@ -20,6 +20,7 @@ dependencies = [
   "orjson>=3.10",             # High-performance JSON serialization
   "reportlab>=4.4.10",        # PDF generation for resumes/reports
   "streamlit>=1.33",          # Dashboard for mission control
+  "streamlit-autorefresh>=1.0.1",
   "pypdf>=6.7.1",             # Parsing existing PDF resumes
   "python-multipart>=0.0.22", # Handling file uploads in FastAPI
   "python-docx>=1.2.0",       # Creating ATS-friendly .docx resumes
@@ -29,6 +30,8 @@ dependencies = [
   "playwright>=1.40.0",       # L7: Browser automation for auto-applying
   "ntfy>=0.3.0",              # L5/L8: Push notifications for HITL events
   "twilio>=9.10.2",
+  "google-api-python-client>=2.177.0",
+  "google-auth>=2.40.3",
 ]
 
 [project.optional-dependencies]

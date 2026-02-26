@@ -183,26 +183,24 @@ def extract_explicit_location(snippet: str, title: str = "", body_head: str = ""
     return None
 
 
-def is_non_us_location(loc: str) -> bool:
-    if not loc:
-        return False
-    l = loc.lower()
-    # Hard non-US mentions
-    for bad in ["nashik", "pune", "hyderabad", "chennai", "mumbai", "karachi", "moscow"]:
-        if bad in l:
-            return True
-    return False
-
-
-def is_outside_target_geo(url: str, allowed_geos: list) -> bool:
+def is_outside_target_geo(url: str, allowed_geos: list, *, explicit_location: str = "") -> bool:
     """
     Checks if a URL belongs to a blocked top-level domain based on
     the user's allowed locations.
     """
     blocked_tlds = [".in", ".pk", ".ru"]
-    # If allowed_geos includes 'US' or 'Remote', we block specific non-target TLDs
+    allowed_blob = " ".join([str(g or "").lower() for g in allowed_geos])
+    loc = str(explicit_location or "").lower()
+
     if any(url.lower().endswith(tld) for tld in blocked_tlds):
-        # Check if the blocked TLD is actually in our allowed list (unlikely for India/US mix)
-        if not any(g.lower() in ["india", "in"] for g in allowed_geos):
+        us_allow = any(token in allowed_blob for token in ["us", "usa", "united states", "remote"])
+        if us_allow:
+            return True
+
+    # Explicit location check remains metadata-driven and avoids parsing full body text.
+    if loc:
+        us_markers = ["us", "u.s", "usa", "united states", "remote"]
+        us_allow = any(token in allowed_blob for token in us_markers)
+        if us_allow and not any(marker in loc for marker in us_markers):
             return True
     return False
