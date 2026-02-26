@@ -291,9 +291,7 @@ async def L3_discovery(st: Dict[str, Any]) -> Dict[str, Any]:
     strategy = str(st.get("search_strategy") or "default").strip().lower()
 
     country = str(prefs.get("country") or "US").strip().upper()
-    if country == "US":
-        # Common India/foreign noise exclusions
-        neg_terms.extend(["India", "Bangalore", "Nashik", "Pune", "Hyderabad", "Chennai", "Mumbai", "Shine", "Naukri"])
+    neg_terms.extend(["Shine", "Naukri", "TimesJobs", "Freshersworld", "Monster"])
 
     neg_clause = " ".join([f"-{t}" for t in list(dict.fromkeys(neg_terms))[:18]])
     include_clause = " ".join(list(dict.fromkeys(must_include))[:10])

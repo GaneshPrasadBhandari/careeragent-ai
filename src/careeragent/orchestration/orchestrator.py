@@ -324,6 +324,10 @@ class Orchestrator:
             kept, rejected = self.geo.filter(state, raw)
             enriched, notes = self.extract.enrich(state, kept, max_jobs=state.preferences.max_jobs)
             state.jobs_raw = enriched
+            if len(enriched) == 0:
+                current_broadening = int(state.query_modifiers.get("broadening_level") or 0)
+                state.query_modifiers["broadening_level"] = current_broadening + 1
+                state.log_eval(f"[L3] Zero jobs discovered; increasing broadening_level to {current_broadening + 1}")
             self._persist_json_artifact(state, "jobs_raw", state.jobs_raw)
             state.end_step_ok("L3", f"jobs_raw={len(enriched)} rejected={len(rejected)}")
             self.store.save(state)
@@ -334,6 +338,15 @@ class Orchestrator:
             self._persist_json_artifact(state, "jobs_scored", state.jobs_scored)
             state.end_step_ok("L4", f"jobs_scored={len(state.jobs_scored)}")
             self.store.save(state)
+
+            # Emergency loop breaker: after 2 refinements with zero scored jobs, force manual path.
+            if len(state.jobs_scored) == 0 and int(state.retry_count) >= 2:
+                state.status = "needs_human_approval"
+                state.pending_action = "review_ranking"
+                state.meta["force_manual_job_link"] = True
+                state.log_eval("[L3/L4] Zero scored jobs after 2 refinements; forcing Manual Job Link fallback.")
+                self.store.save(state)
+                return state
 
             if state.meta.get("l4_recursive_loop_required"):
                 state.retry_count += 1

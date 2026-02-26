@@ -16,6 +16,25 @@ ATS_SITES = [
 ]
 
 
+ATS_NOISE_TERMS = ["Shine", "Naukri", "TimesJobs", "Freshersworld", "Monster"]
+
+
+def _resolve_location_terms(state: AgentState) -> List[str]:
+    pref_loc = (state.preferences.location or "").strip()
+    profile_loc = str((state.extracted_profile or {}).get("contact", {}).get("location") or "").strip()
+    resolved = pref_loc or profile_loc or "United States, Remote"
+    parts = [x.strip() for x in resolved.replace(";", ",").split(",") if x.strip()]
+    terms = [resolved]
+    terms.extend(parts[:2])
+    if (state.preferences.country or "US").strip().upper() in {"US", "USA", "UNITED STATES"}:
+        terms.extend(["United States", "USA", "Remote"])
+    return list(dict.fromkeys([t for t in terms if t]))[:6]
+
+
+def _default_negative_terms() -> List[str]:
+    return ATS_NOISE_TERMS[:]
+
+
 class Planner:
     """Description: Planner builds dynamic search personas from profile + preferences.
     Layer: L2
@@ -25,45 +44,46 @@ class Planner:
 
     def build_personas(self, state: AgentState) -> List[PlannerPersona]:
         roles = state.preferences.target_roles or []
-        # infer a primary role phrase
         primary = roles[0] if roles else "Solution Architect"
 
         must = [primary]
-        # add architecture synonyms for SA roles
         if "architect" in primary.lower() or "solution" in primary.lower():
             must += ["Solution Architect", "AI Solution Architect", "GenAI Architect", "Solutions Architecture"]
 
-        negative = ["India", "Bangalore", "Nashik", "Shine", "Naukri", "TimesJobs"]
+        negative = _default_negative_terms()
+        location_terms = _resolve_location_terms(state)
+        geo_hint = location_terms[0] if location_terms else "United States, Remote"
 
         pA = PlannerPersona(
             persona_id="A",
-            name="Strict ATS US 36h",
+            name=f"Strict ATS {geo_hint} 36h",
             strategy="ats_preferred",
             recency_hours=min(36.0, state.preferences.recency_hours),
-            must_include=must,
+            must_include=list(dict.fromkeys(must + location_terms[:2])),
             negative_terms=negative,
             site_filters=ATS_SITES,
         )
         pB = PlannerPersona(
             persona_id="B",
-            name="ATS-preferred Remote US 7d",
+            name=f"ATS-preferred {geo_hint} 7d",
             strategy="ats_preferred",
             recency_hours=max(168.0, state.preferences.recency_hours),
-            must_include=must + ["remote", "hybrid"],
+            must_include=list(dict.fromkeys(must + ["remote", "hybrid"] + location_terms[:2])),
             negative_terms=negative,
             site_filters=ATS_SITES,
         )
         pC = PlannerPersona(
             persona_id="C",
-            name="Broad US title-strict",
+            name=f"Broad {geo_hint} title-strict",
             strategy="broad",
             recency_hours=max(168.0, state.preferences.recency_hours),
-            must_include=[primary, "United States"],
+            must_include=list(dict.fromkeys([primary] + location_terms[:2])),
             negative_terms=negative,
             site_filters=[],
         )
 
         return [pA, pB, pC]
+
 
 
 class Director:

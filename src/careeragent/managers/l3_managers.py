@@ -27,6 +27,23 @@ class LeadScout:
     def __init__(self, settings: Settings) -> None:
         self.s = settings
 
+    @staticmethod
+    def _resolve_location(state: AgentState) -> str:
+        pref_loc = (state.preferences.location or "").strip()
+        profile_loc = str((state.extracted_profile or {}).get("contact", {}).get("location") or "").strip()
+        return pref_loc or profile_loc or "United States, Remote"
+
+    @staticmethod
+    def _resolve_country_code(state: AgentState) -> str:
+        raw = (state.preferences.country or "").strip().upper()
+        if not raw:
+            return "US"
+        if raw in {"US", "USA", "UNITED STATES"}:
+            return "US"
+        if len(raw) == 2:
+            return raw
+        return "US"
+
     def build_query(self, state: AgentState) -> str:
         persona = next((p for p in state.search_personas if p.persona_id == state.active_persona_id), None)
         if not persona:
@@ -48,9 +65,8 @@ class LeadScout:
             ors = " OR ".join([f"site:{d}" for d in persona.site_filters])
             sites = f"({ors})"
 
-        geo = ""
-        if state.preferences.country.upper() == "US":
-            geo = '("United States" OR "USA" OR "Remote")'
+        location = self._resolve_location(state)
+        geo = f'("{location}" OR "Remote")'
 
         # refinement feedback injection
         fb = (state.refinement_feedback or "").strip()
@@ -59,7 +75,15 @@ class LeadScout:
             # crude extraction: any '-X' terms already present
             extra_neg = " ".join([t for t in fb.split() if t.startswith("-")])
 
+        broadening_level = int(state.query_modifiers.get("broadening_level") or 0)
+        if broadening_level > 0 and persona.must_include:
+            keep_count = max(1, len(persona.must_include) - broadening_level)
+            must = " ".join([f'"{x}"' for x in persona.must_include[:keep_count] if x])
+            if broadening_level >= 2:
+                recency = '("posted" OR "days ago" OR "this week" OR "last week")'
+
         q = " ".join([must, geo, recency, sites, neg, extra_neg]).strip()
+        state.query_modifiers["broadening_level"] = broadening_level
         return q
 
     def search(self, state: AgentState, limit: int = 25) -> List[Dict[str, Any]]:
@@ -67,8 +91,10 @@ class LeadScout:
         state.query_modifiers["last_query"] = query
 
         results: List[Dict[str, Any]] = []
+        location = self._resolve_location(state)
+        country_code = self._resolve_country_code(state)
         for board in ("linkedin", "indeed"):
-            results.extend(self._retry_scrape(board, query, attempts=3, timeout_s=30))
+            results.extend(self._retry_scrape(board, query, attempts=3, timeout_s=30, location=location, country_code=country_code))
 
         # dedupe and clean
         seen = set()
@@ -83,28 +109,34 @@ class LeadScout:
                 break
         return out
 
-    def _retry_scrape(self, board: str, query: str, *, attempts: int, timeout_s: int) -> List[Dict[str, Any]]:
+    def _retry_scrape(self, board: str, query: str, *, attempts: int, timeout_s: int, location: str, country_code: str) -> List[Dict[str, Any]]:
         last_error = ""
         for attempt in range(1, attempts + 1):
             try:
                 time.sleep(random.uniform(0.4, 1.2) * attempt)
-                return self._scrape_board(board, query, timeout_s)
+                return self._scrape_board(board, query, timeout_s, location=location, country_code=country_code)
             except Exception as exc:
                 last_error = str(exc)
         return [{"title": f"{board} scrape failed", "url": "", "snippet": f"Read Timeout/blocked: {last_error}"}]
 
     @staticmethod
-    def _search_url(board: str, query: str) -> str:
+    def _search_url(board: str, query: str, *, location: str, country_code: str) -> str:
         q = quote_plus(query)
         if board == "linkedin":
-            return f"https://www.linkedin.com/jobs/search/?keywords={q}&f_TPR=r86400"
-        return f"https://www.indeed.com/jobs?q={q}&fromage=1"
+            return (
+                "https://www.linkedin.com/jobs/search/"
+                f"?keywords={q}&location={quote_plus(location)}&f_TPR=r86400"
+            )
+        return (
+            f"https://www.indeed.com/jobs?q={q}&l={quote_plus(location)}"
+            f"&fromage=1&country={quote_plus(country_code.lower())}"
+        )
 
-    def _scrape_board(self, board: str, query: str, timeout_s: int) -> List[Dict[str, Any]]:
+    def _scrape_board(self, board: str, query: str, timeout_s: int, *, location: str, country_code: str) -> List[Dict[str, Any]]:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
 
-        url = self._search_url(board, query)
+        url = self._search_url(board, query, location=location, country_code=country_code)
         timeout_ms = timeout_s * 1000
 
         with sync_playwright() as p:
