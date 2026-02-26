@@ -53,6 +53,12 @@ class ExtractedResume(BaseModel):
     education: List[EducationModel] = Field(default_factory=list)
 
 
+class SkillExtractionValidator(BaseModel):
+    """Structured validator to enforce deterministic skill recovery before L3."""
+
+    skills: List[str] = Field(default_factory=list)
+
+
 def _rx_email(text: str) -> Optional[str]:
     m = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
     return m.group(0) if m else None
@@ -89,48 +95,65 @@ def _guess_name(text: str) -> Optional[str]:
     return None
 
 
-def _parse_skills(text: str) -> List[str]:
-    t = text or ""
-    skills: List[str] = []
-    m = re.search(r"Key Skills\s*(.*?)(Professional Experience|Experience|Education|Certifications|Projects)\b", t, flags=re.S | re.I)
-    block = m.group(1) if m else ""
-    for line in block.splitlines():
-        line = line.strip()
+def _clean_skill_token(token: str) -> Optional[str]:
+    s = re.sub(r"\s+", " ", (token or "").strip(" -•\t"))
+    if len(s) < 2 or len(s) > 48:
+        return None
+    if re.search(r"[^A-Za-z0-9 .+#&()/-]", s):
+        return None
+    if s.lower() in {"skills", "experience", "education", "summary", "projects"}:
+        return None
+    return s
+
+
+def _extract_skill_like_lines(text: str) -> List[str]:
+    out: List[str] = []
+    capture = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
         if not line:
+            if capture:
+                break
             continue
-        if ":" in line:
-            line = line.split(":", 1)[1]
-        parts = re.split(r"[,;/]\s*", line)
-        for p in parts:
-            p = re.sub(r"\s+", " ", p.strip())
-            if not p or len(p) <= 2:
-                continue
-            if p.lower() not in [x.lower() for x in skills]:
-                skills.append(p)
-    # fallback vocab
-    if len(skills) < 10:
-        vocab = [
-            "Python",
-            "SQL",
-            "FastAPI",
-            "Docker",
-            "Kubernetes",
-            "AWS",
-            "Azure",
-            "Azure OpenAI",
-            "MLflow",
-            "DVC",
-            "LangGraph",
-            "LangChain",
-            "RAG",
-            "Qdrant",
-            "Chroma",
-        ]
-        low = t.lower()
-        for v in vocab:
-            if v.lower() in low and v not in skills:
-                skills.append(v)
+        low = line.lower()
+        if re.search(r"\b(key skills|skills|core competencies|competencies|tools|technologies|expertise)\b", low):
+            capture = True
+            payload = line.split(":", 1)[1] if ":" in line else ""
+            if payload:
+                out.extend(re.split(r"[,;/|]\s*", payload))
+            continue
+        if capture:
+            if re.search(r"\b(experience|education|projects|certifications|summary)\b", low):
+                break
+            out.extend(re.split(r"[,;/|]\s*", line))
+    return out
+
+
+def _parse_skills(text: str) -> List[str]:
+    skills: List[str] = []
+    for token in _extract_skill_like_lines(text):
+        clean = _clean_skill_token(token)
+        if clean and clean.lower() not in {x.lower() for x in skills}:
+            skills.append(clean)
     return skills[:80]
+
+
+def _validate_and_backfill_skills(text: str, current_skills: List[str]) -> List[str]:
+    """Recover missing skills without hard-coded domain assumptions."""
+    recovered = _extract_skill_like_lines(text)
+    validated = SkillExtractionValidator.model_validate({"skills": list(current_skills or []) + recovered})
+    deduped: List[str] = []
+    seen = set()
+    for skill in validated.skills:
+        clean = _clean_skill_token(skill)
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(clean)
+    return deduped[:100]
 
 
 def _parse_experience(text: str) -> List[ExperienceModel]:
@@ -262,6 +285,23 @@ class ParserAgentService:
         self.s = settings
         self.gemini = GeminiClient(settings)
 
+    def _llm_skill_backfill(self, text: str, current_skills: List[str]) -> List[str]:
+        if not self.s.GEMINI_API_KEY:
+            return current_skills
+        prompt = (
+            "Extract a concise SKILLS list from the resume text. Include both technical and non-technical skills "
+            "if explicitly present. Return STRICT JSON: {skills: string[]}. Do not invent data.\n\n"
+            f"CURRENT_SKILLS: {current_skills}\n\nRESUME_TEXT:\n{text[:10000]}"
+        )
+        j = self.gemini.generate_json(prompt, temperature=0.0, max_tokens=500)
+        if not isinstance(j, dict):
+            return current_skills
+        try:
+            parsed = SkillExtractionValidator.model_validate(j)
+        except Exception:
+            return current_skills
+        return _validate_and_backfill_skills(text, list(current_skills or []) + list(parsed.skills or []))
+
     def parse_from_upload(self, *, filename: str, file_bytes: bytes, raw_text: Optional[str] = None) -> Tuple[ExtractedResume, str]:
         """Return extracted profile + raw_text used."""
         text = raw_text or ""
@@ -312,6 +352,9 @@ class ParserAgentService:
             experience=_parse_experience(text),
             education=_parse_education(text),
         )
+        det.skills = _validate_and_backfill_skills(text, det.skills)
+        if len(det.skills) < 8:
+            det.skills = self._llm_skill_backfill(text, det.skills)
 
         # LLM backfill if missing critical fields or empty experience
         missing_critical = (
@@ -333,6 +376,9 @@ class ParserAgentService:
                 try:
                     llm = ExtractedResume.model_validate(j)
                     det = _merge(det, llm)
+                    det.skills = _validate_and_backfill_skills(text, det.skills)
+                    if len(det.skills) < 8:
+                        det.skills = self._llm_skill_backfill(text, det.skills)
                 except Exception:
                     pass
 

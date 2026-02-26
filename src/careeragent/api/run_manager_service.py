@@ -102,9 +102,13 @@ class RunManagerService:
                 return {"ok": True}
 
             if action_type == "reject_drafts":
-                st.status = "needs_human_approval"
-                st.pending_action = "review_ranking"
+                reason = str(payload.get("reason") or "").strip()
+                st.meta["re_draft_flag"] = True
+                st.meta["draft_revision_feedback"] = reason
+                st.status = "running"
+                st.pending_action = None
                 self.store.save(st)
+                self._spawn_phase2(run_id)
                 return {"ok": True}
 
             if action_type == "resume_cleanup_submit":

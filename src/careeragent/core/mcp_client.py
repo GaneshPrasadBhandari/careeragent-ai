@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import httpx
 
 from careeragent.core.settings import Settings
 
@@ -55,6 +54,8 @@ class MCPClient:
             return None
 
         try:
+            import httpx
+
             with httpx.Client(timeout=self.s.MAX_HTTP_SECONDS) as client:
                 r = client.post(f"{base}/invoke", json={"tool": tool, "args": args})
             if r.status_code >= 400:
