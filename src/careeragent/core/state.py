@@ -8,9 +8,19 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+def _utc_now() -> datetime:
+    """Backward-compatible UTC datetime helper."""
+    return datetime.now(timezone.utc)
+
+
+def _iso_utc(dt: datetime) -> str:
+    """Backward-compatible ISO formatter."""
+    return dt.isoformat()
+
+
 def utc_now_iso() -> str:
     """Return current UTC timestamp in ISO format."""
-    return datetime.now(timezone.utc).isoformat()
+    return _iso_utc(_utc_now())
 
 
 LayerId = Literal["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"]
@@ -36,7 +46,7 @@ class StepTrace(BaseModel):
     """
 
     layer_id: LayerId
-    status: Literal["queued", "running", "ok", "error"] = "queued"
+    status: Literal["queued", "running", "ok", "error", "blocked"] = "queued"
     agent: str = ""
     started_at_utc: Optional[str] = None
     finished_at_utc: Optional[str] = None
@@ -136,11 +146,12 @@ class AgentState(BaseModel):
 
     run_id: str
 
-    status: Literal["queued", "running", "needs_human_approval", "completed", "failed"] = "queued"
+    status: Literal["queued", "running", "needs_human_approval", "completed", "failed", "blocked", "api_failure"] = "queued"
     pending_action: Optional[str] = None
 
     current_layer: Optional[str] = None
     progress_percent: int = 0
+    updated_at_utc: str = Field(default_factory=utc_now_iso)
 
     preferences: Preferences = Field(default_factory=Preferences)
 
@@ -202,19 +213,6 @@ class AgentState(BaseModel):
         """
         self.evaluation_logs.append(msg)
 
-    def start_step(self, layer_id: LayerId, agent: str, message: str, progress: int) -> None:
-        """Description: Start a step and update progress.
-        Layer: L2
-        Input: layer id, agent
-        Output: steps + progress
-        """
-        self.current_layer = layer_id
-        self.progress_percent = int(progress)
-        st = StepTrace(layer_id=layer_id, status="running", agent=agent, started_at_utc=utc_now_iso(), message=message)
-        # replace any existing same layer running
-        self.steps = [s for s in self.steps if not (s.layer_id == layer_id and s.status == "running")]
-        self.steps.append(st)
-        self.feed(layer_id, agent, message)
 
     def end_step_ok(self, layer_id: LayerId, message: str = "ok") -> None:
         """Description: Mark step ok.
@@ -243,6 +241,52 @@ class AgentState(BaseModel):
                 s.message = message
                 break
         self.feed(layer_id, "orchestrator", f"{layer_id} error: {message}")
+
+    def touch(self) -> None:
+        """Refresh state timestamp for legacy services."""
+        self.updated_at_utc = utc_now_iso()
+
+    def add_artifact(self, key: str, path: str, content_type: str = "application/json") -> None:
+        """Add/overwrite artifact reference used by engine services."""
+        self.artifacts[key] = ArtifactRef(path=path, mime=content_type)
+        self.touch()
+
+    def end_step(self, step_id: str, *, status: str = "ok", output_ref: Optional[Dict[str, Any]] = None, message: Optional[str] = None) -> None:
+        """Legacy-compatible step finalizer keyed by agent message or id."""
+        for s in reversed(self.steps):
+            if s.status == "running" and (s.message == step_id or s.agent == step_id or s.layer_id.lower() in step_id.lower()):
+                s.status = "blocked" if status == "blocked" else ("ok" if status == "ok" else "error")
+                s.finished_at_utc = utc_now_iso()
+                s.message = message or s.message
+                break
+        if message:
+            self.feed(self.current_layer or "L0", "orchestrator", message)
+        if output_ref:
+            self.meta.setdefault("step_outputs", {})[step_id] = output_ref
+        self.touch()
+
+    def start_step(self, *args: Any, **kwargs: Any) -> None:
+        """Start step supporting both new and legacy signatures."""
+        if args and isinstance(args[0], str) and kwargs.get("layer_id"):
+            # legacy style: start_step(step_id, layer_id=..., tool_name=..., input_ref=...)
+            step_id = args[0]
+            layer_id = kwargs.get("layer_id")
+            agent = kwargs.get("tool_name", "agent")
+            message = f"{step_id} started"
+            progress = PROGRESS_MAP.get(str(layer_id), self.progress_percent)
+        else:
+            layer_id = args[0] if args else kwargs.get("layer_id")
+            agent = (args[1] if len(args) > 1 else kwargs.get("agent", "agent"))
+            message = (args[2] if len(args) > 2 else kwargs.get("message", "started"))
+            progress = int(args[3] if len(args) > 3 else kwargs.get("progress", PROGRESS_MAP.get(str(layer_id), self.progress_percent)))
+
+        self.current_layer = str(layer_id)
+        self.progress_percent = int(progress)
+        st = StepTrace(layer_id=layer_id, status="running", agent=str(agent), started_at_utc=utc_now_iso(), message=str(message))
+        self.steps.append(st)
+        self.feed(str(layer_id), str(agent), str(message))
+        self.touch()
+
 
 
 PROGRESS_MAP: Dict[str, int] = {
