@@ -105,6 +105,10 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "artifacts":        {},
         "apply_results":    [],
         "agent_log":        [],         # live feed messages
+        "evaluations":      [],         # layer/job evaluator outputs
+        "layer_debug":      {},         # stepwise debug payload per layer
+        "pending_action":   None,       # approve_ranking | approve_drafts
+        "approved_jobs":    [],
         "errors":           [],
     }
 
@@ -130,9 +134,134 @@ def _log_agent(state: dict, layer_id: int, msg: str) -> None:
     log.info("AgentFeed L%d: %s", layer_id, msg)
 
 
+def _record_eval(state: dict, *, layer_id: int, target_id: str, score: float, threshold: float, feedback: list[str]) -> None:
+    decision = "pass" if score >= threshold else "retry"
+    state.setdefault("evaluations", [])
+    state["evaluations"].append({
+        "ts": _now(),
+        "layer_id": layer_id,
+        "target_id": target_id,
+        "evaluation_score": round(float(score), 4),
+        "threshold": round(float(threshold), 4),
+        "decision": decision,
+        "feedback": feedback,
+    })
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PIPELINE RUNNER  (async background task)
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _layer_running(state: dict, layer_id: int, msg: str = "") -> None:
+    state["layers"][layer_id]["status"] = "running"
+    state["layers"][layer_id]["started_at"] = _now()
+    state["progress_pct"] = _calc_progress(state)
+    if msg:
+        _log_agent(state, layer_id, msg)
+
+
+def _layer_ok(state: dict, layer_id: int, msg: str = "", **meta: Any) -> None:
+    state["layers"][layer_id]["status"] = "ok"
+    state["layers"][layer_id]["finished_at"] = _now()
+    state["layers"][layer_id]["meta"].update(meta)
+    state["progress_pct"] = _calc_progress(state)
+    if msg:
+        _log_agent(state, layer_id, msg)
+        state["layers"][layer_id]["output"] = msg
+
+
+def _qualified_from_state(state: dict) -> list[dict]:
+    return list(state.get("approved_jobs") or state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs") or [])
+
+
+async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -> None:
+    state = _runs[run_id]
+    qualified = _qualified_from_state(state)
+
+    _layer_running(state, 6, f"Generating ATS-optimized resume + cover letters for {len(qualified[:5])} jobs…")
+    try:
+        artifacts = await _generate_artifacts(state["profile"], qualified[:5], ARTIFACTS_DIR / run_id)
+        state["artifacts"] = artifacts
+        count = sum(len(v) for v in artifacts.values())
+        state["layer_debug"]["L6"] = {
+            "jobs_with_drafts": list(artifacts.keys()),
+            "artifact_count": count,
+            "artifacts": artifacts,
+        }
+        _record_eval(
+            state,
+            layer_id=6,
+            target_id="draft_quality",
+            score=1.0 if artifacts else 0.0,
+            threshold=0.5,
+            feedback=[f"draft_jobs={len(artifacts)}", f"files={count}"],
+        )
+        _layer_ok(state, 6, f"{count} document files created in artifacts/{run_id}/ ✓", files=count)
+        state["layers"][6]["output"] = f"{len(artifacts)} draft packages generated"
+    except Exception as exc:
+        state["layers"][6]["status"] = "error"
+        state["layers"][6]["error"] = str(exc)
+        state["errors"].append(f"L6: {exc}")
+
+    if stop_after_l6_for_approval:
+        state["status"] = "needs_human_approval"
+        state["pending_action"] = "approve_drafts"
+        _persist_state(run_id)
+        return
+
+    await _continue_l7_to_l9(run_id)
+
+
+async def _continue_l7_to_l9(run_id: str) -> None:
+    state = _runs[run_id]
+    qualified = _qualified_from_state(state)
+
+    _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…")
+    apply_results = []
+    for job in qualified[:3]:
+        apply_results.append({
+            "job_id":  job.get("id", "?"),
+            "title":   job.get("title", ""),
+            "company": job.get("company", ""),
+            "status":  "queued",
+            "url":     job.get("url", ""),
+        })
+    state["apply_results"] = apply_results
+    state["jobs_applied"]  = len(apply_results)
+    state["layer_debug"]["L7"] = {"apply_results": apply_results}
+    _record_eval(
+        state,
+        layer_id=7,
+        target_id="apply_executor",
+        score=1.0 if apply_results else 0.0,
+        threshold=0.2,
+        feedback=[f"queued={len(apply_results)}"],
+    )
+    _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results))
+    state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
+
+    _layer_running(state, 8, "Recording results to tracking database…")
+    await asyncio.sleep(0.3)
+    _persist_tracking(run_id, state)
+    _layer_ok(state, 8, "Applications recorded to DB ✓")
+
+    _layer_running(state, 9, "Generating analytics, XAI explanations, career roadmap…")
+    await asyncio.sleep(0.4)
+    _layer_ok(
+        state,
+        9,
+        "Analytics complete — bridge docs ready ✓",
+        jobs_found=state["jobs_discovered"],
+        applied=state["jobs_applied"],
+        top_score=state["top_match_score"],
+    )
+    state["layers"][9]["output"] = "Bridge docs appear after L9 completes."
+    state["status"] = "completed"
+    state["pending_action"] = None
+    state["completed_at"] = _now()
+    state["progress_pct"] = 100.0
+    _persist_state(run_id)
+
 
 async def run_pipeline(run_id: str, resume_path: Path) -> None:
     """
@@ -190,6 +319,21 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["profile"]          = profile
             state["candidate_name"]   = profile.get("name", "Candidate")
             state["skills_extracted"] = len(profile.get("skills", []))
+            state["layer_debug"]["L2"] = {
+                "parsed_name": state["candidate_name"],
+                "skills": profile.get("skills", []),
+                "experience": profile.get("experience", []),
+                "education": profile.get("education", []),
+                "summary": profile.get("summary", ""),
+            }
+            _record_eval(
+                state,
+                layer_id=2,
+                target_id="resume_parse",
+                score=min(1.0, 0.45 + 0.1 * len(profile.get("skills", []))),
+                threshold=0.55,
+                feedback=[f"skills={len(profile.get('skills', []))}", f"experience={len(profile.get('experience', []))}"],
+            )
             await mark_ok(
                 2,
                 f"Profile parsed: {state['skills_extracted']} skills, "
@@ -219,12 +363,35 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             else:
                 leads = _stub_leads(state["profile"])
 
+            # Recovery guard: when external providers are unavailable (or return
+            # zero leads), keep the L3->L9 pipeline operational with demo leads.
+            if not leads:
+                _log_agent(
+                    state,
+                    3,
+                    "No live jobs returned from providers; switching to resilient demo lead fallback.",
+                )
+                leads = _stub_leads(state["profile"])
+
             state["job_leads"]       = leads
             state["jobs_discovered"] = len(leads)
+            state["layer_debug"]["L3"] = {
+                "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
+                "sample_jobs": leads[:5],
+            }
+            _record_eval(
+                state,
+                layer_id=3,
+                target_id="lead_discovery",
+                score=1.0 if len(leads) >= 5 else (0.7 if len(leads) >= 2 else 0.4),
+                threshold=0.7,
+                feedback=[f"leads={len(leads)}"],
+            )
             await mark_ok(
                 3,
                 f"{len(leads)} raw jobs fetched ✓",
                 raw_jobs=len(leads),
+                fallback_mode=("demo" if any(j.get("source") == "demo" for j in leads) else "live"),
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
@@ -254,6 +421,18 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         state["scored_jobs"]     = scored
         state["jobs_scored"]     = len(scored)
         top_score = max((j.get("score", 0) for j in scored), default=0)
+        state["layer_debug"]["L4"] = {
+            "threshold": threshold,
+            "top_jobs": sorted(scored, key=lambda j: j.get("score", 0), reverse=True)[:5],
+        }
+        _record_eval(
+            state,
+            layer_id=4,
+            target_id="match_score",
+            score=float(top_score),
+            threshold=float(threshold),
+            feedback=[f"scored={len(scored)}", f"top_score={round(top_score, 3)}"],
+        )
         state["top_match_score"] = round(top_score * 100, 1)
         await mark_ok(
             4,
@@ -268,6 +447,18 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         await asyncio.sleep(0.4)
         qualified  = [j for j in scored if j.get("score", 0) >= threshold]
         state["jobs_approved"] = len(qualified)
+        state["layer_debug"]["L5"] = {
+            "qualified_jobs": qualified[:10],
+            "threshold": threshold,
+        }
+        _record_eval(
+            state,
+            layer_id=5,
+            target_id="ranking_gate",
+            score=(len(qualified) / max(1, len(scored))) if scored else 0.0,
+            threshold=0.3,
+            feedback=[f"qualified={len(qualified)}", f"scored={len(scored)}"],
+        )
         await mark_ok(
             5,
             f"{len(qualified)} jobs qualified and approved ✓",
@@ -275,66 +466,21 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         )
         state["layers"][5]["output"] = f"{len(qualified)} jobs ranked"
 
-        # ── L6: Drafting — ATS Resume + Cover Letter ─────────────────────────
-        await mark_running(6, f"Generating ATS-optimized resume + cover letters for {len(qualified[:5])} jobs…")
-        try:
-            artifacts = await _generate_artifacts(
-                state["profile"], qualified[:5], ARTIFACTS_DIR / run_id
-            )
-            state["artifacts"] = artifacts
-            count = sum(len(v) for v in artifacts.values())
-            await mark_ok(
-                6,
-                f"{count} document files created in artifacts/{run_id}/ ✓",
-                files=count,
-            )
-            state["layers"][6]["output"] = f"{len(artifacts)} draft packages generated"
-        except Exception as exc:
-            await mark_error(6, str(exc))
+        state["approved_jobs"] = qualified
 
-        # ── L7: Apply Executor + Notifications ───────────────────────────────
-        await mark_running(7, "ApplyExecutor: submitting applications via Playwright…")
-        apply_results = []
-        for job in qualified[:3]:  # cap at 3 for safety
-            apply_results.append({
-                "job_id":  job.get("id", "?"),
-                "title":   job.get("title", ""),
-                "company": job.get("company", ""),
-                "status":  "queued",     # real Playwright submission requires UI headless
-                "url":     job.get("url", ""),
-            })
-        state["apply_results"] = apply_results
-        state["jobs_applied"]  = len(apply_results)
-        await mark_ok(
-            7,
-            f"{len(apply_results)} applications queued ✓",
-            applied=len(apply_results),
+        if state.get("config", {}).get("require_ranking_approval", True):
+            state["status"] = "needs_human_approval"
+            state["pending_action"] = "approve_ranking"
+            _log_agent(state, 5, "Awaiting human approval for ranked jobs.")
+            _persist_state(run_id)
+            return
+
+        await _continue_l6_to_l9(
+            run_id,
+            stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)),
         )
-        state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
-
-        # ── L8: Tracking — DB + Status ────────────────────────────────────────
-        await mark_running(8, "Recording results to tracking database…")
-        await asyncio.sleep(0.3)
-        _persist_tracking(run_id, state)
-        await mark_ok(8, "Applications recorded to DB ✓")
-
-        # ── L9: Analytics + Learning Center + XAI ────────────────────────────
-        await mark_running(9, "Generating analytics, XAI explanations, career roadmap…")
-        await asyncio.sleep(0.4)
-        await mark_ok(
-            9,
-            "Analytics complete — bridge docs ready ✓",
-            jobs_found=state["jobs_discovered"],
-            applied=state["jobs_applied"],
-            top_score=state["top_match_score"],
-        )
-        state["layers"][9]["output"] = "Bridge docs appear after L9 completes."
-
-        state["status"]       = "completed"
-        state["completed_at"] = _now()
-        state["progress_pct"] = 100.0
-        _persist_state(run_id)
-        log.info("Run %s COMPLETED — %.0f%% progress", run_id, state["progress_pct"])
+        if state.get("status") == "completed":
+            log.info("Run %s COMPLETED — %.0f%% progress", run_id, state["progress_pct"])
 
     except Exception as exc:
         import traceback
@@ -734,6 +880,10 @@ async def get_status(run_id: str):
         "top_match_score":  state["top_match_score"],
         "candidate_name":   state["candidate_name"],
         "skills_extracted": state["skills_extracted"],
+        "pending_action":   state.get("pending_action"),
+        "profile":          state.get("profile", {}),
+        "layer_debug":      state.get("layer_debug", {}),
+        "evaluations":      state.get("evaluations", [])[-50:],
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
         "created_at":       state["created_at"],
@@ -752,6 +902,38 @@ async def get_jobs(run_id: str):
         "total":     len(jobs),
         "jobs":      jobs[:50],   # cap response size
     }
+
+
+@app.post("/hunt/{run_id}/action")
+async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict):
+    if run_id not in _runs:
+        raise HTTPException(404, f"Run {run_id} not found")
+    state = _runs[run_id]
+    action = (body or {}).get("action")
+
+    if action == "approve_ranking":
+        selected_ids = set((body or {}).get("selected_job_ids") or [])
+        ranked = state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs", [])
+        approved = [j for j in ranked if not selected_ids or j.get("id") in selected_ids]
+        state["approved_jobs"] = approved
+        state["pending_action"] = None
+        state["status"] = "running"
+        _persist_state(run_id)
+        background_tasks.add_task(
+            _continue_l6_to_l9,
+            run_id,
+            stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)),
+        )
+        return {"ok": True, "message": f"approved {len(approved)} jobs"}
+
+    if action == "approve_drafts":
+        state["pending_action"] = None
+        state["status"] = "running"
+        _persist_state(run_id)
+        background_tasks.add_task(_continue_l7_to_l9, run_id)
+        return {"ok": True, "message": "drafts approved; resuming apply"}
+
+    raise HTTPException(400, "unknown action")
 
 
 @app.get("/hunt/{run_id}/artifacts")
