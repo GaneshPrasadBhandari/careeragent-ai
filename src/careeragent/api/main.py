@@ -219,12 +219,23 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             else:
                 leads = _stub_leads(state["profile"])
 
+            # Recovery guard: when external providers are unavailable (or return
+            # zero leads), keep the L3->L9 pipeline operational with demo leads.
+            if not leads:
+                _log_agent(
+                    state,
+                    3,
+                    "No live jobs returned from providers; switching to resilient demo lead fallback.",
+                )
+                leads = _stub_leads(state["profile"])
+
             state["job_leads"]       = leads
             state["jobs_discovered"] = len(leads)
             await mark_ok(
                 3,
                 f"{len(leads)} raw jobs fetched ✓",
                 raw_jobs=len(leads),
+                fallback_mode=("demo" if any(j.get("source") == "demo" for j in leads) else "live"),
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
