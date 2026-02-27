@@ -1,7 +1,15 @@
+"""CareerAgent-AI Streamlit entry point — uses full mission_control UI."""
 from __future__ import annotations
+import sys
+from pathlib import Path
 
-from app.ui.dashboard import main
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC = _REPO_ROOT / "src"
+for p in [str(_REPO_ROOT), str(_SRC)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
+from app.ui.mission_control import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

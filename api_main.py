@@ -425,31 +425,13 @@ def _extract_profile_from_text(text: str) -> dict:
 
     # Skills (heuristic keyword scan)
     TECH_SKILLS = [
-        # Core languages
-        "Python","JavaScript","TypeScript","Java","Go","Rust","C++","C#","Ruby","PHP","Swift","Kotlin","Scala","R",
-        # Web frameworks
-        "React","Vue","Angular","Node","FastAPI","Django","Flask","Spring","Rails","Express",
-        # Databases
-        "SQL","PostgreSQL","MySQL","MongoDB","Redis","Elasticsearch","DynamoDB","Snowflake","Databricks","BigQuery",
-        # Cloud & DevOps
-        "AWS","GCP","Azure","Docker","Kubernetes","Terraform","Ansible","Linux","Git","CI/CD","GitHub Actions",
-        "SageMaker","Bedrock","Vertex AI","Lambda","EC2","S3","CloudFormation",
-        # AI / ML / GenAI — EXPANDED
-        "Machine Learning","Deep Learning","TensorFlow","PyTorch","Scikit-learn","XGBoost","LightGBM",
-        "LLM","NLP","Computer Vision","Reinforcement Learning","RLHF","Fine-tuning",
-        "GenAI","Generative AI","LangChain","LangGraph","LlamaIndex","RAG","Vector Database",
-        "Embeddings","FAISS","Chroma","Pinecone","Weaviate","Qdrant",
-        "OpenAI","Anthropic","Claude","GPT","Gemini","LLaMA","Mistral","Hugging Face","Transformers",
-        "BERT","T5","Diffusion","Stable Diffusion","Midjourney","DALL-E",
-        "MLflow","DVC","MLOps","Model Deployment","Model Monitoring","AIOps",
-        "Prompt Engineering","Agentic AI","Multi-agent","AutoGen","CrewAI",
-        "Data Science","Data Engineering","Feature Engineering","A/B Testing","Experimentation",
-        # Data & Analytics
-        "Spark","Airflow","Kafka","dbt","Pandas","NumPy","Matplotlib","Plotly","Tableau","Power BI",
-        # APIs & Architecture
-        "GraphQL","REST","gRPC","RabbitMQ","Microservices","Event-driven","Solution Architecture",
-        # Process
-        "Agile","Scrum","Leadership","Communication","Product Management","Technical Leadership",
+        "Python","JavaScript","TypeScript","Java","Go","Rust","C++","C#","Ruby","PHP","Swift","Kotlin",
+        "React","Vue","Angular","Node","FastAPI","Django","Flask","Spring","Rails",
+        "SQL","PostgreSQL","MySQL","MongoDB","Redis","Elasticsearch","DynamoDB",
+        "AWS","GCP","Azure","Docker","Kubernetes","Terraform","Ansible","Linux",
+        "Git","CI/CD","GraphQL","REST","gRPC","Kafka","RabbitMQ","Spark","Airflow",
+        "Machine Learning","Deep Learning","TensorFlow","PyTorch","LLM","NLP",
+        "Agile","Scrum","Leadership","Communication","Product Management",
     ]
     found_skills = [s for s in TECH_SKILLS if re.search(r"\b" + re.escape(s) + r"\b", text, re.I)]
 
@@ -489,29 +471,13 @@ def _extract_profile_from_text(text: str) -> dict:
 
 
 def _build_intent(profile: dict, config: dict) -> dict:
-    roles = config.get("target_roles") or ["AI Engineer", "Machine Learning Engineer"]
-
-    # Pass ALL skills, not just 8 — LeadScout needs these for multi-query bucketing
-    all_skills = profile.get("skills", [])
-
-    # Also derive extra keywords from raw_text if available
-    extra_kw: list[str] = []
-    raw = profile.get("raw_text", "")
-    for term in [
-        "LangChain", "LangGraph", "RAG", "GenAI", "LLM", "MLOps", "SageMaker",
-        "Bedrock", "Vertex AI", "Hugging Face", "Fine-tuning", "RLHF",
-        "Generative AI", "Vector Database", "Embeddings", "Prompt Engineering",
-    ]:
-        if term.lower() in raw.lower() and term not in all_skills:
-            extra_kw.append(term)
-
+    roles = config.get("target_roles") or ["Software Engineer", "Backend Developer"]
     return {
-        "target_roles":      roles,
-        "keywords":          list(dict.fromkeys(all_skills + extra_kw)),  # ALL skills
-        "extracted_profile": profile,   # full profile for LeadScout query bucketing
-        "geo_preferences":   config.get("geo_preferences", {"remote": True, "locations": ["United States"]}),
-        "salary_min_usd":    config.get("salary_min", 90_000),
-        "salary_max_usd":    config.get("salary_max", 200_000),
+        "target_roles":    roles,
+        "keywords":        profile.get("skills", [])[:8],
+        "geo_preferences": config.get("geo_preferences", {"remote": True, "locations": []}),
+        "salary_min_usd":  config.get("salary_min", 90_000),
+        "salary_max_usd":  config.get("salary_max", 200_000),
     }
 
 

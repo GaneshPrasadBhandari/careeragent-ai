@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
-
-from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 
+def _utc_now() -> datetime:
+    """Backward-compatible UTC datetime helper."""
+    return datetime.now(timezone.utc)
+
+
+def _iso_utc(dt: datetime) -> str:
+    """Backward-compatible ISO formatter."""
+    return dt.isoformat()
+
+
 def utc_now_iso() -> str:
     """Return current UTC timestamp in ISO format."""
-    return datetime.now(timezone.utc).isoformat()
+    return _iso_utc(_utc_now())
 
 
 LayerId = Literal["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"]
@@ -37,7 +46,7 @@ class StepTrace(BaseModel):
     """
 
     layer_id: LayerId
-    status: Literal["queued", "running", "ok", "error"] = "queued"
+    status: Literal["queued", "running", "ok", "error", "blocked"] = "queued"
     agent: str = ""
     started_at_utc: Optional[str] = None
     finished_at_utc: Optional[str] = None
@@ -73,65 +82,6 @@ class EvaluationEntry(BaseModel):
     ts_utc: str = Field(default_factory=utc_now_iso)
 
 
-class InterviewChanceWeights(BaseModel):
-    """Weighted blend for interview chance scoring."""
-
-    w1_skill_overlap: float = 0.45
-    w2_experience_alignment: float = 0.35
-    w3_ats_score: float = 0.20
-
-
-class InterviewChanceComponents(BaseModel):
-    """Normalized L4 components."""
-
-    skill_overlap: float = 0.0
-    experience_alignment: float = 0.0
-    ats_score: float = 0.0
-    market_competition_factor: float = 1.0
-
-
-class InterviewChanceBreakdown(BaseModel):
-    """Final interview chance deterministic breakdown."""
-
-    weights: InterviewChanceWeights = Field(default_factory=InterviewChanceWeights)
-    components: InterviewChanceComponents = Field(default_factory=InterviewChanceComponents)
-
-    @property
-    def interview_chance_score(self) -> float:
-        base = (
-            self.weights.w1_skill_overlap * self.components.skill_overlap
-            + self.weights.w2_experience_alignment * self.components.experience_alignment
-            + self.weights.w3_ats_score * self.components.ats_score
-        )
-        m = max(1.0, float(self.components.market_competition_factor or 1.0))
-        return max(0.0, min(1.0, base / m))
-
-
-class EvaluationEvent(BaseModel):
-    """Recursive-Gate evaluation event audit record."""
-
-    eval_id: str = Field(default_factory=lambda: uuid4().hex)
-    layer_id: str
-    target_id: str
-    generator_agent: str
-    evaluator_agent: str
-    evaluation_score: float
-    threshold: float
-    feedback: List[str] = Field(default_factory=list)
-    retry_count: int = 0
-    max_retries: int = 3
-    interview_chance: Optional[InterviewChanceBreakdown] = None
-    started_at_utc: str = Field(default_factory=utc_now_iso)
-    finished_at_utc: str = Field(default_factory=utc_now_iso)
-
-    @property
-    def passed(self) -> bool:
-        return float(self.evaluation_score) >= float(self.threshold)
-
-    def should_retry(self) -> bool:
-        return (not self.passed) and int(self.retry_count) < int(self.max_retries)
-
-
 class Preferences(BaseModel):
     """Description: User constraints and targets.
     Layer: L1
@@ -152,11 +102,10 @@ class Preferences(BaseModel):
 
     discovery_threshold: float = 0.7
     max_refinements: int = 3
-    resume_threshold: float = 0.55
+    resume_threshold: float = 0.40  # lowered from 0.55 — imperfect parse should still continue
     draft_count: int = 10
 
     user_phone: Optional[str] = None
-    linkedin_url: Optional[str] = None
 
 
 class PlannerPersona(BaseModel):
@@ -195,21 +144,14 @@ class AgentState(BaseModel):
     Output: full run state JSON
     """
 
-    version: str = "v1"
-    run_id: str = Field(default_factory=lambda: uuid4().hex)
+    run_id: str
 
-    created_at_utc: str = Field(default_factory=utc_now_iso)
-    updated_at_utc: str = Field(default_factory=utc_now_iso)
-
-    mode: str = "agentic"
-    env: Optional[str] = None
-    git_sha: Optional[str] = None
-
-    status: str = "queued"
+    status: Literal["queued", "running", "needs_human_approval", "completed", "failed", "blocked", "api_failure"] = "queued"
     pending_action: Optional[str] = None
 
     current_layer: Optional[str] = None
     progress_percent: int = 0
+    updated_at_utc: str = Field(default_factory=utc_now_iso)
 
     preferences: Preferences = Field(default_factory=Preferences)
 
@@ -220,6 +162,9 @@ class AgentState(BaseModel):
     ranking: List[Dict[str, Any]] = Field(default_factory=list)
 
     approved_job_urls: List[str] = Field(default_factory=list)
+
+    # --- L6 Draft output metadata (populated by DraftingAgentService)
+    drafts: List[Dict[str, Any]] = Field(default_factory=list)
 
     # --- Planner/Director
     search_personas: List[PlannerPersona] = Field(default_factory=list)
@@ -234,7 +179,7 @@ class AgentState(BaseModel):
 
     # --- Evaluations / logs
     evaluation: Dict[str, Any] = Field(default_factory=dict)
-    evaluations: List[Any] = Field(default_factory=list)
+    evaluations: List[EvaluationEntry] = Field(default_factory=list)
     evaluation_logs: List[str] = Field(default_factory=list)
 
     # --- UI trace
@@ -268,61 +213,6 @@ class AgentState(BaseModel):
         """
         self.evaluation_logs.append(msg)
 
-    @classmethod
-    def new(cls, *, env: Optional[str] = None, mode: str = "agentic", git_sha: Optional[str] = None) -> "AgentState":
-        st = cls(env=env, mode=mode, git_sha=git_sha, status="running")
-        st.touch()
-        return st
-
-    def touch(self) -> None:
-        """Compatibility timestamp hook used by legacy services."""
-        self.updated_at_utc = utc_now_iso()
-        self.meta["updated_at_utc"] = self.updated_at_utc
-
-    def add_artifact(self, key: str, path: str, *, content_type: Optional[str] = None, sha256: Optional[str] = None) -> ArtifactRef:
-        ref = ArtifactRef(path=path, mime=content_type or "application/json")
-        self.artifacts[key] = ref
-        self.touch()
-        return ref
-
-    def start_step(self, step_or_layer: str, *args: Any, **kwargs: Any) -> None:
-        """Start a step with compatibility for legacy and orchestration call styles."""
-        # Legacy style: start_step("L2", "Agent", "message", 20)
-        if args and len(args) >= 3:
-            layer_id = str(step_or_layer)
-            agent = str(args[0])
-            message = str(args[1])
-            progress = int(args[2])
-            self.current_layer = layer_id
-            self.progress_percent = progress
-            st = StepTrace(layer_id=layer_id, status="running", agent=agent, started_at_utc=utc_now_iso(), message=message)
-            self.steps = [s for s in self.steps if not (s.layer_id == layer_id and s.status == "running")]
-            self.steps.append(st)
-            self.feed(layer_id, agent, message)
-            self.touch()
-            return
-
-        # Orchestration engine style: start_step("step_id", layer_id="L3", tool_name="x", input_ref={})
-        layer_id = str(kwargs.get("layer_id") or "L2")
-        agent = str(kwargs.get("tool_name") or kwargs.get("agent") or "orchestrator")
-        message = str(step_or_layer)
-        self.current_layer = layer_id
-        self.progress_percent = int(PROGRESS_MAP.get(layer_id, self.progress_percent))
-        self.steps.append(StepTrace(layer_id=layer_id, status="running", agent=agent, started_at_utc=utc_now_iso(), message=message))
-        self.feed(layer_id, agent, message)
-        self.touch()
-
-    def end_step(self, step_id: str, *, status: str = "ok", output_ref: Optional[Dict[str, Any]] = None, message: Any = "") -> None:
-        _ = output_ref
-        for s in reversed(self.steps):
-            if s.message == step_id and s.status == "running":
-                s.status = "ok" if status == "ok" else "error"
-                s.finished_at_utc = utc_now_iso()
-                s.message = str(message)
-                self.touch()
-                return
-        self.steps.append(StepTrace(layer_id="L2", status="ok" if status == "ok" else "error", agent="orchestrator", started_at_utc=utc_now_iso(), finished_at_utc=utc_now_iso(), message=str(message)))
-        self.touch()
 
     def end_step_ok(self, layer_id: LayerId, message: str = "ok") -> None:
         """Description: Mark step ok.
@@ -352,66 +242,51 @@ class AgentState(BaseModel):
                 break
         self.feed(layer_id, "orchestrator", f"{layer_id} error: {message}")
 
-    def record_evaluation(
-        self,
-        *,
-        layer_id: str,
-        target_id: str,
-        generator_agent: str,
-        evaluator_agent: str,
-        evaluation_score: float,
-        threshold: float,
-        feedback: Optional[List[str]] = None,
-        retry_count: int = 0,
-        max_retries: int = 3,
-        interview_chance: Optional[InterviewChanceBreakdown] = None,
-    ) -> EvaluationEvent:
-        ev = EvaluationEvent(
-            layer_id=layer_id,
-            target_id=target_id,
-            generator_agent=generator_agent,
-            evaluator_agent=evaluator_agent,
-            evaluation_score=float(evaluation_score),
-            threshold=float(threshold),
-            feedback=feedback or [],
-            retry_count=int(retry_count),
-            max_retries=int(max_retries),
-            interview_chance=interview_chance,
-        )
-        self.evaluations.append(ev)
+    def touch(self) -> None:
+        """Refresh state timestamp for legacy services."""
+        self.updated_at_utc = utc_now_iso()
+
+    def add_artifact(self, key: str, path: str, content_type: str = "application/json") -> None:
+        """Add/overwrite artifact reference used by engine services."""
+        self.artifacts[key] = ArtifactRef(path=path, mime=content_type)
         self.touch()
-        return ev
 
-    def latest_evaluation(self, *, target_id: str, layer_id: Optional[str] = None) -> Optional[EvaluationEvent]:
-        for ev in reversed(self.evaluations):
-            if not isinstance(ev, EvaluationEvent):
-                continue
-            if ev.target_id != target_id:
-                continue
-            if layer_id and ev.layer_id != layer_id:
-                continue
-            return ev
-        return None
-
-    def apply_recursive_gate(self, *, target_id: str, layer_id: str) -> Literal["pass", "retry", "human_approval"]:
-        ev = self.latest_evaluation(target_id=target_id, layer_id=layer_id)
-        if ev is None:
-            return "retry"
-        if ev.passed:
-            return "pass"
-        if ev.should_retry():
-            return "retry"
-        self.status = "needs_human_approval"
+    def end_step(self, step_id: str, *, status: str = "ok", output_ref: Optional[Dict[str, Any]] = None, message: Optional[str] = None) -> None:
+        """Legacy-compatible step finalizer keyed by agent message or id."""
+        for s in reversed(self.steps):
+            if s.status == "running" and (s.message == step_id or s.agent == step_id or s.layer_id.lower() in step_id.lower()):
+                s.status = "blocked" if status == "blocked" else ("ok" if status == "ok" else "error")
+                s.finished_at_utc = utc_now_iso()
+                s.message = message or s.message
+                break
+        if message:
+            self.feed(self.current_layer or "L0", "orchestrator", message)
+        if output_ref:
+            self.meta.setdefault("step_outputs", {})[step_id] = output_ref
         self.touch()
-        return "human_approval"
 
+    def start_step(self, *args: Any, **kwargs: Any) -> None:
+        """Start step supporting both new and legacy signatures."""
+        if args and isinstance(args[0], str) and kwargs.get("layer_id"):
+            # legacy style: start_step(step_id, layer_id=..., tool_name=..., input_ref=...)
+            step_id = args[0]
+            layer_id = kwargs.get("layer_id")
+            agent = kwargs.get("tool_name", "agent")
+            message = f"{step_id} started"
+            progress = PROGRESS_MAP.get(str(layer_id), self.progress_percent)
+        else:
+            layer_id = args[0] if args else kwargs.get("layer_id")
+            agent = (args[1] if len(args) > 1 else kwargs.get("agent", "agent"))
+            message = (args[2] if len(args) > 2 else kwargs.get("message", "started"))
+            progress = int(args[3] if len(args) > 3 else kwargs.get("progress", PROGRESS_MAP.get(str(layer_id), self.progress_percent)))
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+        self.current_layer = str(layer_id)
+        self.progress_percent = int(progress)
+        st = StepTrace(layer_id=layer_id, status="running", agent=str(agent), started_at_utc=utc_now_iso(), message=str(message))
+        self.steps.append(st)
+        self.feed(str(layer_id), str(agent), str(message))
+        self.touch()
 
-
-def _iso_utc(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 PROGRESS_MAP: Dict[str, int] = {

@@ -540,7 +540,7 @@ class OneClickAutomationEngine:
 
             st.status = "needs_human_approval"
             st.meta["pending_action"] = "review_drafts"
-            LiveFeed.emit(st, layer="L6", agent="DraftAgent", message=f"Generated {len(drafts)} resume+cover packages + learning plans.")
+            LiveFeed.emit(st, layer="L6", agent="DraftAgent", message=f"Generated {len(st.drafts)} resume+cover packages + learning plans.")
             self._persist(st)
             return
 
@@ -618,6 +618,7 @@ class OneClickAutomationEngine:
                 "missing_skills": missing,
             })
 
+        st.drafts = drafts
         _save_json(run_dir / "drafts_bundle.json", {"drafts": drafts, "learning_plan": learning})
         st.add_artifact("drafts_bundle", str(run_dir / "drafts_bundle.json"), content_type="application/json")
 

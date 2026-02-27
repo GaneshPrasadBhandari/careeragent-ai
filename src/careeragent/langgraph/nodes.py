@@ -260,13 +260,35 @@ async def l3_discovery_node(state: CareerGraphState) -> Dict[str, Any]:
     tbs = "qdr:d" if recency_hours <= 36 else None
 
     profile = state.get("profile") or {}
-    skills = " ".join((profile.get("skills") or [])[:6])
+    skills_all = [str(s) for s in (profile.get("skills") or [])]
 
-    def build_query(role: str) -> str:
-        visa_part = '"visa sponsorship" OR h1b OR opt OR cpt' if visa_required else ""
-        return f'{role} {location} {skills} ({visa_part}) apply'
+    # Bucket skills by domain for targeted queries
+    ai_ml = [s for s in skills_all if any(t in s.lower() for t in [
+        "ai", "ml", "llm", "gpt", "langchain", "genai", "pytorch", "tensorflow",
+        "rag", "vector", "embedding", "nlp", "deep learning", "hugging", "transformer",
+        "generative", "diffusion", "fine-tun", "bert", "openai", "gemini",
+    ])]
+    cloud = [s for s in skills_all if any(t in s.lower() for t in [
+        "aws", "azure", "gcp", "sagemaker", "bedrock", "vertex", "kubernetes", "docker",
+        "lambda", "ec2", "cloud",
+    ])]
 
-    queries = [build_query(r) for r in roles]
+    visa_part = '"visa sponsorship" OR h1b OR opt OR cpt' if visa_required else ""
+
+    queries = []
+    for role in roles:
+        ai_str = " ".join(ai_ml[:4]) if ai_ml else " ".join(skills_all[:4])
+        queries.append(f'{role} {ai_str} {location} {visa_part}'.strip())
+        if cloud:
+            queries.append(f'{role} {" ".join(cloud[:3])} {location}'.strip())
+
+    if any("gen" in s.lower() or "llm" in s.lower() for s in skills_all):
+        queries.append(f'Generative AI Engineer LLM {location}')
+
+    if any(w in " ".join(roles).lower() for w in ["senior", "sr", "lead", "architect"]):
+        queries.append(f'Senior Machine Learning Engineer {location}')
+
+    queries = list(dict.fromkeys(q for q in queries if q.strip()))[:6]
 
     async def tool_a() -> ToolResult:
         all_hits: List[Dict[str, Any]] = []
