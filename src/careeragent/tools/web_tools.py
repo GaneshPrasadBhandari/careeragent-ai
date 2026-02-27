@@ -12,6 +12,22 @@ import httpx
 from careeragent.core.settings import Settings
 
 
+def apply_playwright_stealth(page: Any) -> None:
+    """Best-effort stealth hardening for Playwright pages."""
+    try:
+        from playwright_stealth import stealth_sync
+
+        stealth_sync(page)
+    except Exception:
+        # Fallback stealth script if plugin isn't installed.
+        try:
+            page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
+        except Exception:
+            pass
+
+
 def canonical_url(url: str) -> str:
     """Description: Canonicalize URLs for dedup.
     Layer: L3

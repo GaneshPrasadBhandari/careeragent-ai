@@ -123,6 +123,29 @@ def ats_keyword_match_percent(job_text: str, resume_text: str, *, profile_skills
     return round((matched / max(1, len(jd_skills))) * 100.0, 2)
 
 
+def optimize_resume_keywords(*, resume_md: str, jd_text: str, profile_skills: List[str], top_n: int = 5) -> Tuple[str, List[str]]:
+    """Reverse-ATS pass: inject top missing JD keywords into Skills Highlights section."""
+    jd_terms = [s for s in extract_skills(jd_text, extra_candidates=profile_skills) if s]
+    resume_terms = set(extract_skills(resume_md, extra_candidates=profile_skills))
+    missing: List[str] = []
+    for term in jd_terms:
+        if term in resume_terms or term in missing:
+            continue
+        missing.append(term)
+        if len(missing) >= top_n:
+            break
+    if not missing:
+        return resume_md, []
+
+    section_header = "## Skills Highlights"
+    section_body = "\n".join([f"- {m}" for m in missing])
+    if section_header in resume_md:
+        enriched = resume_md.replace(section_header, f"{section_header}\n{section_body}", 1)
+    else:
+        enriched = f"{resume_md.strip()}\n\n{section_header}\n{section_body}\n"
+    return enriched, missing
+
+
 class DraftingAgentService:
     def __init__(self, settings: Settings) -> None:
         self.s = settings
@@ -145,6 +168,7 @@ class DraftingAgentService:
 
             revision_notes = str((state.meta or {}).get("draft_revision_feedback") or "")
             resume_md, cover_md = self._gen_with_llm(prof, jd, title, linkedin_achievements=linkedin_achievements, revision_notes=revision_notes)
+            resume_md, injected = optimize_resume_keywords(resume_md=resume_md, jd_text=jd, profile_skills=profile_skills, top_n=5)
             resume_plain = _strip_markdown(resume_md)
             cover_plain = _strip_markdown(cover_md)
 
@@ -160,6 +184,7 @@ class DraftingAgentService:
             job["ats_keyword_match_percent"] = kw_pct
             job["missing_jd_skills"] = align.missing_jd_skills[:40]
             job["matched_jd_skills"] = align.matched_jd_skills[:40]
+            job["ats_keyword_injected"] = injected
 
             run_dir = Path("outputs/runs") / state.run_id
             resume_md_path = run_dir / f"resume_{key}.md"

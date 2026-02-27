@@ -13,6 +13,18 @@ def _tokenize(text: str) -> List[str]:
     return [t for t in re.split(r"[^A-Za-z0-9+.#]", (text or "").lower()) if t and len(t) > 1]
 
 
+def _academic_expertise_bonus(profile: Dict[str, Any], toks: set[str]) -> float:
+    education = profile.get("education") or []
+    edu_blob = " ".join(str(e) for e in education).lower()
+    has_masters = any(k in edu_blob for k in ["master", "m.s", "ms", "msc"])
+    has_ai_ds = any(k in edu_blob for k in ["data science", "artificial intelligence", "machine learning", "ai"])
+    if not (has_masters and has_ai_ds):
+        return 0.0
+    if any(k in toks for k in ["machine", "learning", "ai", "llm", "data", "science"]):
+        return 0.15
+    return 0.05
+
+
 class MatcherAgentService:
     """Description: L4 matcher with semantic interview-chance scoring.
 
@@ -56,6 +68,14 @@ class MatcherAgentService:
 
             scorecard = compute_jd_alignment(jd_text=jd_text, resume_skills=resume_skills)
             skill_overlap = scorecard.jd_alignment_percent / 100.0
+            intent_score = min(
+                1.0,
+                sum(
+                    0.2
+                    for k in ["architect", "solution", "enterprise", "ai", "lead", "principal"]
+                    if k in (jd_title + " " + jd_text).lower()
+                ),
+            )
 
             toks = set(_tokenize(jd_text + " " + jd_title))
             exp_align = 0.25
@@ -66,8 +86,11 @@ class MatcherAgentService:
             if any(k in toks for k in ["mlops", "cicd", "docker", "kubernetes", "terraform", "mlflow"]):
                 exp_align = min(1.0, exp_align + 0.15)
 
+            exp_align = min(1.0, exp_align + _academic_expertise_bonus(prof, toks))
+
             ats_score = min(1.0, 0.05 + skill_overlap)
             semantic_exp_align = self._semantic_fit(profile=prof, job=j, fallback=exp_align)
+            semantic_exp_align = min(1.0, max(semantic_exp_align, 0.6 * semantic_exp_align + 0.4 * intent_score))
 
             breakdown = InterviewChanceBreakdown(
                 weights=weights,

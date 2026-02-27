@@ -187,6 +187,28 @@ def _extract_responsibility_signals(text: str) -> List[str]:
     return found
 
 
+def _infer_project_skills_from_experience(experience: List[ExperienceModel]) -> List[str]:
+    """Infer latent skills from project/experience bullets."""
+    bullet_blob = "\n".join(
+        b.strip() for exp in (experience or []) for b in (exp.bullets or []) if b and b.strip()
+    )
+    if not bullet_blob:
+        return []
+    mappings = {
+        "Agentic AI": r"\b(agent|multi-agent|autonomous agent)\b",
+        "LLM": r"\b(llm|gpt|gemini|claude|large language model)\b",
+        "Machine Learning": r"\b(machine learning|ml model|predictive model|training pipeline)\b",
+        "Orchestration": r"\b(orchestrat|workflow engine|langgraph|airflow|state machine)\b",
+        "MLOps": r"\b(mlops|mlflow|model deployment|model monitoring)\b",
+        "Enterprise Architecture": r"\b(enterprise architecture|reference architecture|solution architecture)\b",
+    }
+    inferred: List[str] = []
+    for label, pattern in mappings.items():
+        if re.search(pattern, bullet_blob, flags=re.I):
+            inferred.append(label)
+    return inferred
+
+
 def _extract_skill_like_lines(text: str) -> List[str]:
     out: List[str] = []
     capture = False
@@ -400,6 +422,8 @@ class ParserAgentService:
             return current_skills
         prompt = (
             "Extract a concise SKILLS list from the resume text. Include both technical and non-technical skills "
+            "and infer skills from experience bullets when evidence is present "
+            "(example: 'led development of agents' => 'Agentic AI', 'Orchestration'). "
             "if explicitly present. Return STRICT JSON: {skills: string[]}. Do not invent data.\n\n"
             "Few-shot quality labeling examples:\n"
             "Example A: 'Principal AI Architect' -> skills include ['Principal Leadership', 'Architecture Strategy'] and quality_signal='10/10'.\n"
@@ -466,6 +490,9 @@ class ParserAgentService:
             experience=_parse_experience(text),
             education=_parse_education(text),
         )
+        inferred_skills = _infer_project_skills_from_experience(det.experience)
+        if inferred_skills:
+            det.skills = list(dict.fromkeys((det.skills or []) + inferred_skills))
         det.skills = _validate_and_backfill_skills(text, det.skills)
         if len(det.skills) < 8:
             det.skills = self._llm_skill_backfill(text, det.skills)

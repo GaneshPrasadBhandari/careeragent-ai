@@ -48,8 +48,30 @@ class NotificationService:
         except Exception as e:
             return {"sent": False, "channel": "gmail", "error": str(e)}
 
+    def _send_twilio_sms(self, *, body: str) -> Dict[str, Any]:
+        sid = self._settings.TWILIO_ACCOUNT_SID
+        token = self._settings.TWILIO_AUTH_TOKEN
+        from_number = self._settings.TWILIO_FROM_NUMBER
+        to_number = self._settings.TWILIO_TO_NUMBER
+        if not (sid and token and from_number and to_number):
+            return {"sent": False, "skipped": True, "reason": "twilio_not_configured"}
+        if self._dry_run:
+            return {"sent": False, "dry_run": True, "to": to_number, "channel": "sms"}
+        try:
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+            r = httpx.post(
+                url,
+                data={"From": from_number, "To": to_number, "Body": body[:1200]},
+                auth=(sid, token),
+                timeout=15.0,
+            )
+            return {"sent": r.status_code < 300, "status_code": r.status_code, "channel": "sms"}
+        except Exception as e:
+            return {"sent": False, "channel": "sms", "error": str(e)}
+
     def send_alert(self, *, message: str, title: str = "CareerAgent HITL Required", priority: str = "high") -> Dict[str, Any]:
         gmail_res = self._send_gmail(subject=title, body=message)
+        sms_res = self._send_twilio_sms(body=f"{title}: {message}")
 
         topic = self._settings.NTFY_TOPIC or "careeragent_alerts_ganesh"
         url = f"{self._settings.NTFY_BASE_URL.rstrip('/')}/{topic}"
@@ -57,7 +79,7 @@ class NotificationService:
         payload = message.encode("utf-8")
 
         if self._dry_run:
-            return {"sent": False, "dry_run": True, "url": url, "message": message, "gmail": gmail_res}
+            return {"sent": False, "dry_run": True, "url": url, "message": message, "gmail": gmail_res, "sms": sms_res}
 
         try:
             r = httpx.post(url, data=payload, headers=headers, timeout=15.0)
@@ -66,6 +88,7 @@ class NotificationService:
                 "status_code": r.status_code,
                 "url": url,
                 "gmail": gmail_res,
+                "sms": sms_res,
             }
         except Exception as e:
-            return {"sent": False, "error": str(e), "url": url, "gmail": gmail_res}
+            return {"sent": False, "error": str(e), "url": url, "gmail": gmail_res, "sms": sms_res}
