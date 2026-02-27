@@ -282,6 +282,24 @@ def _api_get_jobs(api_base: str, run_id: str) -> list[dict]:
     resp = _api_get(api_base, f"/hunt/{run_id}/jobs", timeout=5)
     return resp.get("jobs", []) if resp else []
 
+def _api_get_artifacts(api_base: str, run_id: str) -> dict:
+    resp = _api_get(api_base, f"/hunt/{run_id}/artifacts", timeout=8)
+    return resp.get("artifacts", {}) if resp else {}
+
+
+def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict] = None) -> bool:
+    try:
+        body = {"action": action}
+        if payload:
+            body.update(payload)
+        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
+        if r.status_code == 200:
+            return True
+        st.error(f"Action failed ({r.status_code}): {r.text[:200]}")
+    except Exception as exc:
+        st.error(f"Action request failed: {exc}")
+    return False
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE BOOTSTRAP
@@ -445,6 +463,69 @@ def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> No
         """, unsafe_allow_html=True)
 
 
+def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
+    if not run_id or not status:
+        return
+    pending = status.get("pending_action")
+    if status.get("status") != "needs_human_approval" or not pending:
+        return
+
+    st.markdown('<div class="section-header">Human-in-the-Loop Approval Required</div>', unsafe_allow_html=True)
+
+    if pending == "approve_ranking":
+        st.warning("Ranking evaluator is waiting for your approval before drafting resumes.")
+        if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
+            if _api_action(api_base, run_id, "approve_ranking"):
+                st.success("Ranking approved. Continuing to drafting layer...")
+                st.rerun()
+
+    elif pending == "approve_drafts":
+        st.warning("Draft resumes/cover letters are ready. Approve to continue auto-apply.")
+        artifacts = _api_get_artifacts(api_base, run_id)
+        if artifacts:
+            for job_id, files in artifacts.items():
+                st.markdown(f"**{job_id}**")
+                resume = files.get("resume_docx")
+                cover = files.get("cover_docx")
+                if resume:
+                    st.markdown(f"- [Preview Resume]({api_base.rstrip('/')}/artifact/download?path={resume})")
+                if cover:
+                    st.markdown(f"- [Preview Cover Letter]({api_base.rstrip('/')}/artifact/download?path={cover})")
+        if st.button("✅ Approve Drafts & Continue Apply", key="approve_drafts_btn"):
+            if _api_action(api_base, run_id, "approve_drafts"):
+                st.success("Drafts approved. Continuing to apply layers...")
+                st.rerun()
+
+
+def render_stepwise_details(status: Optional[dict]) -> None:
+    """Detailed layer-by-layer parsed/debug payloads."""
+    if not status:
+        return
+    st.markdown('<div class="section-header">Stepwise Outputs & Evaluator Checks</div>', unsafe_allow_html=True)
+
+    profile = status.get("profile", {})
+    layer_debug = status.get("layer_debug", {})
+    evaluations = status.get("evaluations", [])
+
+    c1, c2 = st.columns(2)
+    with c1:
+        with st.expander("🧾 Parsed Resume (L2)", expanded=False):
+            st.json(profile if profile else {"info": "Waiting for parse output"})
+        with st.expander("🔎 Discovery + Match Details (L3/L4)", expanded=False):
+            st.json({
+                "L3": layer_debug.get("L3", {}),
+                "L4": layer_debug.get("L4", {}),
+            })
+    with c2:
+        with st.expander("🏆 Evaluator Decisions", expanded=False):
+            st.json(evaluations if evaluations else [{"info": "No evaluator entries yet"}])
+        with st.expander("✍️ Draft + Apply Details (L6/L7)", expanded=False):
+            st.json({
+                "L6": layer_debug.get("L6", {}),
+                "L7": layer_debug.get("L7", {}),
+            })
+
+
 def render_agent_feed(status: Optional[dict]) -> None:
     """Live Agent Feed section."""
     feed = status.get("agent_log", []) if status else []
@@ -598,10 +679,15 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         threshold   = st.slider("Match Threshold", 0.30, 0.90, 0.45, 0.05,
                                 help="Minimum score for a job to qualify")
 
+        require_ranking_approval = st.checkbox("Require ranking approval (HITL)", value=True)
+        require_draft_approval = st.checkbox("Require draft approval before apply", value=True)
+
         config = {
-            "target_roles":    target_roles,
-            "match_threshold": threshold,
-            "geo_preferences": {"remote": remote_only, "locations": []},
+            "target_roles":             target_roles,
+            "match_threshold":          threshold,
+            "geo_preferences":          {"remote": remote_only, "locations": []},
+            "require_ranking_approval": require_ranking_approval,
+            "require_draft_approval":   require_draft_approval,
         }
 
         st.divider()
@@ -731,6 +817,8 @@ def main():
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         render_agent_feed(status)
+        render_hitl_controls(api_base, run_id, status)
+        render_stepwise_details(status)
 
     with tab_jobs:
         render_job_board(api_base, run_id, status)
