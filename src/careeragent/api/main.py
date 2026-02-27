@@ -29,6 +29,14 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+try:
+    from langsmith.run_helpers import traceable  # type: ignore
+except Exception:  # pragma: no cover
+    def traceable(*_args, **_kwargs):  # type: ignore
+        def _decorator(fn):
+            return fn
+        return _decorator
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -90,7 +98,7 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "progress_pct":     0.0,
         "created_at":       _now(),
         "completed_at":     None,
-        "config":           config,
+        "config":           _normalize_config(config),
         "layers":           layers,
         "profile":          {},
         "jobs_discovered":  0,
@@ -110,7 +118,25 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "pending_action":   None,       # approve_ranking | approve_drafts
         "approved_jobs":    [],
         "errors":           [],
+        "resume_path":      None,
+        "hitl_rejections":  0,
     }
+
+
+def _normalize_config(config: dict) -> dict:
+    cfg = dict(config or {})
+    cfg.setdefault("target_roles", ["Software Engineer"])
+    cfg.setdefault("match_threshold", 0.45)
+    cfg.setdefault("geo_preferences", {"remote": True, "locations": []})
+    cfg.setdefault("require_ranking_approval", True)
+    cfg.setdefault("require_draft_approval", True)
+    cfg.setdefault("max_jobs", 100)
+    cfg.setdefault("posted_within_hours", 168)
+    cfg.setdefault("salary_min", 0)
+    cfg.setdefault("salary_max", 400000)
+    cfg.setdefault("work_modes", ["remote", "hybrid", "onsite"])
+    cfg.setdefault("notifications", {"email": "", "phone": "", "enable_email": False, "enable_sms": False})
+    return cfg
 
 
 def _now() -> str:
@@ -174,6 +200,7 @@ def _qualified_from_state(state: dict) -> list[dict]:
     return list(state.get("approved_jobs") or state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs") or [])
 
 
+@traceable(name="api.continue_l6_l9")
 async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
@@ -212,6 +239,7 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
     await _continue_l7_to_l9(run_id)
 
 
+@traceable(name="api.continue_l7_l9")
 async def _continue_l7_to_l9(run_id: str) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
@@ -263,6 +291,7 @@ async def _continue_l7_to_l9(run_id: str) -> None:
     _persist_state(run_id)
 
 
+@traceable(name="api.run_pipeline")
 async def run_pipeline(run_id: str, resume_path: Path) -> None:
     """
     Full L0→L9 pipeline runner.
@@ -361,7 +390,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                     scout.search_jobs(intent), timeout=90
                 )
             else:
-                leads = _stub_leads(state["profile"])
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
 
             # Recovery guard: when external providers are unavailable (or return
             # zero leads), keep the L3->L9 pipeline operational with demo leads.
@@ -371,10 +400,10 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                     3,
                     "No live jobs returned from providers; switching to resilient demo lead fallback.",
                 )
-                leads = _stub_leads(state["profile"])
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
 
-            state["job_leads"]       = leads
-            state["jobs_discovered"] = len(leads)
+            state["job_leads"]       = leads[: int(state["config"].get("max_jobs", 100))]
+            state["jobs_discovered"] = len(state["job_leads"])
             state["layer_debug"]["L3"] = {
                 "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
                 "sample_jobs": leads[:5],
@@ -396,11 +425,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
             await mark_error(3, "Discovery timeout after 90s")
-            state["job_leads"]       = _stub_leads(state["profile"])
+            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
             state["jobs_discovered"] = len(state["job_leads"])
         except Exception as exc:
             await mark_error(3, str(exc))
-            state["job_leads"]       = _stub_leads(state["profile"])
+            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
             state["jobs_discovered"] = len(state["job_leads"])
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
@@ -418,6 +447,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             scored    = _stub_score(state["job_leads"])
             threshold = 0.45
 
+        scored = _apply_frontend_filters(scored, state["config"])
         state["scored_jobs"]     = scored
         state["jobs_scored"]     = len(scored)
         top_score = max((j.get("score", 0) for j in scored), default=0)
@@ -661,10 +691,10 @@ def _build_intent(profile: dict, config: dict) -> dict:
     }
 
 
-def _stub_leads(profile: dict) -> list[dict]:
+def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     """Return realistic stub leads when API keys are unavailable."""
     skills = profile.get("skills", ["Python"])[:3]
-    return [
+    seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
             "company": "TechCorp Inc.", "url": "https://boards.greenhouse.io/techcorp/jobs/demo",
@@ -684,6 +714,38 @@ def _stub_leads(profile: dict) -> list[dict]:
             "source": "demo", "salary_min": 160000, "salary_max": 220000,
         },
     ]
+    if max_jobs <= len(seed_jobs):
+        return seed_jobs[:max_jobs]
+    expanded = []
+    for idx in range(max_jobs):
+        base = dict(seed_jobs[idx % len(seed_jobs)])
+        base["id"] = f"{base['id']}_{idx+1:03d}"
+        base["posted_hours_ago"] = (idx % 72) + 1
+        expanded.append(base)
+    return expanded
+
+
+def _apply_frontend_filters(jobs: list[dict], config: dict) -> list[dict]:
+    work_modes = set(config.get("work_modes") or ["remote", "hybrid", "onsite"])
+    salary_min = int(config.get("salary_min", 0) or 0)
+    salary_max = int(config.get("salary_max", 10**9) or 10**9)
+    posted_within = int(config.get("posted_within_hours", 9999) or 9999)
+
+    filtered = []
+    for job in jobs:
+        is_remote = bool(job.get("remote"))
+        mode = "remote" if is_remote else "onsite"
+        if mode not in work_modes:
+            continue
+        jmin = int(job.get("salary_min") or 0)
+        jmax = int(job.get("salary_max") or 10**9)
+        if jmax < salary_min or jmin > salary_max:
+            continue
+        posted = int(job.get("posted_hours_ago") or 24)
+        if posted > posted_within:
+            continue
+        filtered.append(job)
+    return filtered
 
 
 def _stub_score(leads: list[dict]) -> list[dict]:
@@ -848,6 +910,7 @@ async def start_hunt(
 
     # Initialize state
     _runs[run_id] = _build_initial_state(run_id, cfg)
+    _runs[run_id]["resume_path"] = str(save_path)
 
     # Launch pipeline in background
     background_tasks.add_task(run_pipeline, run_id, save_path)
@@ -932,6 +995,25 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         _persist_state(run_id)
         background_tasks.add_task(_continue_l7_to_l9, run_id)
         return {"ok": True, "message": "drafts approved; resuming apply"}
+
+    if action == "reject_ranking":
+        state["pending_action"] = None
+        state["status"] = "running"
+        state["hitl_rejections"] = int(state.get("hitl_rejections", 0)) + 1
+        _log_agent(state, 5, "Ranking rejected by human reviewer. Looping back to L2 intake and planning.")
+        _persist_state(run_id)
+        resume_path = Path(state.get("resume_path") or "")
+        if resume_path.exists():
+            background_tasks.add_task(run_pipeline, run_id, resume_path)
+            return {"ok": True, "message": "ranking rejected; restarting from L2"}
+        raise HTTPException(400, "resume path missing; cannot re-run")
+
+    if action == "reject_drafts":
+        state["pending_action"] = "approve_ranking"
+        state["status"] = "needs_human_approval"
+        _log_agent(state, 6, "Draft package rejected by reviewer. Returning to ranking gate.")
+        _persist_state(run_id)
+        return {"ok": True, "message": "drafts rejected; returned to ranking approval"}
 
     raise HTTPException(400, "unknown action")
 

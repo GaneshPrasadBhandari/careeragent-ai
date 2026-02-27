@@ -17,6 +17,7 @@ import json
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 import requests
 import streamlit as st
@@ -473,14 +474,32 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
     st.markdown('<div class="section-header">Human-in-the-Loop Approval Required</div>', unsafe_allow_html=True)
 
     if pending == "approve_ranking":
-        st.warning("Ranking evaluator is waiting for your approval before drafting resumes.")
-        if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
-            if _api_action(api_base, run_id, "approve_ranking"):
-                st.success("Ranking approved. Continuing to drafting layer...")
-                st.rerun()
+        st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
+        ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", [])
+        if ranked_jobs:
+            options = {f"{j.get('title','Role')} · {j.get('company','')} ({j.get('score',0)*100:.0f}%)": j.get("id") for j in ranked_jobs}
+            selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys())[:5])
+            selected_ids = [options[x] for x in selected_labels]
+            with st.expander("Why these jobs are recommended"):
+                for j in ranked_jobs[:8]:
+                    st.markdown(f"- **{j.get('title','')} @ {j.get('company','')}** — score `{j.get('score',0)*100:.1f}%`, matched skills: {', '.join(j.get('matched_skills',[])[:6]) or 'N/A'}")
+        else:
+            selected_ids = []
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
+                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids}):
+                    st.success("Ranking approved. Continuing to drafting layer...")
+                    st.rerun()
+        with c2:
+            if st.button("↩️ Reject & Re-plan from L2", key="reject_ranking_btn"):
+                if _api_action(api_base, run_id, "reject_ranking"):
+                    st.success("Ranking rejected. Pipeline looped back to intake/planning.")
+                    st.rerun()
 
     elif pending == "approve_drafts":
-        st.warning("Draft resumes/cover letters are ready. Approve to continue auto-apply.")
+        st.warning("Draft resumes/cover letters are ready. Approve to continue auto-apply or reject to return to ranking review.")
         artifacts = _api_get_artifacts(api_base, run_id)
         if artifacts:
             for job_id, files in artifacts.items():
@@ -488,13 +507,21 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
                 resume = files.get("resume_docx")
                 cover = files.get("cover_docx")
                 if resume:
-                    st.markdown(f"- [Preview Resume]({api_base.rstrip('/')}/artifact/download?path={resume})")
+                    st.markdown(f"- [Preview Resume]({api_base.rstrip('/')}/artifact/download?path={quote_plus(resume)})")
                 if cover:
-                    st.markdown(f"- [Preview Cover Letter]({api_base.rstrip('/')}/artifact/download?path={cover})")
-        if st.button("✅ Approve Drafts & Continue Apply", key="approve_drafts_btn"):
-            if _api_action(api_base, run_id, "approve_drafts"):
-                st.success("Drafts approved. Continuing to apply layers...")
-                st.rerun()
+                    st.markdown(f"- [Preview Cover Letter]({api_base.rstrip('/')}/artifact/download?path={quote_plus(cover)})")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Approve Drafts & Continue Apply", key="approve_drafts_btn"):
+                if _api_action(api_base, run_id, "approve_drafts"):
+                    st.success("Drafts approved. Continuing to apply layers...")
+                    st.rerun()
+        with c2:
+            if st.button("↩️ Reject Drafts", key="reject_drafts_btn"):
+                if _api_action(api_base, run_id, "reject_drafts"):
+                    st.success("Drafts rejected. Returned to ranking approval.")
+                    st.rerun()
 
 
 def render_stepwise_details(status: Optional[dict]) -> None:
@@ -565,17 +592,24 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         return
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
-    for job in jobs[:30]:
-        score    = job.get("score", 0)
-        score_c  = "green" if score >= 0.7 else ("orange" if score >= 0.45 else "")
+    min_score = st.slider("Job board score filter", 0.0, 1.0, 0.45, 0.05)
+    only_remote = st.checkbox("Show remote only in board", value=False)
+
+    filtered = [j for j in jobs if j.get("score", 0) >= min_score and (not only_remote or j.get("remote"))]
+    st.caption(f"Showing {len(filtered)} / {len(jobs)} jobs")
+
+    for job in filtered[:40]:
+        score = job.get("score", 0)
+        score_c = "green" if score >= 0.7 else ("orange" if score >= 0.45 else "")
         remote_b = "🌐 Remote" if job.get("remote") else f"📍 {job.get('location','')}"
+        why = ", ".join(job.get("matched_skills", [])[:4]) or "Keyword overlap + semantic fit"
         st.markdown(f"""
         <div class="job-row">
             <div>
                 <div class="job-title">{job.get('title','')}</div>
                 <div class="job-company">{job.get('company','')}  ·  {remote_b}</div>
                 <div style="font-size:11px;color:#6e7681;margin-top:2px">
-                    Matched: {', '.join(job.get('matched_skills',[])[:5]) or '—'}
+                    LLM reasoning: {why}
                 </div>
             </div>
             <div style="text-align:right">
@@ -678,9 +712,18 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         remote_only = st.checkbox("Remote Only", value=True)
         threshold   = st.slider("Match Threshold", 0.30, 0.90, 0.45, 0.05,
                                 help="Minimum score for a job to qualify")
+        posted_hours = st.selectbox("Posted within", [24, 48, 72, 168, 720], index=3, format_func=lambda x: f"Last {x} hours")
+        max_jobs = st.slider("How many jobs to fetch", 20, 100, 100, 10)
+        salary_min, salary_max = st.slider("Salary range (USD)", 0, 400000, (80000, 220000), step=10000)
 
         require_ranking_approval = st.checkbox("Require ranking approval (HITL)", value=True)
         require_draft_approval = st.checkbox("Require draft approval before apply", value=True)
+
+        st.caption("Notifications")
+        notif_email = st.text_input("Gmail for notifications", value="")
+        notif_phone = st.text_input("Phone number for SMS", value="")
+        enable_email = st.checkbox("Enable email notifications", value=False)
+        enable_sms = st.checkbox("Enable SMS notifications", value=False)
 
         config = {
             "target_roles":             target_roles,
@@ -688,6 +731,17 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             "geo_preferences":          {"remote": remote_only, "locations": []},
             "require_ranking_approval": require_ranking_approval,
             "require_draft_approval":   require_draft_approval,
+            "posted_within_hours":      posted_hours,
+            "max_jobs":                 max_jobs,
+            "salary_min":               salary_min,
+            "salary_max":               salary_max,
+            "work_modes":               ["remote"] if remote_only else ["remote", "hybrid", "onsite"],
+            "notifications": {
+                "email": notif_email,
+                "phone": notif_phone,
+                "enable_email": enable_email,
+                "enable_sms": enable_sms,
+            },
         }
 
         st.divider()
@@ -703,6 +757,11 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         resume_bytes    = resume_file.read() if resume_file else None
         resume_filename = resume_file.name   if resume_file else None
+        if resume_file:
+            st.caption(f"Uploaded: {resume_filename} ({round(len(resume_bytes or b'')/1024,1)}KB)")
+            if resume_filename.lower().endswith((".txt", ".md")) and resume_bytes:
+                with st.expander("Preview uploaded resume"):
+                    st.code((resume_bytes.decode("utf-8", errors="ignore"))[:4000])
 
         # ── Start Hunt button ─────────────────────────────────────────────────
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None or not is_healthy))
@@ -819,6 +878,8 @@ def main():
         render_agent_feed(status)
         render_hitl_controls(api_base, run_id, status)
         render_stepwise_details(status)
+        with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
+            st.json(status or {"info": "No run status yet"})
 
     with tab_jobs:
         render_job_board(api_base, run_id, status)
