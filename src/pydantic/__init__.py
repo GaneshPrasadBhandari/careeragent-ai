@@ -84,3 +84,27 @@ class BaseModel:
     def dict(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         del args, kwargs
         return self.model_dump()
+
+
+def create_model(__model_name: str, __base__: type[BaseModel] | None = None, **field_definitions: Any):
+    """Minimal runtime model factory compatible with pydantic.create_model.
+
+    Supports the common field declaration forms used by libraries:
+    - `name=type` (default `None`)
+    - `name=(type, default)`
+    """
+    base_cls = __base__ or BaseModel
+    annotations: dict[str, Any] = {}
+    attrs: dict[str, Any] = {}
+
+    for field_name, field_spec in field_definitions.items():
+        if isinstance(field_spec, tuple) and len(field_spec) == 2:
+            field_type, default = field_spec
+        else:
+            field_type, default = field_spec, None
+
+        annotations[field_name] = field_type
+        attrs[field_name] = default
+
+    attrs["__annotations__"] = annotations
+    return type(__model_name, (base_cls,), attrs)
