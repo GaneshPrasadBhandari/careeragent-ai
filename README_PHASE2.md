@@ -43,4 +43,4 @@ uv sync
 uv run playwright install chromium
 
 # Run the Phase 2 Health Check
-uv run python src/careeragent/ops_check.py
+uv run python -m careeragent.ops_check
