@@ -94,14 +94,27 @@ async def serper_search(settings: ToolSettings, query: str, num: int = 10, tbs: 
         if tbs:
             body["tbs"] = tbs
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post("https://google.serper.dev/search", headers=headers, json=body)
+            r = await client.post("https://google.serper.dev/jobs", headers=headers, json=body)
         if r.status_code == 403:
             return ToolResult(ok=False, confidence=0.0, error="Serper quota/403", meta={"status": 403})
         if r.status_code >= 400:
             return ToolResult(ok=False, confidence=0.0, error=f"Serper {r.status_code}")
-        organic = (r.json().get("organic") or [])
-        out = [{"title": x.get("title") or "", "link": x.get("link") or "", "snippet": x.get("snippet") or ""} for x in organic]
-        conf = 0.75 if out else 0.25
+        data = r.json()
+        jobs = (data.get("jobs") or [])
+        out = [
+            {
+                "title":   x.get("title") or "",
+                "link":    x.get("applyOptions", [{}])[0].get("link") or x.get("link") or "",
+                "snippet": x.get("description") or x.get("snippet") or "",
+                "company": x.get("companyName") or "",
+                "location": x.get("location") or "",
+                "posted":  x.get("detectedExtensions", {}).get("postedAt") or "",
+                "source":  "serper_jobs",
+            }
+            for x in jobs
+            if x.get("title")
+        ]
+        conf = 0.75 if len(out) >= 5 else (0.45 if out else 0.15)
         return ToolResult(ok=True, confidence=conf, data=out)
     except Exception as e:
         return ToolResult(ok=False, confidence=0.0, error=str(e))

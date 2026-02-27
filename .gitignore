@@ -43,3 +43,6 @@ credentials.json
 outputs/
 logs/
 
+
+_rollback/
+uploads/
