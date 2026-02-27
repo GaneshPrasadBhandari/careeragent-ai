@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from careeragent.core.settings import Settings
 from careeragent.core.state import AgentState
 from careeragent.services.notification_service import NotificationService
-from careeragent.tools.web_tools import RobotsGuard
+from careeragent.tools.web_tools import RobotsGuard, apply_playwright_stealth
 
 
 @dataclass
@@ -76,8 +76,22 @@ class AutoApplierAgentService:
     def apply(self, state: AgentState, *, dry_run: bool = True) -> List[ApplyResult]:
         results: List[ApplyResult] = []
         profile = state.extracted_profile or {}
+        ranking_map = {str(j.get("url") or ""): j for j in (state.ranking or [])}
 
         for url in state.approved_job_urls:
+            score = float((ranking_map.get(url) or {}).get("phase2_score") or (ranking_map.get(url) or {}).get("match_score") or 0.0)
+            if score < 0.65:
+                results.append(ApplyResult(job_url=url, status="skipped_low_score", message=f"score={score:.2f} below 0.65"))
+                continue
+            if 0.65 < score < 0.85:
+                self.notify.send_alert(
+                    message=f"Run {state.run_id}: HITL go/no-go required for {url} (score={score:.2f}).",
+                    title="CareerAgent Mid-Score Approval Needed",
+                    priority="high",
+                )
+                results.append(ApplyResult(job_url=url, status="hitl_required", message=f"score={score:.2f} requires approval"))
+                continue
+
             dec = self.robots.allowed(url)
             if not dec.allowed:
                 results.append(ApplyResult(job_url=url, status="skipped", message=dec.reason))
@@ -98,6 +112,7 @@ class AutoApplierAgentService:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(headless=True)
                     page = browser.new_page()
+                    apply_playwright_stealth(page)
                     page.goto(url, timeout=45_000)
                     missing = self._map_common_fields(page, profile, url)
 

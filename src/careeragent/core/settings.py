@@ -32,6 +32,10 @@ class Settings(BaseModel):
     GMAIL_TO_EMAIL: Optional[str] = None
     GMAIL_FROM_EMAIL: Optional[str] = None
     GMAIL_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_FROM_NUMBER: Optional[str] = None
+    TWILIO_TO_NUMBER: Optional[str] = None
 
     MAX_HTTP_SECONDS: float = 40.0
 
@@ -56,6 +60,10 @@ class Settings(BaseModel):
                 "GMAIL_TO_EMAIL",
                 "GMAIL_FROM_EMAIL",
                 "GMAIL_SERVICE_ACCOUNT_JSON",
+                "TWILIO_ACCOUNT_SID",
+                "TWILIO_AUTH_TOKEN",
+                "TWILIO_FROM_NUMBER",
+                "TWILIO_TO_NUMBER",
                 "MAX_HTTP_SECONDS",
             ]
         }

@@ -139,8 +139,79 @@ def _parse_skills(text: str) -> List[str]:
     if m:
         block = m.group(1)
 
-    for line in block.splitlines():
-        line = line.strip()
+def _fuzzy_match_token(token: str, master: List[str], threshold: float = 0.84) -> Optional[str]:
+    t = _clean_skill_token(token)
+    if not t:
+        return None
+    low = t.lower()
+    for m in master:
+        if low == m.lower():
+            return m
+    best: Optional[str] = None
+    score = 0.0
+    for m in master:
+        s = SequenceMatcher(None, low, m.lower()).ratio()
+        if s > score:
+            score = s
+            best = m
+    if best and score >= threshold:
+        return best
+    return t
+
+
+def _regex_skill_fallback(text: str, master: List[str]) -> List[str]:
+    found: List[str] = []
+    for skill in master:
+        pattern = r"(?<!\w)" + re.escape(skill).replace(r"\ ", r"[\s\-/]+") + r"(?!\w)"
+        if re.search(pattern, text or "", flags=re.I):
+            found.append(skill)
+    return found
+
+
+def _extract_responsibility_signals(text: str) -> List[str]:
+    """Promote seniority and architecture responsibilities into skill-like tags."""
+    patterns = {
+        "Principal Leadership": r"\bprincipal\b",
+        "Architecture Strategy": r"\b(architect|architecture|solution architect|enterprise architect)\b",
+        "Technical Leadership": r"\b(tech lead|technical lead|leadership|mentorship|mentoring)\b",
+        "System Design": r"\b(system design|distributed systems|reference architecture)\b",
+        "Stakeholder Management": r"\b(stakeholder|executive|cross-functional|roadmap)\b",
+    }
+    found: List[str] = []
+    low = text or ""
+    for label, pattern in patterns.items():
+        if re.search(pattern, low, flags=re.I):
+            found.append(label)
+    return found
+
+
+def _infer_project_skills_from_experience(experience: List[ExperienceModel]) -> List[str]:
+    """Infer latent skills from project/experience bullets."""
+    bullet_blob = "\n".join(
+        b.strip() for exp in (experience or []) for b in (exp.bullets or []) if b and b.strip()
+    )
+    if not bullet_blob:
+        return []
+    mappings = {
+        "Agentic AI": r"\b(agent|multi-agent|autonomous agent)\b",
+        "LLM": r"\b(llm|gpt|gemini|claude|large language model)\b",
+        "Machine Learning": r"\b(machine learning|ml model|predictive model|training pipeline)\b",
+        "Orchestration": r"\b(orchestrat|workflow engine|langgraph|airflow|state machine)\b",
+        "MLOps": r"\b(mlops|mlflow|model deployment|model monitoring)\b",
+        "Enterprise Architecture": r"\b(enterprise architecture|reference architecture|solution architecture)\b",
+    }
+    inferred: List[str] = []
+    for label, pattern in mappings.items():
+        if re.search(pattern, bullet_blob, flags=re.I):
+            inferred.append(label)
+    return inferred
+
+
+def _extract_skill_like_lines(text: str) -> List[str]:
+    out: List[str] = []
+    capture = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
         if not line:
             continue
         if ":" in line:
@@ -451,6 +522,43 @@ class ParserAgentService:
         self.s = settings
         self.gemini = GeminiClient(settings)
 
+    @staticmethod
+    def _coerce_llm_json(payload: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            txt = payload.strip()
+            txt = re.sub(r"^```(?:json)?\s*|\s*```$", "", txt, flags=re.I | re.S).strip()
+            try:
+                j = json.loads(txt)
+            except Exception:
+                return None
+            return j if isinstance(j, dict) else None
+        return None
+
+    def _llm_skill_backfill(self, text: str, current_skills: List[str]) -> List[str]:
+        if not self.s.GEMINI_API_KEY:
+            return current_skills
+        prompt = (
+            "Extract a concise SKILLS list from the resume text. Include both technical and non-technical skills "
+            "and infer skills from experience bullets when evidence is present "
+            "(example: 'led development of agents' => 'Agentic AI', 'Orchestration'). "
+            "if explicitly present. Return STRICT JSON: {skills: string[]}. Do not invent data.\n\n"
+            "Few-shot quality labeling examples:\n"
+            "Example A: 'Principal AI Architect' -> skills include ['Principal Leadership', 'Architecture Strategy'] and quality_signal='10/10'.\n"
+            "Example B: 'Solutions Architecture' -> skills include ['Solutions Architecture', 'System Design'] and quality_signal='10/10'.\n"
+            "Only output JSON with key 'skills'.\n\n"
+            f"CURRENT_SKILLS: {current_skills}\n\nRESUME_TEXT:\n{text[:10000]}"
+        )
+        j = self._coerce_llm_json(self.gemini.generate_json(prompt, temperature=0.0, max_tokens=500))
+        if not isinstance(j, dict):
+            return current_skills
+        try:
+            parsed = SkillExtractionValidator.model_validate(j)
+        except Exception:
+            return current_skills
+        return _validate_and_backfill_skills(text, list(current_skills or []) + list(parsed.skills or []))
+
     def parse_from_upload(self, *, filename: str, file_bytes: bytes, raw_text: Optional[str] = None) -> Tuple[ExtractedResume, str]:
         """Return extracted profile + raw_text used."""
         text = raw_text or ""
@@ -504,6 +612,12 @@ class ParserAgentService:
             experience=_parse_experience(text),
             education=_parse_education(text),
         )
+        inferred_skills = _infer_project_skills_from_experience(det.experience)
+        if inferred_skills:
+            det.skills = list(dict.fromkeys((det.skills or []) + inferred_skills))
+        det.skills = _validate_and_backfill_skills(text, det.skills)
+        if len(det.skills) < 8:
+            det.skills = self._llm_skill_backfill(text, det.skills)
 
         # LLM backfill if missing critical fields or empty experience
         missing_critical = (

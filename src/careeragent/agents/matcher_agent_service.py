@@ -232,6 +232,18 @@ def _compute_ats_score(resume_skills: List[str], jd_text: str) -> float:
     return min(1.0, hits / max(1, len(resume_skills)))
 
 
+def _academic_expertise_bonus(profile: Dict[str, Any], toks: set[str]) -> float:
+    education = profile.get("education") or []
+    edu_blob = " ".join(str(e) for e in education).lower()
+    has_masters = any(k in edu_blob for k in ["master", "m.s", "ms", "msc"])
+    has_ai_ds = any(k in edu_blob for k in ["data science", "artificial intelligence", "machine learning", "ai"])
+    if not (has_masters and has_ai_ds):
+        return 0.0
+    if any(k in toks for k in ["machine", "learning", "ai", "llm", "data", "science"]):
+        return 0.15
+    return 0.05
+
+
 class MatcherAgentService:
     """Description: L4 job scoring with JD-cleaning and robust interview-chance formula.
 
@@ -302,33 +314,84 @@ class MatcherAgentService:
             + _W2_EXP * experience_alignment
             + _W3_ATS * ats_score
         )
-        interview_chance = round(min(1.0, max(0.0, interview_chance)), 4)
+        j = self.gemini.generate_json(prompt, temperature=0.1, max_tokens=350)
+        if not isinstance(j, dict):
+            return fallback
+        try:
+            return max(0.0, min(1.0, float(j.get("score"))))
+        except Exception:
+            return fallback
 
-        # overall_match_percent is the primary display metric (0–100)
-        match_score = interview_chance
-        overall_match_pct = round(match_score * 100.0, 2)
+    def score_jobs(self, state: AgentState) -> List[Dict[str, Any]]:
+        prof = state.extracted_profile or {}
+        resume_skills_raw = prof.get("skills") or []
+        resume_skills = [normalize_skill(s) for s in resume_skills_raw if s]
+        weights = InterviewChanceWeights()
 
-        # ── Persist scores ────────────────────────────────────────────
-        job["components"] = {
-            "skill_overlap": round(skill_overlap, 4),
-            "experience_alignment": round(experience_alignment, 4),
-            "ats_score": round(ats_score, 4),
-        }
-        job["interview_chance_weights"] = {
-            "w1_skill_overlap": _W1_SKILL,
-            "w2_experience_alignment": _W2_EXP,
-            "w3_ats_score": _W3_ATS,
-        }
-        job["interview_chance_score"] = interview_chance
-        job["match_score"] = match_score
-        job["overall_match_percent"] = overall_match_pct
+        out: List[Dict[str, Any]] = []
+        for j in state.jobs_raw:
+            jd_text = (j.get("full_text_md") or j.get("snippet") or "")
+            jd_title = str(j.get("title") or "")
 
-        # Phase2 score alias (used by director soft-fence)
-        job["phase2_score"] = match_score
+            scorecard = compute_jd_alignment(jd_text=jd_text, resume_skills=resume_skills)
+            skill_overlap = scorecard.jd_alignment_percent / 100.0
+            intent_score = min(
+                1.0,
+                sum(
+                    0.2
+                    for k in ["architect", "solution", "enterprise", "ai", "lead", "principal"]
+                    if k in (jd_title + " " + jd_text).lower()
+                ),
+            )
 
-        # Clean up full_text_md to avoid storing garbage
-        if _is_blocked(full_text):
-            job["full_text_md"] = snippet  # replace with snippet
-            job["full_text_blocked"] = True
+            toks = set(_tokenize(jd_text + " " + jd_title))
+            exp_align = 0.25
+            if any(k in toks for k in ["architect", "solution", "stakeholder", "roadmap", "strategy"]):
+                exp_align = 0.65
+            if any(k in toks for k in ["genai", "llm", "rag", "langchain", "langgraph", "azure", "openai"]):
+                exp_align = min(1.0, exp_align + 0.2)
+            if any(k in toks for k in ["mlops", "cicd", "docker", "kubernetes", "terraform", "mlflow"]):
+                exp_align = min(1.0, exp_align + 0.15)
 
-        return job
+            exp_align = min(1.0, exp_align + _academic_expertise_bonus(prof, toks))
+
+            ats_score = min(1.0, 0.05 + skill_overlap)
+            semantic_exp_align = self._semantic_fit(profile=prof, job=j, fallback=exp_align)
+            semantic_exp_align = min(1.0, max(semantic_exp_align, 0.6 * semantic_exp_align + 0.4 * intent_score))
+
+            breakdown = InterviewChanceBreakdown(
+                weights=weights,
+                components=InterviewChanceComponents(
+                    skill_overlap=round(skill_overlap, 4),
+                    experience_alignment=round(semantic_exp_align, 4),
+                    ats_score=round(ats_score, 4),
+                    market_competition_factor=1.0,
+                ),
+            )
+            overall_ratio = breakdown.interview_chance_score
+
+            out.append(
+                {
+                    **j,
+                    "matched_jd_skills": scorecard.matched_jd_skills[:50],
+                    "missing_jd_skills": scorecard.missing_jd_skills[:50],
+                    "jd_alignment_percent": scorecard.jd_alignment_percent,
+                    "missing_skills_gap_percent": scorecard.missing_skills_gap_percent,
+                    "components": {
+                        "skill_overlap": round(skill_overlap, 4),
+                        "experience_alignment": round(semantic_exp_align, 4),
+                        "ats_score": round(ats_score, 4),
+                    },
+                    "interview_chance_weights": weights.model_dump(),
+                    "interview_chance_score": round(overall_ratio, 4),
+                    "match_score": round(overall_ratio, 4),
+                    "overall_match_percent": round(overall_ratio * 100.0, 2),
+                }
+            )
+
+        top = max((float(j.get("match_score") or 0.0) for j in out), default=0.0)
+        state.meta["l4_recursive_loop_required"] = top < 0.7
+        state.meta["interview_chance_weights"] = weights.model_dump()
+        if top < 0.7:
+            state.log_eval(f"[L4] Recursive loop requested: top interview chance {top:.2f} < 0.70")
+        return out

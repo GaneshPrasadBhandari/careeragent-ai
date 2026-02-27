@@ -218,96 +218,33 @@ def ats_keyword_match_percent(job_text: str, resume_text: str, *, profile_skills
     resume_skills = set(extract_skills(resume_text, extra_candidates=prof))
     if not jd_skills:
         return 0.0
-    return round((len(jd_skills & resume_skills) / max(1, len(jd_skills))) * 100.0, 2)
+    matched = len(jd_skills & resume_skills)
+    return round((matched / max(1, len(jd_skills))) * 100.0, 2)
 
 
-# ─────────────────────────────────────────────
-# Fallback builders (no LLM required)
-# ─────────────────────────────────────────────
-def _build_fallback_resume(profile: Dict[str, Any], title: str, jd: str) -> str:
-    name = str(profile.get("name") or "Candidate")
-    contact = profile.get("contact") or {}
-    email = contact.get("email") or ""
-    phone = contact.get("phone") or ""
-    location = contact.get("location") or ""
-    linkedin = contact.get("linkedin") or ""
-    github = contact.get("github") or ""
+def optimize_resume_keywords(*, resume_md: str, jd_text: str, profile_skills: List[str], top_n: int = 5) -> Tuple[str, List[str]]:
+    """Reverse-ATS pass: inject top missing JD keywords into Skills Highlights section."""
+    jd_terms = [s for s in extract_skills(jd_text, extra_candidates=profile_skills) if s]
+    resume_terms = set(extract_skills(resume_md, extra_candidates=profile_skills))
+    missing: List[str] = []
+    for term in jd_terms:
+        if term in resume_terms or term in missing:
+            continue
+        missing.append(term)
+        if len(missing) >= top_n:
+            break
+    if not missing:
+        return resume_md, []
 
-    contact_parts = [p for p in [email, phone, location] if p]
-    if linkedin:
-        contact_parts.append(linkedin)
-    if github:
-        contact_parts.append(github)
-    contact_line = " | ".join(contact_parts)
-
-    summary = str(profile.get("summary") or
-                  f"Experienced professional targeting {title} roles with a proven track record in technology delivery.")
-
-    skills = profile.get("skills") or []
-    skills_block = ""
-    if skills:
-        # Group in lines of ~8 skills
-        skill_lines = [", ".join(skills[i:i+8]) for i in range(0, min(len(skills), 48), 8)]
-        skills_block = "\n".join(skill_lines)
-
-    experience = profile.get("experience") or []
-    exp_lines = []
-    for exp in experience[:8]:
-        exp_title = exp.get("title") or ""
-        company = exp.get("company") or ""
-        start = exp.get("start_date") or ""
-        end = exp.get("end_date") or "Present"
-        date_str = f"{start} – {end}" if start else ""
-        header_parts = [p for p in [exp_title, company, date_str] if p]
-        exp_lines.append(f"\n### {' | '.join(header_parts)}")
-        for b in (exp.get("bullets") or [])[:8]:
-            exp_lines.append(f"- {b}")
-
-    education = profile.get("education") or []
-    edu_lines = []
-    for edu in education[:4]:
-        parts = [p for p in [edu.get("degree"), edu.get("institution"), edu.get("graduation_year")] if p]
-        if parts:
-            edu_lines.append(f"- {', '.join(parts)}")
-
-    sections = [f"# {name}", contact_line, "", "## Summary", summary, "", "## Skills", skills_block]
-    if exp_lines:
-        sections += ["", "## Experience"] + exp_lines
-    if edu_lines:
-        sections += ["", "## Education"] + edu_lines
-
-    return "\n".join(sections)
+    section_header = "## Skills Highlights"
+    section_body = "\n".join([f"- {m}" for m in missing])
+    if section_header in resume_md:
+        enriched = resume_md.replace(section_header, f"{section_header}\n{section_body}", 1)
+    else:
+        enriched = f"{resume_md.strip()}\n\n{section_header}\n{section_body}\n"
+    return enriched, missing
 
 
-def _build_fallback_cover(profile: Dict[str, Any], title: str) -> str:
-    name = str(profile.get("name") or "Candidate")
-    experience = profile.get("experience") or []
-    best = experience[0] if experience else {}
-    bullets = best.get("bullets") or []
-    company_name = best.get("company") or "my previous role"
-
-    action = bullets[0] if bullets else "delivered a production AI/ML solution end to end"
-    result = bullets[1] if len(bullets) > 1 else "improved team velocity and system reliability"
-    challenge = bullets[2] if len(bullets) > 2 else "owned ambiguous requirements and cross-team alignment"
-
-    return (
-        f"# Cover Letter — {title}\n\n"
-        f"Dear Hiring Manager,\n\n"
-        f"I am writing to express strong interest in the **{title}** role. "
-        f"During my time at {company_name}, I led work that directly maps to the challenges this position addresses.\n\n"
-        f"**Action:** {action}\n\n"
-        f"**Result:** {result}\n\n"
-        f"**Challenge I overcame:** {challenge}\n\n"
-        f"This experience gave me the technical depth and business judgment to ship impactful solutions under real constraints. "
-        f"I would bring the same execution discipline to your team — clean architecture, measurable outcomes, and safe automation.\n\n"
-        f"I welcome the opportunity to discuss how my background aligns with your needs.\n\n"
-        f"Sincerely,\n{name}"
-    )
-
-
-# ─────────────────────────────────────────────
-# Main service
-# ─────────────────────────────────────────────
 class DraftingAgentService:
     """Description: Generate ATS-friendly resume + US-style story cover letter.
     Layer: L6
@@ -346,7 +283,11 @@ class DraftingAgentService:
             jd = job.get("full_text_md") or job.get("full_text") or job.get("snippet") or ""
             title = re.sub(r"\s*[|-].*$", "", job.get("title") or "Target Role").strip()[:80]
 
-            resume_md, cover_md = self._gen_with_llm(prof, jd, title)
+            revision_notes = str((state.meta or {}).get("draft_revision_feedback") or "")
+            resume_md, cover_md = self._gen_with_llm(prof, jd, title, linkedin_achievements=linkedin_achievements, revision_notes=revision_notes)
+            resume_md, injected = optimize_resume_keywords(resume_md=resume_md, jd_text=jd, profile_skills=profile_skills, top_n=5)
+            resume_plain = _strip_markdown(resume_md)
+            cover_plain = _strip_markdown(cover_md)
 
             # Scoring
             layout_pct = ats_format_check_percent(resume_md)
@@ -362,6 +303,7 @@ class DraftingAgentService:
             job["ats_keyword_match_percent"] = kw_pct
             job["missing_jd_skills"] = align.missing_jd_skills[:40]
             job["matched_jd_skills"] = align.matched_jd_skills[:40]
+            job["ats_keyword_injected"] = injected
 
             # Write all formats
             resume_md_path = run_dir / f"resume_{key}.md"

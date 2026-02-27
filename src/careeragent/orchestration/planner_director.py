@@ -45,10 +45,15 @@ class Planner:
     def build_personas(self, state: AgentState) -> List[PlannerPersona]:
         roles = state.preferences.target_roles or []
         primary = roles[0] if roles else "Solution Architect"
+        profile_skills = [str(x) for x in ((state.extracted_profile or {}).get("skills") or [])]
 
-        must = [primary]
-        if "architect" in primary.lower() or "solution" in primary.lower():
-            must += ["Solution Architect", "AI Solution Architect", "GenAI Architect", "Solutions Architecture"]
+        core_cluster = [primary, "Solutions Architect", "Solution Architect", "Enterprise Architecture"]
+        cognitive_cluster = ["AI Architect", "LLM", "Machine Learning", "Generative AI", "MLOps"]
+        leadership_cluster = ["Technical Lead", "Data Science Lead", "Architecture Strategy", "Principal"]
+        if any("enterprise" in x.lower() for x in profile_skills):
+            core_cluster.append("Enterprise Solutions Architect")
+        if any("agent" in x.lower() for x in profile_skills):
+            cognitive_cluster.append("Agentic AI")
 
         negative = _default_negative_terms()
         location_terms = _resolve_location_terms(state)
@@ -56,28 +61,28 @@ class Planner:
 
         pA = PlannerPersona(
             persona_id="A",
-            name=f"Strict ATS {geo_hint} 36h",
+            name=f"Cluster A (Core) {geo_hint} 36h",
             strategy="ats_preferred",
             recency_hours=min(36.0, state.preferences.recency_hours),
-            must_include=list(dict.fromkeys(must + location_terms[:2])),
+            must_include=list(dict.fromkeys(core_cluster + location_terms[:2])),
             negative_terms=negative,
             site_filters=ATS_SITES,
         )
         pB = PlannerPersona(
             persona_id="B",
-            name=f"ATS-preferred {geo_hint} 7d",
+            name=f"Cluster B (Cognitive) {geo_hint} 7d",
             strategy="ats_preferred",
             recency_hours=max(168.0, state.preferences.recency_hours),
-            must_include=list(dict.fromkeys(must + ["remote", "hybrid"] + location_terms[:2])),
+            must_include=list(dict.fromkeys(cognitive_cluster + ["remote", "hybrid"] + location_terms[:2])),
             negative_terms=negative,
             site_filters=ATS_SITES,
         )
         pC = PlannerPersona(
             persona_id="C",
-            name=f"Broad {geo_hint} title-strict",
+            name=f"Cluster C (Leadership) {geo_hint}",
             strategy="broad",
             recency_hours=max(168.0, state.preferences.recency_hours),
-            must_include=list(dict.fromkeys([primary] + location_terms[:2])),
+            must_include=list(dict.fromkeys(leadership_cluster + location_terms[:2])),
             negative_terms=negative,
             site_filters=[],
         )
