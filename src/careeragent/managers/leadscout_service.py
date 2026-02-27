@@ -1,8 +1,9 @@
 """
 LeadScout Service — managers/leadscout_service.py
 ===================================================
-THIS is the file main.py imports for L3 discovery.
-Uses Serper /jobs endpoint with multi-query strategy.
+Uses httpx (already in deps) instead of aiohttp.
+Serper /jobs removed — returns 404 on this plan.
+Uses Serper /search organic + Tavily as primary sources.
 """
 from __future__ import annotations
 
@@ -13,11 +14,29 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Optional
 
+import httpx
+
 log = logging.getLogger("leadscout")
 
-SERPER_KEY  = os.getenv("SERPER_API_KEY", "")
-TAVILY_KEY  = os.getenv("TAVILY_API_KEY", "")
-REQUEST_TIMEOUT = 20
+SERPER_KEY      = os.getenv("SERPER_API_KEY", "")
+TAVILY_KEY      = os.getenv("TAVILY_API_KEY", "")
+REQUEST_TIMEOUT = 20.0
+
+JOB_BOARD_DOMAINS = [
+    "linkedin.com/jobs",
+    "greenhouse.io",
+    "lever.co",
+    "indeed.com",
+    "workday.com",
+    "myworkdayjobs.com",
+    "icims.com",
+    "smartrecruiters.com",
+    "jobvite.com",
+    "ashbyhq.com",
+    "rippling.com",
+]
+
+SKIP_PATHS = ["/blog/", "/news/", "/about", "/company", "/press", "/learn"]
 
 
 @dataclass
@@ -40,8 +59,7 @@ class JobLead:
 
 class LeadScoutService:
     """
-    L3 Job discovery service.
-    Called by main.py as:
+    L3 Job discovery. Called by main.py:
         scout = LeadScoutService(enable_playwright_scrape=False)
         leads = await scout.search_jobs(intent)
     """
@@ -61,17 +79,14 @@ class LeadScoutService:
         location = self._resolve_location(intent_plan)
         remote   = intent_plan.get("geo_preferences", {}).get("remote", True)
 
-        log.info(
-            "LeadScout starting: %d queries, location='%s'",
-            len(queries), location,
-        )
+        log.info("LeadScout starting: %d queries, location='%s'", len(queries), location)
         for i, q in enumerate(queries):
             log.info("  Query[%d]: %s", i, q)
 
+        # Run all queries concurrently
         tasks = []
         for query in queries:
-            tasks.append(self._search_serper_jobs(query, location, remote))
-            tasks.append(self._search_serper_organic(query, location))
+            tasks.append(self._search_serper_organic(query, location, remote))
             tasks.append(self._search_tavily(query, location, remote))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -93,32 +108,32 @@ class LeadScoutService:
                 unique.append(lead)
 
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
-        return [l.to_dict() for l in unique[:self.max_per_source * 4]]
+        return [l.to_dict() for l in unique[: self.max_per_source * 4]]
 
     # Aliases
     find_jobs   = search_jobs
     scrape_jobs = search_jobs
 
-    # ── Multi-query builder ──────────────────────────────────────────────────
+    # ── Query builder ────────────────────────────────────────────────────────
 
     def _build_queries(self, intent_plan: dict) -> list[str]:
         roles    = intent_plan.get("target_roles", [])
         keywords = intent_plan.get("keywords", [])
         profile  = intent_plan.get("extracted_profile", {})
 
-        # Pull all skills from profile
+        # Gather all skills
         profile_skills: list[str] = []
         if isinstance(profile.get("skills"), list):
             profile_skills = [str(s) for s in profile["skills"]]
 
         all_keywords = list(dict.fromkeys(keywords + profile_skills))
 
-        # Bucket by domain
+        # Domain bucketing
         ai_ml = [k for k in all_keywords if any(t in k.lower() for t in [
             "ai", "ml", "llm", "gpt", "bert", "transformer", "pytorch", "tensorflow",
-            "langchain", "genai", "generative", "diffusion", "rag", "vector", "embedding",
-            "hugging", "openai", "anthropic", "gemini", "llama", "fine-tun",
-            "nlp", "computer vision", "deep learning", "neural", "langgraph",
+            "langchain", "langgraph", "genai", "generative", "diffusion", "rag",
+            "vector", "embedding", "hugging", "openai", "fine-tun", "nlp",
+            "computer vision", "deep learning", "neural", "mlops", "reinforcement",
         ])]
         cloud = [k for k in all_keywords if any(t in k.lower() for t in [
             "aws", "azure", "gcp", "sagemaker", "bedrock", "vertex", "cloud",
@@ -127,34 +142,27 @@ class LeadScoutService:
 
         queries = []
 
-        # Q1: top role + AI/ML core
         if roles:
             ai_str = " ".join(ai_ml[:4]) if ai_ml else " ".join(all_keywords[:4])
             queries.append(f"{roles[0]} {ai_str}")
 
-        # Q2: seniority variant
         seniority = self._detect_seniority(profile, roles)
         if seniority and roles:
             queries.append(f"{seniority} {roles[0]}")
 
-        # Q3: alt role titles
         for alt in self._alt_roles(roles)[:2]:
             ai_str = " ".join(ai_ml[:3]) if ai_ml else ""
             queries.append(f"{alt} {ai_str}".strip())
 
-        # Q4: cloud combo
         if cloud and roles:
             queries.append(f"{roles[0]} {' '.join(cloud[:3])}")
 
-        # Q5: GenAI specialist
         if any("gen" in k.lower() or "llm" in k.lower() for k in all_keywords):
             base = roles[0] if roles else "AI Engineer"
             queries.append(f"Generative AI {base} LLM")
 
-        # Q6: ML fallback
-        queries.append("Machine Learning Engineer GenAI remote")
+        queries.append("Machine Learning Engineer GenAI LLM remote")
 
-        # Dedup, cap at 6
         seen_q: set[str] = set()
         final: list[str] = []
         for q in queries:
@@ -185,11 +193,11 @@ class LeadScoutService:
     def _alt_roles(self, roles: list[str]) -> list[str]:
         mapping = {
             "ai engineer":               ["Applied AI Engineer", "ML Engineer", "AI/ML Engineer"],
-            "machine learning engineer": ["ML Engineer", "AI Engineer", "MLOps Engineer"],
+            "machine learning engineer": ["ML Engineer", "MLOps Engineer", "AI Engineer"],
             "data scientist":            ["Senior Data Scientist", "ML Researcher", "Applied Scientist"],
-            "solution architect":        ["Solutions Architect AI", "Cloud AI Architect", "Technical Architect ML"],
-            "genai":                     ["Generative AI Engineer", "LLM Engineer", "AI Engineer LLM"],
-            "ai architect":              ["AI Solutions Architect", "ML Architect", "GenAI Architect"],
+            "solution architect":        ["Solutions Architect AI", "Cloud AI Architect"],
+            "genai":                     ["Generative AI Engineer", "LLM Engineer"],
+            "ai architect":              ["AI Solutions Architect", "ML Architect"],
         }
         alts = []
         for role in roles:
@@ -204,77 +212,28 @@ class LeadScoutService:
         locs = geo.get("locations", [])
         return locs[0] if locs else "United States"
 
-    # ── Source: Serper /jobs ─────────────────────────────────────────────────
+    # ── Source: Serper /search (organic) ────────────────────────────────────
 
-    async def _search_serper_jobs(self, query: str, location: str, remote: bool) -> list[JobLead]:
+    async def _search_serper_organic(self, query: str, location: str, remote: bool) -> list[JobLead]:
         if not SERPER_KEY:
-            log.debug("Serper /jobs skipped — SERPER_API_KEY not set")
+            log.debug("Serper skipped — SERPER_API_KEY not set")
             return []
         try:
-            import aiohttp
-            search_q = f"{query} {'remote' if remote else location}"
+            loc_str  = "remote" if remote else location
+            site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS[:6])
+            search_q = f"{query} {loc_str} ({site_str})"
             payload  = {"q": search_q, "gl": "us", "hl": "en", "num": self.max_per_source}
             headers  = {"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://google.serper.dev/jobs",
-                    json=payload, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-                ) as resp:
-                    if resp.status != 200:
-                        log.warning("Serper /jobs HTTP %d for: %s", resp.status, query)
-                        return []
-                    data = await resp.json()
-
-            leads = []
-            for r in data.get("jobs", []):
-                apply_link = ""
-                opts = r.get("applyOptions", [])
-                if opts and isinstance(opts, list):
-                    apply_link = opts[0].get("link", "")
-                url = apply_link or r.get("link", "")
-
-                leads.append(JobLead(
-                    id          = re.sub(r"\W+", "_", r.get("title", ""))[:40],
-                    title       = r.get("title", ""),
-                    company     = r.get("companyName", ""),
-                    url         = url,
-                    location    = r.get("location", ""),
-                    remote      = "remote" in r.get("location", "").lower(),
-                    description = r.get("description", "")[:500],
-                    source      = "serper_jobs",
-                    posted_date = (r.get("detectedExtensions") or {}).get("postedAt", ""),
-                ))
-            log.info("Serper /jobs: %d leads for: %s", len(leads), query)
-            return leads
-        except Exception as exc:
-            log.error("Serper /jobs error for '%s': %s", query, exc)
-            return []
-
-    # ── Source: Serper /search (organic job board links) ────────────────────
-
-    async def _search_serper_organic(self, query: str, location: str) -> list[JobLead]:
-        if not SERPER_KEY:
-            return []
-        try:
-            import aiohttp
-            search_q = (
-                f"{query} {location} "
-                f"site:linkedin.com/jobs OR site:greenhouse.io OR site:lever.co OR site:indeed.com"
-            )
-            payload = {"q": search_q, "gl": "us", "num": 10}
-            headers = {"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"}
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                resp = await client.post(
                     "https://google.serper.dev/search",
                     json=payload, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-                ) as resp:
-                    if resp.status != 200:
-                        return []
-                    data = await resp.json()
+                )
+                if resp.status_code != 200:
+                    log.warning("Serper organic HTTP %d for: %s", resp.status_code, query)
+                    return []
+                data = resp.json()
 
             leads = []
             for r in data.get("organic", []):
@@ -282,23 +241,23 @@ class LeadScoutService:
                 title = r.get("title", "")
                 if not url or not title:
                     continue
-                if not any(d in url for d in [
-                    "linkedin.com/jobs", "greenhouse.io", "lever.co",
-                    "indeed.com", "workday.com", "icims.com",
-                ]):
+                if any(skip in url for skip in SKIP_PATHS):
+                    continue
+                if not any(d in url for d in JOB_BOARD_DOMAINS):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = r.get("displayLink", ""),
                     url         = url,
-                    description = r.get("snippet", "")[:400],
+                    description = r.get("snippet", "")[:500],
                     source      = "serper_organic",
+                    remote      = "remote" in (r.get("snippet", "") + url).lower(),
                 ))
             log.info("Serper organic: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:
-            log.error("Serper organic error: %s", exc)
+            log.error("Serper organic error for '%s': %s", query, exc)
             return []
 
     # ── Source: Tavily ───────────────────────────────────────────────────────
@@ -308,29 +267,20 @@ class LeadScoutService:
             log.debug("Tavily skipped — TAVILY_API_KEY not set")
             return []
         try:
-            import aiohttp
             loc_str = "remote" if remote else location
             payload = {
-                "api_key":        TAVILY_KEY,
-                "query":          f"{query} {loc_str} job opening",
-                "search_depth":   "basic",
-                "max_results":    self.max_per_source,
-                "include_domains": [
-                    "linkedin.com", "greenhouse.io", "lever.co",
-                    "indeed.com", "workday.com", "icims.com",
-                    "smartrecruiters.com", "jobvite.com",
-                ],
+                "api_key":         TAVILY_KEY,
+                "query":           f"{query} {loc_str} job opening apply now",
+                "search_depth":    "basic",
+                "max_results":     self.max_per_source,
+                "include_domains": JOB_BOARD_DOMAINS,
             }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.tavily.com/search",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-                ) as resp:
-                    if resp.status != 200:
-                        log.warning("Tavily HTTP %d for: %s", resp.status, query)
-                        return []
-                    data = await resp.json()
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                resp = await client.post("https://api.tavily.com/search", json=payload)
+                if resp.status_code != 200:
+                    log.warning("Tavily HTTP %d for: %s", resp.status_code, query)
+                    return []
+                data = resp.json()
 
             leads = []
             for r in data.get("results", []):
@@ -338,15 +288,16 @@ class LeadScoutService:
                 title = r.get("title", "")
                 if not url or not title:
                     continue
-                if any(skip in url for skip in ["/blog/", "/news/", "/about", "/company"]):
+                if any(skip in url for skip in SKIP_PATHS):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = "",
                     url         = url,
-                    description = r.get("content", "")[:400],
+                    description = r.get("content", "")[:500],
                     source      = "tavily",
+                    remote      = "remote" in (r.get("content", "") + url).lower(),
                 ))
             log.info("Tavily: %d leads for: %s", len(leads), query)
             return leads

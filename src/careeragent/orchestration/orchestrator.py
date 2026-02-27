@@ -206,7 +206,7 @@ class Orchestrator:
     Drives the L0 → L9 pipeline.
 
     Dependencies are injected so each service can be mocked or swapped:
-        orchestrator = MasterOrchestrator(
+        orchestrator = Orchestrator(
             profile_parser   = MyProfileParser(),
             intent_planner   = MyIntentPlanner(),
             lead_scout       = LeadScoutService(),

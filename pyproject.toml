@@ -6,11 +6,8 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 
 # Core Operational Dependencies (The "Engine")
-dependencies = [
-  "pydantic>=2.0",            # Data validation and AgentState schemas
-  "pydantic-settings>=2.2",   # Environment variable and config management
-  "requests>=2.32",           # Environment and integration diagnostics helpers
-  "fastapi>=0.110",           # Backend API layer
+dependencies = [   # Environment variable and config management
+  "requests>=2.32",           # Backend API layer
   "uvicorn>=0.27",            # ASGI server for FastAPI
   "langgraph>=0.2.0",         # Orchestration of agentic state loops
   "langchain-core>=0.2.0",    # Base abstractions for LLM interactions
@@ -34,6 +31,10 @@ dependencies = [
   "twilio>=9.10.2",
   "google-api-python-client>=2.177.0",
   "google-auth>=2.40.3",
+  "pytest>=9.0.2",
+  "fastapi[standard]>=0.110.0",
+  "pydantic>=2.6.0",
+  "pydantic-settings>=2.1.0",
 ]
 
 [project.optional-dependencies]
