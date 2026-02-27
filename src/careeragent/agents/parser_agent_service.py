@@ -7,7 +7,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from docx import Document
+try:
+    from docx import Document
+except Exception:  # pragma: no cover - optional dependency
+    Document = None
 from pydantic import BaseModel, Field
 
 from careeragent.core.settings import Settings
@@ -433,6 +436,8 @@ def _parse_education(text: str) -> List[EducationModel]:
 
 
 def _extract_docx_visible_text(docx_bytes: bytes) -> str:
+    if Document is None:
+        return ""
     doc = Document(BytesIO(docx_bytes))
     parts = []
     for p in doc.paragraphs:
@@ -646,3 +651,35 @@ class ParserAgentService:
                     pass
 
         return det, text
+
+
+
+def _validate_and_backfill_skills(text: str, current_skills: List[str]) -> List[str]:
+    """Merge explicit skills from profile with skills inferred from resume skill sections."""
+    skills: List[str] = []
+    seen = set()
+
+    def _add_many(items: List[str]) -> None:
+        for raw in items or []:
+            item = re.sub(r"\s+", " ", str(raw or "").strip())
+            if not item:
+                continue
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            skills.append(item)
+
+    _add_many([s for s in (current_skills or []) if s])
+
+    section_hits: List[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip().strip("•-* ")
+        if not stripped:
+            continue
+        if re.match(r"^(core competencies|skills?)\s*:\s*", stripped, flags=re.I):
+            _, rhs = stripped.split(":", 1)
+            section_hits.extend([p.strip() for p in re.split(r"[,|/]", rhs) if p.strip()])
+
+    _add_many(section_hits)
+    return skills

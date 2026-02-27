@@ -284,7 +284,7 @@ class DraftingAgentService:
             title = re.sub(r"\s*[|-].*$", "", job.get("title") or "Target Role").strip()[:80]
 
             revision_notes = str((state.meta or {}).get("draft_revision_feedback") or "")
-            resume_md, cover_md = self._gen_with_llm(prof, jd, title, linkedin_achievements=linkedin_achievements, revision_notes=revision_notes)
+            resume_md, cover_md = self._gen_with_llm(prof, jd, title)
             resume_md, injected = optimize_resume_keywords(resume_md=resume_md, jd_text=jd, profile_skills=profile_skills, top_n=5)
             resume_plain = _strip_markdown(resume_md)
             cover_plain = _strip_markdown(cover_md)
@@ -417,3 +417,71 @@ class DraftingAgentService:
             cover_md = fallback_cover
 
         return resume_md, cover_md
+
+
+
+def _strip_markdown(text: str) -> str:
+    txt = text or ""
+    txt = re.sub(r"```.*?```", " ", txt, flags=re.S)
+    txt = re.sub(r"`([^`]*)`", r"\1", txt)
+    txt = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", txt)
+    txt = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", txt)
+    txt = re.sub(r"^\s{0,3}#{1,6}\s*", "", txt, flags=re.M)
+    txt = re.sub(r"^\s*[-*+]\s+", "", txt, flags=re.M)
+    txt = re.sub(r"^\s*\d+\.\s+", "", txt, flags=re.M)
+    txt = re.sub(r"[*_~]", "", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def _build_fallback_resume(profile: Dict[str, Any], title: str, jd: str) -> str:
+    name = str(profile.get("name") or "Candidate Name")
+    contact = profile.get("contact") or {}
+    c_line = " | ".join([v for v in [contact.get("email"), contact.get("phone"), contact.get("location")] if v])
+    if not c_line:
+        c_line = "email@example.com | +1 (555) 555-5555"
+    summary = str(profile.get("summary") or f"Results-driven professional targeting {title} roles.")
+    skills = profile.get("skills") or extract_skills(jd)
+    skills_block = "\n".join(f"- {s}" for s in skills[:20])
+
+    exp_lines = []
+    for e in (profile.get("experience") or [])[:5]:
+        head = " | ".join([x for x in [e.get("title"), e.get("company"), f"{e.get('start_date') or ''} - {e.get('end_date') or 'Present'}"] if x])
+        exp_lines.append(f"### {head}" if head else "### Experience")
+        bullets = e.get("bullets") or ["Delivered measurable impact across core initiatives."]
+        exp_lines.extend([f"- {b}" for b in bullets[:4]])
+    if not exp_lines:
+        exp_lines = ["### Relevant Experience", "- Delivered high-impact projects aligned to business goals."]
+
+    edu_lines = []
+    for e in (profile.get("education") or [])[:4]:
+        row = " | ".join([x for x in [e.get("degree"), e.get("institution"), str(e.get("graduation_year") or "")] if x])
+        if row:
+            edu_lines.append(f"- {row}")
+    if not edu_lines:
+        edu_lines = ["- Education details available upon request."]
+
+    return (
+        f"# {name}\n"
+        f"{c_line}\n\n"
+        f"## Summary\n{summary}\n\n"
+        f"## Skills\n{skills_block}\n\n"
+        "## Experience\n"
+        + "\n".join(exp_lines)
+        + "\n\n## Education\n"
+        + "\n".join(edu_lines)
+        + "\n"
+    )
+
+
+def _build_fallback_cover(profile: Dict[str, Any], title: str) -> str:
+    name = str(profile.get("name") or "Candidate")
+    summary = str(profile.get("summary") or "I bring a strong track record of execution and collaboration.")
+    return (
+        f"Dear Hiring Manager,\n\n"
+        f"I am excited to apply for the {title} opportunity. {summary}\n\n"
+        "In my recent work, I partnered with cross-functional teams to deliver practical, scalable outcomes while balancing speed and quality. "
+        "I enjoy turning ambiguous requirements into reliable systems that create user and business value.\n\n"
+        "I would welcome the chance to discuss how my background aligns with your needs. Thank you for your time and consideration.\n\n"
+        f"Sincerely,\n{name}"
+    )
