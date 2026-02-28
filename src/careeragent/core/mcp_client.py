@@ -53,14 +53,30 @@ class MCPClient:
         if not base:
             return None
 
+        # Safety guard: old CareerOS backend endpoint is not valid for this repo.
+        if "careeros-backend" in base.lower():
+            return MCPResult(ok=False, error="MCP_SERVER_URL points to legacy CareerOS backend; using local fallback")
+
         try:
             import httpx
 
+            candidate_urls = [f"{base}/invoke"]
+            if not base.endswith("/mcp"):
+                candidate_urls.append(f"{base}/mcp/invoke")
+
             with httpx.Client(timeout=self.s.MAX_HTTP_SECONDS) as client:
-                r = client.post(f"{base}/invoke", json={"tool": tool, "args": args})
-            if r.status_code >= 400:
-                return MCPResult(ok=False, error=f"MCP remote {tool} failed: {r.status_code} {r.text[:200]}")
-            return MCPResult(ok=True, data=r.json())
+                last_error = None
+                for url in candidate_urls:
+                    r = client.post(url, json={"tool": tool, "args": args})
+                    if r.status_code == 404:
+                        last_error = f"{r.status_code} {r.text[:200]}"
+                        continue
+                    if r.status_code >= 400:
+                        return MCPResult(ok=False, error=f"MCP remote {tool} failed: {r.status_code} {r.text[:200]}")
+                    return MCPResult(ok=True, data=r.json())
+            if last_error:
+                return MCPResult(ok=False, error=f"MCP remote {tool} failed: {last_error}")
+            return MCPResult(ok=False, error=f"MCP remote {tool} failed")
         except Exception as e:
             # Fall back to local implementation.
             return MCPResult(ok=False, error=f"MCP remote unavailable: {e}")

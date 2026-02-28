@@ -17,6 +17,7 @@ import json
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 import requests
 import streamlit as st
@@ -275,12 +276,58 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
-    return _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
+    raw = _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
+    if not raw:
+        return None
+
+    # Backward/alternate backend compatibility: normalize common field variants.
+    if "progress_pct" not in raw and "progress_percent" in raw:
+        raw["progress_pct"] = raw.get("progress_percent", 0)
+
+    pending = str(raw.get("pending_action") or "").strip().lower() or None
+    alias_map = {
+        "review_ranking": "approve_ranking",
+        "rankings_review": "approve_ranking",
+        "review_drafts": "approve_drafts",
+        "drafts_review": "approve_drafts",
+    }
+    if pending in alias_map:
+        raw["pending_action"] = alias_map[pending]
+        pending = raw["pending_action"]
+    if raw.get("status") == "needs_human_approval" and not pending:
+        layers = raw.get("layers") or []
+        l5 = layers[5] if len(layers) > 5 else {}
+        l6 = layers[6] if len(layers) > 6 else {}
+        l7 = layers[7] if len(layers) > 7 else {}
+        if l5.get("status") == "ok" and l6.get("status") == "waiting":
+            raw["pending_action"] = "approve_ranking"
+        elif l6.get("status") == "ok" and l7.get("status") == "waiting":
+            raw["pending_action"] = "approve_drafts"
+
+    return raw
 
 
 def _api_get_jobs(api_base: str, run_id: str) -> list[dict]:
     resp = _api_get(api_base, f"/hunt/{run_id}/jobs", timeout=5)
     return resp.get("jobs", []) if resp else []
+
+def _api_get_artifacts(api_base: str, run_id: str) -> dict:
+    resp = _api_get(api_base, f"/hunt/{run_id}/artifacts", timeout=8)
+    return resp.get("artifacts", {}) if resp else {}
+
+
+def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict] = None) -> bool:
+    try:
+        body = {"action": action, "action_type": action}
+        if payload:
+            body.update(payload)
+        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
+        if r.status_code == 200:
+            return True
+        st.error(f"Action failed ({r.status_code}): {r.text[:200]}")
+    except Exception as exc:
+        st.error(f"Action request failed: {exc}")
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -445,6 +492,215 @@ def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> No
         """, unsafe_allow_html=True)
 
 
+def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
+    if not run_id or not status:
+        return
+    pending = str(status.get("pending_action") or "").strip().lower() or None
+    alias_map = {
+        "review_ranking": "approve_ranking",
+        "rankings_review": "approve_ranking",
+        "review_drafts": "approve_drafts",
+        "drafts_review": "approve_drafts",
+    }
+    if pending in alias_map:
+        pending = alias_map[pending]
+    if pending in {"human_approval", "approval", "rank_approval"}:
+        pending = "approve_ranking"
+    if pending in {"draft_approval", "approve_documents"}:
+        pending = "approve_drafts"
+
+    waiting_for_human = status.get("status") == "needs_human_approval" or bool(pending)
+    if not waiting_for_human:
+        return
+
+    if not pending:
+        st.info("Run is waiting for approval. Approval type was inferred from layer state/job outputs.")
+        layers = status.get("layers") or []
+        l5 = layers[5] if len(layers) > 5 else {}
+        l6 = layers[6] if len(layers) > 6 else {}
+        l7 = layers[7] if len(layers) > 7 else {}
+        if l5.get("status") == "ok" and l6.get("status") == "waiting":
+            pending = "approve_ranking"
+        elif l6.get("status") == "ok" and l7.get("status") == "waiting":
+            pending = "approve_drafts"
+        else:
+            st.warning("Approval state is missing from backend response. Open Full run JSON below to inspect.")
+            return
+
+    if not pending:
+        return
+
+    st.markdown('<div class="section-header">Human-in-the-Loop Approval Required</div>', unsafe_allow_html=True)
+
+    if pending == "approve_ranking":
+        st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
+        ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", []) or status.get("approved_jobs_preview", [])
+        if ranked_jobs:
+            options = {
+                f"{j.get('title','Role')} · {j.get('company','')} "
+                f"(match {j.get('score',0)*100:.0f}% | interview {j.get('interview_probability_percent',0):.0f}%)": j.get("id")
+                for j in ranked_jobs
+            }
+            selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys())[:5])
+            selected_ids = [options[x] for x in selected_labels]
+            selected_urls = [
+                j.get("url")
+                for j in ranked_jobs
+                if j.get("id") in selected_ids and j.get("url")
+            ]
+            st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers.")
+            with st.expander("Why these jobs are recommended"):
+                for j in ranked_jobs[:8]:
+                    st.markdown(
+                        f"- **{j.get('title','')} @ {j.get('company','')}** — "
+                        f"match `{j.get('score',0)*100:.1f}%`, interview `{j.get('interview_probability_percent',0):.1f}%`  \n"
+                        f"  reasoning: {j.get('llm_reasoning') or 'Skill overlap + ATS alignment'}  \n"
+                        f"  link: {j.get('url') or 'N/A'}"
+                    )
+        else:
+            selected_ids = []
+            selected_urls = []
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
+                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids, "selected_job_urls": selected_urls}):
+                    st.success("Ranking approved. Continuing to drafting layer...")
+                    st.rerun()
+        with c2:
+            if st.button("↩️ Reject & Re-plan from L2", key="reject_ranking_btn"):
+                if _api_action(api_base, run_id, "reject_ranking"):
+                    st.success("Ranking rejected. Pipeline looped back to intake/planning.")
+                    st.rerun()
+
+    elif pending == "approve_drafts":
+        st.warning("Draft resumes/cover letters are ready. Approve to continue auto-apply or reject to return to ranking review.")
+        artifacts = _api_get_artifacts(api_base, run_id)
+        if artifacts:
+            for job_id, files in artifacts.items():
+                st.markdown(f"**{job_id}**")
+                resume = files.get("resume_docx")
+                cover = files.get("cover_docx")
+                if resume:
+                    st.markdown(f"- [Preview Resume]({api_base.rstrip('/')}/artifact/download?path={quote_plus(resume)})")
+                if cover:
+                    st.markdown(f"- [Preview Cover Letter]({api_base.rstrip('/')}/artifact/download?path={quote_plus(cover)})")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Approve Drafts & Continue Apply", key="approve_drafts_btn"):
+                if _api_action(api_base, run_id, "approve_drafts"):
+                    st.success("Drafts approved. Continuing to apply layers...")
+                    st.rerun()
+        with c2:
+            if st.button("↩️ Reject Drafts", key="reject_drafts_btn"):
+                if _api_action(api_base, run_id, "reject_drafts"):
+                    st.success("Drafts rejected. Returned to ranking approval.")
+                    st.rerun()
+
+
+def render_stepwise_details(status: Optional[dict]) -> None:
+    """Detailed layer-by-layer parsed/debug payloads."""
+    if not status:
+        return
+    st.markdown('<div class="section-header">Stepwise Outputs & Evaluator Checks</div>', unsafe_allow_html=True)
+
+    profile = status.get("profile", {})
+    layer_debug = status.get("layer_debug", {})
+    evaluations = status.get("evaluations", [])
+
+    c1, c2 = st.columns(2)
+    with c1:
+        with st.expander("🧾 Parsed Resume (L2)", expanded=False):
+            st.json(profile if profile else {"info": "Waiting for parse output"})
+        with st.expander("🔎 Discovery + Match Details (L3/L4)", expanded=False):
+            st.json({
+                "L3": layer_debug.get("L3", {}),
+                "L4": layer_debug.get("L4", {}),
+            })
+    with c2:
+        with st.expander("🏆 Evaluator Decisions", expanded=False):
+            st.json(evaluations if evaluations else [{"info": "No evaluator entries yet"}])
+        with st.expander("✍️ Draft + Apply Details (L6/L7)", expanded=False):
+            st.json({
+                "L6": layer_debug.get("L6", {}),
+                "L7": layer_debug.get("L7", {}),
+            })
+
+    missing = []
+    top_jobs = (layer_debug.get("L4", {}) or {}).get("top_jobs", [])
+    for job in top_jobs:
+        missing.extend(job.get("missing_skills") or [])
+    missing = list(dict.fromkeys([m for m in missing if m]))[:20]
+
+    full_report = {
+        "run_id": status.get("run_id"),
+        "uploaded_resume": {
+            "candidate_name": status.get("candidate_name"),
+            "skills_extracted": status.get("skills_extracted"),
+            "resume_path": (status.get("profile") or {}).get("source_resume_path", "stored server-side"),
+        },
+        "parsed_profile": profile,
+        "missing_skills_detected": missing,
+        "job_scraping": {
+            "jobs_discovered": status.get("jobs_discovered", 0),
+            "source_urls": [j.get("url") for j in (status.get("raw_job_leads_preview") or []) if j.get("url")],
+        },
+        "ranking_and_predictions": [
+            {
+                "title": j.get("title"),
+                "company": j.get("company"),
+                "url": j.get("url"),
+                "match_percent": round(float(j.get("score") or 0.0) * 100, 2),
+                "interview_probability_percent": j.get("interview_probability_percent", 0),
+                "reasoning": j.get("llm_reasoning"),
+            }
+            for j in ((layer_debug.get("L5", {}) or {}).get("qualified_jobs") or [])[:20]
+        ],
+        "layer_debug": layer_debug,
+    }
+    with st.expander("📜 One-click full pipeline report (scrollable)", expanded=False):
+        st.caption("Includes uploaded resume metadata, parsed content, missing skills, job scraping links, ranking reasons, and all layer outputs.")
+        st.text_area("Pipeline report", value=json.dumps(full_report, indent=2, default=str), height=420)
+        st.download_button(
+            "⬇️ Download full_pipeline_report.json",
+            data=json.dumps(full_report, indent=2, default=str),
+            file_name="full_pipeline_report.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+
+def render_json_downloads(status: Optional[dict]) -> None:
+    if not status:
+        return
+
+    st.markdown('<div class="section-header">JSON Exports (Layer by Layer)</div>', unsafe_allow_html=True)
+    payloads = {
+        "L2_parsed_profile.json": status.get("profile", {}),
+        "L3_discovery.json": (status.get("layer_debug") or {}).get("L3", {}),
+        "L4_matching_scoring.json": (status.get("layer_debug") or {}).get("L4", {}),
+        "L5_evaluator_ranking.json": {
+            "L5": (status.get("layer_debug") or {}).get("L5", {}),
+            "evaluations": status.get("evaluations", []),
+        },
+        "L6_drafts.json": (status.get("layer_debug") or {}).get("L6", {}),
+        "L7_apply_results.json": (status.get("layer_debug") or {}).get("L7", {}),
+        "run_status.json": status,
+    }
+
+    cols = st.columns(3)
+    for i, (filename, payload) in enumerate(payloads.items()):
+        with cols[i % 3]:
+            st.download_button(
+                label=f"⬇️ {filename}",
+                data=json.dumps(payload or {"info": "No data yet"}, indent=2, default=str),
+                file_name=filename,
+                mime="application/json",
+                use_container_width=True,
+            )
+
+
 def render_agent_feed(status: Optional[dict]) -> None:
     """Live Agent Feed section."""
     feed = status.get("agent_log", []) if status else []
@@ -484,22 +740,37 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         return
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
-    for job in jobs[:30]:
-        score    = job.get("score", 0)
-        score_c  = "green" if score >= 0.7 else ("orange" if score >= 0.45 else "")
+    min_score = st.slider("Job board score filter", 0.0, 1.0, 0.45, 0.05)
+    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5)
+    only_remote = st.checkbox("Show remote only in board", value=False)
+
+    filtered = [
+        j for j in jobs
+        if j.get("score", 0) >= min_score
+        and float(j.get("interview_probability_percent") or 0.0) >= float(min_interview)
+        and (not only_remote or j.get("remote"))
+    ]
+    st.caption(f"Showing {len(filtered)} / {len(jobs)} jobs")
+
+    for job in filtered[:40]:
+        score = job.get("score", 0)
+        score_c = "green" if score >= 0.7 else ("orange" if score >= 0.45 else "")
         remote_b = "🌐 Remote" if job.get("remote") else f"📍 {job.get('location','')}"
+        why = ", ".join(job.get("matched_skills", [])[:4]) or "Keyword overlap + semantic fit"
         st.markdown(f"""
         <div class="job-row">
             <div>
                 <div class="job-title">{job.get('title','')}</div>
                 <div class="job-company">{job.get('company','')}  ·  {remote_b}</div>
                 <div style="font-size:11px;color:#6e7681;margin-top:2px">
-                    Matched: {', '.join(job.get('matched_skills',[])[:5]) or '—'}
+                    LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 {job.get('url','')}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
                 <div class="job-badge">{job.get('source','').upper()}</div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:4px">Interview {job.get('interview_probability_percent',0):.0f}%</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -597,11 +868,43 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         remote_only = st.checkbox("Remote Only", value=True)
         threshold   = st.slider("Match Threshold", 0.30, 0.90, 0.45, 0.05,
                                 help="Minimum score for a job to qualify")
+        posted_hours = st.selectbox(
+            "Posted within",
+            [1, 3, 6, 12, 24, 48, 72, 168],
+            index=7,
+            format_func=lambda x: f"Last {x} hour{'s' if x != 1 else ''}",
+        )
+        max_jobs = st.slider("How many jobs to scrape today", 20, 150, 80, 5)
+        salary_min, salary_max = st.slider("Salary range (USD)", 0, 400000, (80000, 220000), step=10000)
+
+        require_ranking_approval = st.checkbox("Require ranking approval (HITL)", value=True)
+        require_draft_approval = st.checkbox("Require draft approval before apply", value=True)
+
+        st.caption("Notifications")
+        notif_email = st.text_input("Gmail for notifications", value="")
+        notif_phone = st.text_input("Phone number for SMS", value="", placeholder="+1 415 555 0100")
+        profile_links = st.text_input("Profile links (LinkedIn/GitHub)", value="", help="Comma-separated URLs used by auto-apply forms")
+        enable_email = st.checkbox("Enable email notifications", value=False)
+        enable_sms = st.checkbox("Enable SMS notifications", value=False)
 
         config = {
-            "target_roles":    target_roles,
-            "match_threshold": threshold,
-            "geo_preferences": {"remote": remote_only, "locations": []},
+            "target_roles":             target_roles,
+            "match_threshold":          threshold,
+            "geo_preferences":          {"remote": remote_only, "locations": []},
+            "require_ranking_approval": require_ranking_approval,
+            "require_draft_approval":   require_draft_approval,
+            "posted_within_hours":      posted_hours,
+            "max_jobs":                 max_jobs,
+            "salary_min":               salary_min,
+            "salary_max":               salary_max,
+            "work_modes":               ["remote"] if remote_only else ["remote", "hybrid", "onsite"],
+            "notifications": {
+                "email": notif_email,
+                "phone": " ".join(notif_phone.split()),
+                "links": [u.strip() for u in profile_links.split(",") if u.strip()],
+                "enable_email": enable_email,
+                "enable_sms": enable_sms,
+            },
         }
 
         st.divider()
@@ -617,6 +920,11 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         resume_bytes    = resume_file.read() if resume_file else None
         resume_filename = resume_file.name   if resume_file else None
+        if resume_file:
+            st.caption(f"Uploaded: {resume_filename} ({round(len(resume_bytes or b'')/1024,1)}KB)")
+            if resume_filename.lower().endswith((".txt", ".md")) and resume_bytes:
+                with st.expander("Preview uploaded resume"):
+                    st.code((resume_bytes.decode("utf-8", errors="ignore"))[:4000])
 
         # ── Start Hunt button ─────────────────────────────────────────────────
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None or not is_healthy))
@@ -698,6 +1006,11 @@ def main():
             <span class="{state_cls}">{'— Idle' if run_state == 'idle' else run_state.title()}</span>
         </div>
         """, unsafe_allow_html=True)
+        langsmith = (status or {}).get("langsmith", {}) if status else {}
+        fallback_url = f"https://smith.langchain.com/o/default/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
+        if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
+            link = langsmith.get("dashboard_url") or fallback_url
+            st.markdown(f"[🧭 LangSmith dashboard]({link})")
 
     st.markdown("<hr style='border:none;border-top:1px solid #1e1e2e;margin:12px 0'>", unsafe_allow_html=True)
 
@@ -731,6 +1044,11 @@ def main():
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         render_agent_feed(status)
+        render_hitl_controls(api_base, run_id, status)
+        render_stepwise_details(status)
+        render_json_downloads(status)
+        with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
+            st.json(status or {"info": "No run status yet"})
 
     with tab_jobs:
         render_job_board(api_base, run_id, status)

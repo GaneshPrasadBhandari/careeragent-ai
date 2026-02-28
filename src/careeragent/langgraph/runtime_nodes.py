@@ -154,13 +154,22 @@ async def serper_search(s: RuntimeSettings, query: str, num: int = 10, tbs: Opti
 async def mcp_invoke(s: RuntimeSettings, tool: str, payload: Dict[str, Any]) -> Tuple[bool, float, Any, Optional[str]]:
     if not (s.MCP_SERVER_URL and mcp_token(s)):
         return False, 0.0, None, "MCP not configured"
-    url = s.MCP_SERVER_URL.rstrip("/") + "/invoke"
+    base = s.MCP_SERVER_URL.rstrip("/")
+    if "careeros-backend" in base.lower():
+        return False, 0.0, None, "MCP points to legacy CareerOS backend"
+    urls = [base + "/invoke"]
+    if not base.endswith("/mcp"):
+        urls.append(base + "/mcp/invoke")
     headers = {"Authorization": f"Bearer {mcp_token(s)}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=35.0) as client:
-        r = await client.post(url, headers=headers, json={"tool": tool, "payload": payload})
-    if r.status_code >= 400:
-        return False, 0.0, None, f"MCP {r.status_code}: {r.text[:150]}"
-    return True, 0.85, r.json(), None
+        for url in urls:
+            r = await client.post(url, headers=headers, json={"tool": tool, "payload": payload})
+            if r.status_code == 404:
+                continue
+            if r.status_code >= 400:
+                return False, 0.0, None, f"MCP {r.status_code}: {r.text[:150]}"
+            return True, 0.85, r.json(), None
+    return False, 0.0, None, "MCP endpoint not found (404)"
 
 async def scrape_http(url: str) -> Tuple[bool, float, Any, Optional[str]]:
     try:

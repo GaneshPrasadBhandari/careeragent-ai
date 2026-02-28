@@ -69,14 +69,22 @@ class MCPClient:
     async def invoke(self, *, tool: str, payload: Dict[str, Any], timeout: float = 30.0) -> ToolResult:
         if not self.available():
             return ToolResult(ok=False, confidence=0.0, error="MCP not configured")
+        if "careeros-backend" in self.base_url.lower():
+            return ToolResult(ok=False, confidence=0.0, error="MCP points to legacy CareerOS backend")
         try:
-            url = f"{self.base_url}/invoke"
             headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+            urls = [f"{self.base_url}/invoke"]
+            if not self.base_url.endswith("/mcp"):
+                urls.append(f"{self.base_url}/mcp/invoke")
             async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.post(url, headers=headers, json={"tool": tool, "payload": payload})
-            if r.status_code >= 400:
-                return ToolResult(ok=False, confidence=0.0, error=f"MCP {r.status_code}: {r.text[:200]}")
-            return ToolResult(ok=True, confidence=0.85, data=r.json())
+                for url in urls:
+                    r = await client.post(url, headers=headers, json={"tool": tool, "payload": payload})
+                    if r.status_code == 404:
+                        continue
+                    if r.status_code >= 400:
+                        return ToolResult(ok=False, confidence=0.0, error=f"MCP {r.status_code}: {r.text[:200]}")
+                    return ToolResult(ok=True, confidence=0.85, data=r.json())
+            return ToolResult(ok=False, confidence=0.0, error="MCP endpoint not found (404)")
         except Exception as e:
             return ToolResult(ok=False, confidence=0.0, error=str(e))
 
