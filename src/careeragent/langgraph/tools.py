@@ -69,7 +69,7 @@ class MCPClient:
     async def invoke(self, *, tool: str, payload: Dict[str, Any], timeout: float = 30.0) -> ToolResult:
         if not self.available():
             return ToolResult(ok=False, confidence=0.0, error="MCP not configured")
-        if "careeros-backend" in self.base_url:
+        if "careeros-backend" in self.base_url.lower():
             return ToolResult(ok=False, confidence=0.0, error="MCP points to legacy CareerOS backend")
         try:
             headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}

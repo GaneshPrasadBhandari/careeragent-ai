@@ -155,7 +155,7 @@ async def mcp_invoke(s: RuntimeSettings, tool: str, payload: Dict[str, Any]) -> 
     if not (s.MCP_SERVER_URL and mcp_token(s)):
         return False, 0.0, None, "MCP not configured"
     base = s.MCP_SERVER_URL.rstrip("/")
-    if "careeros-backend" in base:
+    if "careeros-backend" in base.lower():
         return False, 0.0, None, "MCP points to legacy CareerOS backend"
     urls = [base + "/invoke"]
     if not base.endswith("/mcp"):

@@ -54,7 +54,7 @@ class MCPClient:
             return None
 
         # Safety guard: old CareerOS backend endpoint is not valid for this repo.
-        if "careeros-backend" in base:
+        if "careeros-backend" in base.lower():
             return MCPResult(ok=False, error="MCP_SERVER_URL points to legacy CareerOS backend; using local fallback")
 
         try:
