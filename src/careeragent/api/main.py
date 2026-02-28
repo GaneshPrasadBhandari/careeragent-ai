@@ -120,6 +120,7 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "errors":           [],
         "resume_path":      None,
         "hitl_rejections":  0,
+        "langsmith":        _langsmith_status(run_id),
     }
 
 
@@ -136,7 +137,25 @@ def _normalize_config(config: dict) -> dict:
     cfg.setdefault("salary_max", 400000)
     cfg.setdefault("work_modes", ["remote", "hybrid", "onsite"])
     cfg.setdefault("notifications", {"email": "", "phone": "", "enable_email": False, "enable_sms": False})
+    notifications = dict(cfg.get("notifications") or {})
+    notifications["phone"] = _sanitize_phone(notifications.get("phone", ""))
+    cfg["notifications"] = notifications
     return cfg
+
+
+def _sanitize_phone(phone: str) -> str:
+    return " ".join(str(phone or "").strip().split())
+
+
+def _langsmith_status(run_id: str) -> dict:
+    enabled = bool(os.getenv("LANGCHAIN_TRACING_V2") and os.getenv("LANGSMITH_API_KEY"))
+    endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
+    project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
+    return {
+        "enabled": enabled,
+        "project": project,
+        "dashboard_url": f"{endpoint}/o/projects/p/{project}?query={run_id}" if enabled else None,
+    }
 
 
 def _now() -> str:
@@ -649,35 +668,10 @@ def _extract_profile_from_text(text: str) -> dict:
     phone_m = re.search(r"[\+\(]?[\d\s\-\(\)]{10,}", text)
     phone   = phone_m.group(0).strip() if phone_m else ""
 
-    # Skills (heuristic keyword scan)
-    TECH_SKILLS = [
-        # Core languages
-        "Python","JavaScript","TypeScript","Java","Go","Rust","C++","C#","Ruby","PHP","Swift","Kotlin","Scala","R",
-        # Web frameworks
-        "React","Vue","Angular","Node","FastAPI","Django","Flask","Spring","Rails","Express",
-        # Databases
-        "SQL","PostgreSQL","MySQL","MongoDB","Redis","Elasticsearch","DynamoDB","Snowflake","Databricks","BigQuery",
-        # Cloud & DevOps
-        "AWS","GCP","Azure","Docker","Kubernetes","Terraform","Ansible","Linux","Git","CI/CD","GitHub Actions",
-        "SageMaker","Bedrock","Vertex AI","Lambda","EC2","S3","CloudFormation",
-        # AI / ML / GenAI — EXPANDED
-        "Machine Learning","Deep Learning","TensorFlow","PyTorch","Scikit-learn","XGBoost","LightGBM",
-        "LLM","NLP","Computer Vision","Reinforcement Learning","RLHF","Fine-tuning",
-        "GenAI","Generative AI","LangChain","LangGraph","LlamaIndex","RAG","Vector Database",
-        "Embeddings","FAISS","Chroma","Pinecone","Weaviate","Qdrant",
-        "OpenAI","Anthropic","Claude","GPT","Gemini","LLaMA","Mistral","Hugging Face","Transformers",
-        "BERT","T5","Diffusion","Stable Diffusion","Midjourney","DALL-E",
-        "MLflow","DVC","MLOps","Model Deployment","Model Monitoring","AIOps",
-        "Prompt Engineering","Agentic AI","Multi-agent","AutoGen","CrewAI",
-        "Data Science","Data Engineering","Feature Engineering","A/B Testing","Experimentation",
-        # Data & Analytics
-        "Spark","Airflow","Kafka","dbt","Pandas","NumPy","Matplotlib","Plotly","Tableau","Power BI",
-        # APIs & Architecture
-        "GraphQL","REST","gRPC","RabbitMQ","Microservices","Event-driven","Solution Architecture",
-        # Process
-        "Agile","Scrum","Leadership","Communication","Product Management","Technical Leadership",
-    ]
-    found_skills = [s for s in TECH_SKILLS if re.search(r"\b" + re.escape(s) + r"\b", text, re.I)]
+    from careeragent.nlp.skills import extract_skills
+
+    # Skills: deterministic entity extraction to reduce missed opportunities.
+    found_skills = extract_skills(text)
 
     # Experience (look for year ranges or role patterns)
     exp_pattern = re.findall(
@@ -705,7 +699,7 @@ def _extract_profile_from_text(text: str) -> dict:
     return {
         "name":       name,
         "email":      email,
-        "phone":      phone,
+        "phone":      _sanitize_phone(phone),
         "skills":     found_skills,
         "experience": experience,
         "education":  [],
@@ -787,7 +781,14 @@ def _apply_frontend_filters(jobs: list[dict], config: dict) -> list[dict]:
     filtered = []
     for job in jobs:
         is_remote = bool(job.get("remote"))
-        mode = "remote" if is_remote else "onsite"
+        location = str(job.get("location") or "").lower()
+        has_hybrid_hint = "hybrid" in location or "remote" in location
+        if is_remote:
+            mode = "remote"
+        elif has_hybrid_hint:
+            mode = "hybrid"
+        else:
+            mode = "onsite"
         if mode not in work_modes:
             continue
         jmin = int(job.get("salary_min") or 0)
@@ -933,6 +934,20 @@ async def health():
     return {"status": "ok", "runs_active": len(_runs)}
 
 
+@app.post("/mcp/invoke")
+async def mcp_invoke_passthrough(body: dict):
+    """Compatibility endpoint for clients still posting to /mcp/invoke."""
+    tool = str((body or {}).get("tool") or "")
+    payload = (body or {}).get("payload") or (body or {}).get("args") or {}
+    if not tool:
+        raise HTTPException(400, "tool is required")
+    return {
+        "ok": True,
+        "tool": tool,
+        "payload": payload,
+        "message": "MCP compatibility endpoint reached",
+    }
+
 @app.post("/hunt/start")
 @traceable(name="api.start_hunt")
 async def start_hunt(
@@ -1001,6 +1016,7 @@ async def get_status(run_id: str):
         "candidate_name":   state["candidate_name"],
         "skills_extracted": state["skills_extracted"],
         "pending_action":   state.get("pending_action"),
+        "langsmith":        state.get("langsmith", {}),
         "profile":          state.get("profile", {}),
         "layer_debug":      state.get("layer_debug", {}),
         "evaluations":      state.get("evaluations", [])[-50:],
