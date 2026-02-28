@@ -160,6 +160,48 @@ def _log_agent(state: dict, layer_id: int, msg: str) -> None:
     log.info("AgentFeed L%d: %s", layer_id, msg)
 
 
+def _derive_reasoning(job: dict, profile: dict) -> tuple[list[str], list[str]]:
+    profile_skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
+    matched = [str(s) for s in (job.get("matched_skills") or []) if str(s).strip()]
+    if not matched:
+        desc = str(job.get("description") or "").lower()
+        matched = [s for s in profile_skills if s and s in desc][:8]
+    matched_l = {m.lower() for m in matched}
+    missing = [s for s in profile_skills if s not in matched_l][:8]
+    return matched[:8], missing
+
+
+def _interview_call_percent(job: dict) -> float:
+    score = float(job.get("score") or 0.0)
+    ats = float(job.get("ats_proxy") or score)
+    recency_bonus = 0.08 if int(job.get("posted_hours_ago") or 24) <= 24 else 0.02
+    pct = (0.65 * score + 0.30 * ats + recency_bonus) * 100
+    return round(max(1.0, min(99.0, pct)), 1)
+
+
+def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
+    out: list[dict] = []
+    for j in jobs:
+        matched, missing = _derive_reasoning(j, profile)
+        interview_pct = _interview_call_percent(j)
+        reasons = []
+        if matched:
+            reasons.append(f"Skills overlap: {', '.join(matched[:4])}")
+        reasons.append(f"ATS/job-match score: {round(float(j.get('score') or 0.0) * 100, 1)}%")
+        reasons.append(f"Predicted interview call chance: {interview_pct}%")
+        if j.get("posted_hours_ago") is not None:
+            reasons.append(f"Posting recency: {j.get('posted_hours_ago')}h ago")
+        j2 = {
+            **j,
+            "matched_skills": matched,
+            "missing_skills": missing,
+            "interview_probability_percent": interview_pct,
+            "llm_reasoning": " | ".join(reasons),
+        }
+        out.append(j2)
+    return out
+
+
 def _record_eval(state: dict, *, layer_id: int, target_id: str, score: float, threshold: float, feedback: list[str]) -> None:
     decision = "pass" if score >= threshold else "retry"
     state.setdefault("evaluations", [])
@@ -345,6 +387,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         await mark_running(2, "Parsing resume — extracting skills, experience, education…")
         try:
             profile = await _parse_resume(resume_path)
+            profile["source_resume_path"] = str(resume_path)
             state["profile"]          = profile
             state["candidate_name"]   = profile.get("name", "Candidate")
             state["skills_extracted"] = len(profile.get("skills", []))
@@ -448,6 +491,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             threshold = 0.45
 
         scored = _apply_frontend_filters(scored, state["config"])
+        scored = _augment_scored_jobs(scored, state.get("profile") or {})
         state["scored_jobs"]     = scored
         state["jobs_scored"]     = len(scored)
         top_score = max((j.get("score", 0) for j in scored), default=0)
@@ -477,6 +521,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         await asyncio.sleep(0.4)
         qualified  = [j for j in scored if j.get("score", 0) >= threshold]
         state["jobs_approved"] = len(qualified)
+        qualified = sorted(
+            qualified,
+            key=lambda j: float(j.get("interview_probability_percent") or 0.0),
+            reverse=True,
+        )
         state["layer_debug"]["L5"] = {
             "qualified_jobs": qualified[:10],
             "threshold": threshold,
@@ -546,6 +595,7 @@ def _persist_tracking(run_id: str, state: dict) -> None:
         pass
 
 
+@traceable(name="api.parse_resume")
 async def _parse_resume(resume_path: Path) -> dict:
     """Extract profile from uploaded resume file."""
     text = ""
@@ -664,6 +714,7 @@ def _extract_profile_from_text(text: str) -> dict:
     }
 
 
+@traceable(name="api.build_intent")
 def _build_intent(profile: dict, config: dict) -> dict:
     roles = config.get("target_roles") or ["AI Engineer", "Machine Learning Engineer"]
 
@@ -691,6 +742,7 @@ def _build_intent(profile: dict, config: dict) -> dict:
     }
 
 
+@traceable(name="api.stub_leads")
 def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     """Return realistic stub leads when API keys are unavailable."""
     skills = profile.get("skills", ["Python"])[:3]
@@ -725,6 +777,7 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     return expanded
 
 
+@traceable(name="api.apply_frontend_filters")
 def _apply_frontend_filters(jobs: list[dict], config: dict) -> list[dict]:
     work_modes = set(config.get("work_modes") or ["remote", "hybrid", "onsite"])
     salary_min = int(config.get("salary_min", 0) or 0)
@@ -748,12 +801,14 @@ def _apply_frontend_filters(jobs: list[dict], config: dict) -> list[dict]:
     return filtered
 
 
+@traceable(name="api.stub_score")
 def _stub_score(leads: list[dict]) -> list[dict]:
     import random
     random.seed(42)
     return [{**j, "score": round(random.uniform(0.45, 0.95), 3)} for j in leads]
 
 
+@traceable(name="api.generate_artifacts")
 async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) -> dict:
     """Generate .docx + .pdf resume and cover letter for each job."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -879,6 +934,7 @@ async def health():
 
 
 @app.post("/hunt/start")
+@traceable(name="api.start_hunt")
 async def start_hunt(
     background_tasks: BackgroundTasks,
     resume: UploadFile = File(...),
@@ -919,6 +975,7 @@ async def start_hunt(
 
 
 @app.get("/hunt/{run_id}/status")
+@traceable(name="api.get_status")
 async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
     if run_id not in _runs:
@@ -958,6 +1015,7 @@ async def get_status(run_id: str):
 
 
 @app.get("/hunt/{run_id}/jobs")
+@traceable(name="api.get_jobs")
 async def get_jobs(run_id: str):
     if run_id not in _runs:
         raise HTTPException(404, f"Run {run_id} not found")
@@ -971,6 +1029,7 @@ async def get_jobs(run_id: str):
 
 
 @app.post("/hunt/{run_id}/action")
+@traceable(name="api.run_action")
 async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict):
     if run_id not in _runs:
         raise HTTPException(404, f"Run {run_id} not found")
