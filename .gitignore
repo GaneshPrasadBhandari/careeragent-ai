@@ -46,3 +46,4 @@ logs/
 
 _rollback/
 uploads/
+.artifacts
