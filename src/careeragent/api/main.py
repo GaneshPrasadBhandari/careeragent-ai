@@ -200,7 +200,7 @@ def _interview_call_percent(job: dict) -> float:
 
 def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     out: list[dict] = []
-    for j in jobs:
+    for idx, j in enumerate(jobs):
         matched, missing = _derive_reasoning(j, profile)
         interview_pct = _interview_call_percent(j)
         reasons = []
@@ -212,6 +212,7 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
             reasons.append(f"Posting recency: {j.get('posted_hours_ago')}h ago")
         j2 = {
             **j,
+            "id": j.get("id") or f"job_{idx+1:03d}",
             "matched_skills": matched,
             "missing_skills": missing,
             "interview_probability_percent": interview_pct,
