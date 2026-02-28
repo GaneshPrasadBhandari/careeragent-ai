@@ -1,0 +1,27 @@
+2026-02-27 01:05:22,581 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:05:22,790 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:05:23,000 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:05:23,214 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:05:23,649 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:24:41,779 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:24:41,984 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:24:42,187 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:24:42,392 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 01:24:42,889 [INFO] httpx — HTTP Request: POST https://careeros-backend-d9sc.onrender.com/mcp/invoke "HTTP/1.1 404 Not Found"
+2026-02-27 13:16:52,212 [INFO] orchestrator — ═══ Run 20260227_181652 started ═══
+2026-02-27 13:16:52,214 [INFO] orchestrator — ✓ L0 Profile Ingestion  (10% complete)
+2026-02-27 13:16:52,215 [WARNING] orchestrator — Using stub profile parser — replace with real LLM parser.
+2026-02-27 13:16:52,215 [INFO] orchestrator — Profile written → logs/profile_20260227_181652.json
+2026-02-27 13:16:52,216 [INFO] orchestrator — ✓ L1 Profile Parsing  (20% complete)
+2026-02-27 13:16:52,219 [INFO] orchestrator — ✓ L2 Intent Planning  (30% complete)
+2026-02-27 13:16:52,221 [WARNING] orchestrator — L3: No LeadScout service injected — skipping.
+2026-02-27 13:16:52,221 [INFO] orchestrator — ✓ L3 LeadScout  (40% complete)
+2026-02-27 13:16:52,223 [INFO] orchestrator — ✓ L4 GeoFence  (50% complete)
+2026-02-27 13:16:52,225 [INFO] orchestrator — ✓ L5 JD Extraction & Scoring  (60% complete)
+2026-02-27 13:16:52,227 [INFO] orchestrator — ✓ L6 Artifact Generation  (70% complete)
+2026-02-27 13:16:52,228 [WARNING] orchestrator — L7: No artifacts to submit — skipping ApplyExecutor.
+2026-02-27 13:16:52,229 [INFO] orchestrator — ✓ L7 ApplyExecutor  (80% complete)
+2026-02-27 13:16:52,230 [INFO] orchestrator — ✓ L8 Confirmation Capture  (90% complete)
+2026-02-27 13:16:52,232 [INFO] orchestrator — Final report → logs/report_20260227_181652.json
+2026-02-27 13:16:52,233 [INFO] orchestrator — ✓ L9 State Flush  (100% complete)
+2026-02-27 13:16:52,233 [INFO] orchestrator — ═══ Run 20260227_181652 finished  (100% layers OK) ═══
