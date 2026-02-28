@@ -947,6 +947,9 @@ async def get_status(run_id: str):
         "profile":          state.get("profile", {}),
         "layer_debug":      state.get("layer_debug", {}),
         "evaluations":      state.get("evaluations", [])[-50:],
+        "raw_job_leads_preview": state.get("job_leads", [])[:25],
+        "scored_jobs_preview": state.get("scored_jobs", [])[:25],
+        "approved_jobs_preview": state.get("approved_jobs", [])[:25],
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
         "created_at":       state["created_at"],

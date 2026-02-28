@@ -276,7 +276,26 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
-    return _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
+    raw = _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
+    if not raw:
+        return None
+
+    # Backward/alternate backend compatibility: normalize common field variants.
+    if "progress_pct" not in raw and "progress_percent" in raw:
+        raw["progress_pct"] = raw.get("progress_percent", 0)
+
+    pending = raw.get("pending_action")
+    if raw.get("status") == "needs_human_approval" and not pending:
+        layers = raw.get("layers") or []
+        l5 = layers[5] if len(layers) > 5 else {}
+        l6 = layers[6] if len(layers) > 6 else {}
+        l7 = layers[7] if len(layers) > 7 else {}
+        if l5.get("status") == "ok" and l6.get("status") == "waiting":
+            raw["pending_action"] = "approve_ranking"
+        elif l6.get("status") == "ok" and l7.get("status") == "waiting":
+            raw["pending_action"] = "approve_drafts"
+
+    return raw
 
 
 def _api_get_jobs(api_base: str, run_id: str) -> list[dict]:
@@ -290,7 +309,7 @@ def _api_get_artifacts(api_base: str, run_id: str) -> dict:
 
 def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict] = None) -> bool:
     try:
-        body = {"action": action}
+        body = {"action": action, "action_type": action}
         if payload:
             body.update(payload)
         r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
@@ -468,7 +487,24 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
     if not run_id or not status:
         return
     pending = status.get("pending_action")
-    if status.get("status") != "needs_human_approval" or not pending:
+    if status.get("status") != "needs_human_approval":
+        return
+
+    if not pending:
+        st.info("Run is waiting for approval. Approval type was inferred from layer state.")
+        layers = status.get("layers") or []
+        l5 = layers[5] if len(layers) > 5 else {}
+        l6 = layers[6] if len(layers) > 6 else {}
+        l7 = layers[7] if len(layers) > 7 else {}
+        if l5.get("status") == "ok" and l6.get("status") == "waiting":
+            pending = "approve_ranking"
+        elif l6.get("status") == "ok" and l7.get("status") == "waiting":
+            pending = "approve_drafts"
+        else:
+            st.warning("Approval state is missing from backend response. Open Full run JSON below to inspect.")
+            return
+
+    if not pending:
         return
 
     st.markdown('<div class="section-header">Human-in-the-Loop Approval Required</div>', unsafe_allow_html=True)
@@ -551,6 +587,36 @@ def render_stepwise_details(status: Optional[dict]) -> None:
                 "L6": layer_debug.get("L6", {}),
                 "L7": layer_debug.get("L7", {}),
             })
+
+
+def render_json_downloads(status: Optional[dict]) -> None:
+    if not status:
+        return
+
+    st.markdown('<div class="section-header">JSON Exports (Layer by Layer)</div>', unsafe_allow_html=True)
+    payloads = {
+        "L2_parsed_profile.json": status.get("profile", {}),
+        "L3_discovery.json": (status.get("layer_debug") or {}).get("L3", {}),
+        "L4_matching_scoring.json": (status.get("layer_debug") or {}).get("L4", {}),
+        "L5_evaluator_ranking.json": {
+            "L5": (status.get("layer_debug") or {}).get("L5", {}),
+            "evaluations": status.get("evaluations", []),
+        },
+        "L6_drafts.json": (status.get("layer_debug") or {}).get("L6", {}),
+        "L7_apply_results.json": (status.get("layer_debug") or {}).get("L7", {}),
+        "run_status.json": status,
+    }
+
+    cols = st.columns(3)
+    for i, (filename, payload) in enumerate(payloads.items()):
+        with cols[i % 3]:
+            st.download_button(
+                label=f"⬇️ {filename}",
+                data=json.dumps(payload or {"info": "No data yet"}, indent=2, default=str),
+                file_name=filename,
+                mime="application/json",
+                use_container_width=True,
+            )
 
 
 def render_agent_feed(status: Optional[dict]) -> None:
@@ -878,6 +944,7 @@ def main():
         render_agent_feed(status)
         render_hitl_controls(api_base, run_id, status)
         render_stepwise_details(status)
+        render_json_downloads(status)
         with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
             st.json(status or {"info": "No run status yet"})
 
