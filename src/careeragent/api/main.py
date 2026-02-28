@@ -25,9 +25,48 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+
+import importlib.machinery
+import importlib.util
+
+
+def _repair_pydantic_shadowing() -> None:
+    """Ensure local src/pydantic shims never shadow real dependency."""
+    spec = importlib.util.find_spec("pydantic")
+    origin = str(getattr(spec, "origin", "") or "") if spec else ""
+    if "/src/pydantic" not in origin.replace("\\", "/"):
+        return
+
+    candidate_paths = []
+    for path in sys.path:
+        if not path:
+            continue
+        try:
+            resolved = str(Path(path).resolve())
+        except Exception:
+            continue
+        if resolved.endswith("/src"):
+            continue
+        candidate_paths.append(path)
+
+    real_spec = importlib.machinery.PathFinder.find_spec("pydantic", candidate_paths)
+    if real_spec and real_spec.loader:
+        module = importlib.util.module_from_spec(real_spec)
+        real_spec.loader.exec_module(module)
+        sys.modules["pydantic"] = module
+        return
+
+    raise RuntimeError(
+        "Detected local 'src/pydantic' shadowing the real pydantic package. "
+        "Delete the local folder and run `uv sync` in your virtual environment."
+    )
+
+_repair_pydantic_shadowing()
+
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from careeragent.nlp.skills import compute_jd_alignment, extract_skills
 
 try:
     from langsmith.run_helpers import traceable  # type: ignore
@@ -112,6 +151,7 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "scored_jobs":      [],
         "artifacts":        {},
         "apply_results":    [],
+        "resume_scores":    {},
         "agent_log":        [],         # live feed messages
         "evaluations":      [],         # layer/job evaluator outputs
         "layer_debug":      {},         # stepwise debug payload per layer
@@ -222,6 +262,27 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     return out
 
 
+def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
+    resume_skills = [str(s) for s in (profile.get("skills") or []) if str(s).strip()]
+    for job in jobs:
+        jd_text = " ".join(
+            str(job.get(k) or "") for k in ("description", "snippet", "title", "company")
+        )
+        align = compute_jd_alignment(jd_text=jd_text, resume_skills=resume_skills)
+        job["matched_jd_skills"] = align.matched_jd_skills[:25]
+        job["missing_jd_skills"] = align.missing_jd_skills[:25]
+        job["jd_alignment_percent"] = align.jd_alignment_percent
+        job["missing_skills_gap_percent"] = align.missing_skills_gap_percent
+        semantic_proxy = round(min(1.0, max(0.0, align.jd_alignment_percent / 100.0)), 4)
+        lexical = float(job.get("score") or 0.0)
+        hybrid = round((0.65 * lexical) + (0.35 * semantic_proxy), 4)
+        job["keyword_score"] = lexical
+        job["semantic_score"] = semantic_proxy
+        job["score"] = hybrid
+        job["ats_proxy"] = round((0.6 * semantic_proxy) + (0.4 * lexical), 4)
+    return jobs
+
+
 def _record_eval(state: dict, *, layer_id: int, target_id: str, score: float, threshold: float, feedback: list[str]) -> None:
     decision = "pass" if score >= threshold else "retry"
     state.setdefault("evaluations", [])
@@ -271,11 +332,19 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
     try:
         artifacts = await _generate_artifacts(state["profile"], qualified[:5], ARTIFACTS_DIR / run_id)
         state["artifacts"] = artifacts
+        state["resume_scores"] = {
+            jid: {
+                "before": data.get("ats_score_before", {}),
+                "after": data.get("ats_score_after", {}),
+            }
+            for jid, data in artifacts.items()
+        }
         count = sum(len(v) for v in artifacts.values())
         state["layer_debug"]["L6"] = {
             "jobs_with_drafts": list(artifacts.keys()),
             "artifact_count": count,
             "artifacts": artifacts,
+            "ats_score_comparison": state["resume_scores"],
         }
         _record_eval(
             state,
@@ -511,6 +580,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             threshold = 0.45
 
         scored = _apply_frontend_filters(scored, state["config"])
+        scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
+        scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
         scored = _augment_scored_jobs(scored, state.get("profile") or {})
         state["scored_jobs"]     = scored
         state["jobs_scored"]     = len(scored)
@@ -649,63 +720,70 @@ async def _parse_resume(resume_path: Path) -> dict:
 
 
 def _extract_profile_from_text(text: str) -> dict:
-    """Light regex-based profile extraction (replace with LLM call in production)."""
+    """Enhanced resume parsing with skills, education, projects, and years of experience."""
     import re
 
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-    # Name — first non-empty line that looks like a name
     name = lines[0] if lines else "Candidate"
     if "|" in name:
         name = name.split("|")[0].strip()
     if len(name) > 60 or any(c in name for c in "@./"):
         name = "Candidate"
 
-    # Email
     email_m = re.search(r"[\w.+-]+@[\w-]+\.\w+", text)
-    email   = email_m.group(0) if email_m else ""
+    email = email_m.group(0) if email_m else ""
 
-    # Phone
     phone_m = re.search(r"[\+\(]?[\d\s\-\(\)]{10,}", text)
-    phone   = phone_m.group(0).strip() if phone_m else ""
+    phone = phone_m.group(0).strip() if phone_m else ""
 
-    from careeragent.nlp.skills import extract_skills
-
-    # Skills: deterministic entity extraction to reduce missed opportunities.
     found_skills = extract_skills(text)
 
-    # Experience (look for year ranges or role patterns)
     exp_pattern = re.findall(
-        r"([\w\s]+(?:Engineer|Developer|Manager|Director|Analyst|Scientist|Lead|Architect|Consultant))"
+        r"([\w\s/,&-]+(?:Engineer|Developer|Manager|Director|Analyst|Scientist|Lead|Architect|Consultant))"
         r"[^\n]*?(\d{4})\s*[-–]\s*(\d{4}|Present|Current|Now)",
-        text, re.I,
+        text,
+        re.I,
     )
     experience = []
-    for match in exp_pattern[:5]:
-        title  = match[0].strip()
-        start  = int(match[1])
-        end    = 2025 if match[2].lower() in ("present","current","now") else int(match[2])
-        years  = max(end - start, 0)
-        experience.append({"title": title, "years": years})
+    for role, start_s, end_s in exp_pattern[:8]:
+        start = int(start_s)
+        end = 2026 if end_s.lower() in ("present", "current", "now") else int(end_s)
+        years = max(0, end - start)
+        experience.append({"title": role.strip(), "years": years, "start": start, "end": end_s})
 
     if not experience:
-        # Fallback: just note total years mentioned
         yoe = re.search(r"(\d+)\+?\s*years?\s+(?:of\s+)?experience", text, re.I)
         if yoe:
             experience = [{"title": "Software Professional", "years": int(yoe.group(1))}]
 
-    # Summary — first paragraph-ish block
-    summary = " ".join(lines[1:4]) if len(lines) > 1 else text[:200]
+    education = []
+    for m in re.finditer(r"((?:B\.?Tech|B\.?E|Bachelors?|Masters?|M\.?S\.?|MBA|PhD|Doctorate)[^\n]{0,120})", text, re.I):
+        education.append(m.group(1).strip())
+    education = list(dict.fromkeys(education))[:6]
+
+    projects = []
+    for m in re.finditer(r"(?:project|projects)[:\-]?\s*([^\n]{8,140})", text, re.I):
+        val = m.group(1).strip(" .-")
+        if len(val) >= 8:
+            projects.append(val)
+    projects = list(dict.fromkeys(projects))[:8]
+
+    summary = " ".join(lines[1:5]) if len(lines) > 1 else text[:300]
+
+    total_years = sum(int(e.get("years") or 0) for e in experience)
 
     return {
-        "name":       name,
-        "email":      email,
-        "phone":      _sanitize_phone(phone),
-        "skills":     found_skills,
+        "name": name,
+        "email": email,
+        "phone": _sanitize_phone(phone),
+        "skills": found_skills,
         "experience": experience,
-        "education":  [],
-        "summary":    summary[:400],
-        "raw_text":   text[:3000],  # Keep first 3k chars
+        "education": education,
+        "projects": projects,
+        "total_years_experience": total_years,
+        "summary": summary[:500],
+        "raw_text": text[:6000],
     }
 
 
@@ -812,50 +890,123 @@ def _stub_score(leads: list[dict]) -> list[dict]:
 
 @traceable(name="api.generate_artifacts")
 async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) -> dict:
-    """Generate .docx + .pdf resume and cover letter for each job."""
+    """Generate ATS docs + before/after ATS scores for each approved job."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    artifacts = {}
+    artifacts: dict[str, dict[str, Any]] = {}
+
+    baseline_md = _build_resume_markdown(profile, keyword_hints=[])
+    baseline_ats = _compute_resume_ats_scores(baseline_md, "", profile.get("skills") or [])
 
     for job in jobs:
-        job_id  = job.get("id", f"job_{id(job)}")
+        job_id = str(job.get("id", f"job_{id(job)}"))
         job_dir = out_dir / job_id
         job_dir.mkdir(exist_ok=True)
 
-        resume_path = job_dir / "resume.docx"
-        cover_path  = job_dir / "cover_letter.docx"
+        jd_text = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "title"))
+        keyword_hints = extract_skills(jd_text, extra_candidates=profile.get("skills") or [])[:12]
+        tailored_md = _build_resume_markdown(profile, keyword_hints=keyword_hints)
+        tailored_ats = _compute_resume_ats_scores(tailored_md, jd_text, profile.get("skills") or [])
 
-        _write_resume_docx(profile, job, resume_path)
+        baseline_md_path = job_dir / "resume_baseline.md"
+        tailored_md_path = job_dir / "resume_tailored.md"
+        cover_md_path = job_dir / "cover_letter.md"
+        resume_path = job_dir / "resume.docx"
+        cover_path = job_dir / "cover_letter.docx"
+
+        baseline_md_path.write_text(baseline_md, encoding="utf-8")
+        tailored_md_path.write_text(tailored_md, encoding="utf-8")
+
+        cover_text = (
+            f"Dear Hiring Team,\n\n"
+            f"I am excited to apply for the {job.get('title','open role')} role at {job.get('company','your company')}. "
+            f"My background in {', '.join((profile.get('skills') or [])[:5])} and projects such as "
+            f"{', '.join((profile.get('projects') or [])[:2]) or 'AI/ML delivery projects'} align strongly with this role.\n\n"
+            f"Sincerely,\n{profile.get('name','Candidate')}"
+        )
+        cover_md_path.write_text(cover_text, encoding="utf-8")
+
+        _write_resume_docx(profile, job, resume_path, tailored_md=tailored_md)
         _write_cover_docx(profile, job, cover_path)
 
         resume_pdf = _to_pdf(resume_path)
-        cover_pdf  = _to_pdf(cover_path)
+        cover_pdf = _to_pdf(cover_path)
 
         artifacts[job_id] = {
             "resume_docx": str(resume_path),
-            "cover_docx":  str(cover_path),
-            "resume_pdf":  str(resume_pdf) if resume_pdf else None,
-            "cover_pdf":   str(cover_pdf)  if cover_pdf  else None,
+            "cover_docx": str(cover_path),
+            "resume_pdf": str(resume_pdf) if resume_pdf else None,
+            "cover_pdf": str(cover_pdf) if cover_pdf else None,
+            "resume_baseline_md": str(baseline_md_path),
+            "resume_tailored_md": str(tailored_md_path),
+            "cover_letter_md": str(cover_md_path),
+            "ats_score_before": baseline_ats,
+            "ats_score_after": tailored_ats,
+            "keywords_injected": keyword_hints,
         }
 
     return artifacts
 
 
-def _write_resume_docx(profile: dict, job: dict, path: Path) -> None:
+def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
+    skills = list(dict.fromkeys([str(s) for s in (profile.get("skills") or []) if str(s).strip()]))
+    merged_skills = list(dict.fromkeys(skills + keyword_hints))
+    exp_lines = []
+    for exp in (profile.get("experience") or []):
+        title = exp.get("title", "Experience") if isinstance(exp, dict) else str(exp)
+        years = exp.get("years", "") if isinstance(exp, dict) else ""
+        exp_lines.append(f"- {title} ({years} years)")
+    if not exp_lines:
+        exp_lines = ["- Professional experience available upon request"]
+
+    edu_lines = [f"- {e}" for e in (profile.get("education") or [])[:4]] or ["- Education details available"]
+    proj_lines = [f"- {p}" for p in (profile.get("projects") or [])[:4]] or ["- Delivered production-ready projects"]
+
+    return (
+        f"# {profile.get('name','Candidate')}\n"
+        f"{profile.get('email','')} · {profile.get('phone','')}\n\n"
+        f"## Summary\n{profile.get('summary','Experienced professional focused on measurable outcomes.')}\n\n"
+        f"## Skills\n" + ", ".join(merged_skills[:30]) + "\n\n"
+        f"## Experience\n" + "\n".join(exp_lines) + "\n\n"
+        f"## Projects\n" + "\n".join(proj_lines) + "\n\n"
+        f"## Education\n" + "\n".join(edu_lines) + "\n"
+    )
+
+
+def _compute_resume_ats_scores(resume_md: str, jd_text: str, profile_skills: list[str]) -> dict:
+    sections = ["summary", "skills", "experience", "projects", "education"]
+    section_hits = sum(1 for s in sections if s in resume_md.lower())
+    layout_score = round((section_hits / len(sections)) * 100, 2)
+    jd_skills = set(extract_skills(jd_text, extra_candidates=profile_skills)) if jd_text else set()
+    resume_skills = set(extract_skills(resume_md, extra_candidates=profile_skills))
+    keyword_score = round((len(jd_skills & resume_skills) / max(1, len(jd_skills))) * 100, 2) if jd_skills else 0.0
+    overall = round((0.55 * layout_score) + (0.45 * keyword_score), 2)
+    return {
+        "overall": overall,
+        "layout": layout_score,
+        "keyword": keyword_score,
+        "matched_keywords": sorted(jd_skills & resume_skills)[:20],
+        "missing_keywords": sorted(jd_skills - resume_skills)[:20],
+    }
+
+def _write_resume_docx(profile: dict, job: dict, path: Path, tailored_md: str = "") -> None:
     try:
         from docx import Document
-        from docx.shared import Pt, RGBColor
         doc = Document()
-        h = doc.add_heading(profile.get("name", "Candidate"), 0)
-        doc.add_paragraph(f"{profile.get('email','')}  ·  {profile.get('phone','')}".strip(" ·"))
-        doc.add_heading("Summary", 1)
-        doc.add_paragraph(profile.get("summary", ""))
-        doc.add_heading("Skills", 1)
-        doc.add_paragraph(", ".join(profile.get("skills", [])))
-        doc.add_heading("Experience", 1)
-        for exp in profile.get("experience", []):
-            p = doc.add_paragraph()
-            p.add_run(exp.get("title", "")).bold = True
-            doc.add_paragraph(f"  {exp.get('years', '')} years")
+        content_md = tailored_md or _build_resume_markdown(profile, keyword_hints=[])
+        current_section = None
+        for line in content_md.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("# "):
+                doc.add_heading(line[2:].strip(), 0)
+            elif line.startswith("## "):
+                current_section = line[3:].strip()
+                doc.add_heading(current_section, 1)
+            elif line.startswith("- "):
+                doc.add_paragraph(line[2:].strip(), style="List Bullet")
+            else:
+                doc.add_paragraph(line)
         doc.save(path)
     except ImportError:
         path.write_text(f"RESUME\n{profile.get('name','Candidate')}\n{', '.join(profile.get('skills',[]))}")
@@ -949,6 +1100,12 @@ async def mcp_invoke_passthrough(body: dict):
         "message": "MCP compatibility endpoint reached",
     }
 
+
+@app.post("/mcp/invoke/")
+async def mcp_invoke_passthrough_trailing(body: dict):
+    """Trailing slash compatibility for hosted backends/proxies."""
+    return await mcp_invoke_passthrough(body)
+
 @app.post("/hunt/start")
 @traceable(name="api.start_hunt")
 async def start_hunt(
@@ -1024,6 +1181,7 @@ async def get_status(run_id: str):
         "raw_job_leads_preview": state.get("job_leads", [])[:25],
         "scored_jobs_preview": state.get("scored_jobs", [])[:25],
         "approved_jobs_preview": state.get("approved_jobs", [])[:25],
+        "resume_scores":    state.get("resume_scores", {}),
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
         "created_at":       state["created_at"],
