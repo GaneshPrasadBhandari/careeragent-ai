@@ -120,27 +120,28 @@ def _guess_name(text: str) -> Optional[str]:
 
 
 def _parse_skills(text: str) -> List[str]:
-    """Cognitive skills extraction: finds skills section + scans whole resume for known tech."""
+    """Extract explicit and inferred skills from resume text."""
     t = text or ""
     skills: List[str] = []
-    seen_lower: set = set()
+    seen_lower: set[str] = set()
 
     def _add(s: str) -> None:
-        k = s.strip().lower()
+        k = re.sub(r"\s+", " ", s or "").strip().lower()
         if k and k not in seen_lower and len(k) > 1:
             seen_lower.add(k)
             skills.append(s.strip())
 
-    # --- Step 1: Extract from Skills / Technical Skills section ---
-    block = ""
-    m = re.search(
-        r"(?:Key\s+Skills?|Technical\s+Skills?|Core\s+Competencies|Skills?\s*&?\s*Technologies?|"
-        r"Tools?\s*&?\s*Technologies?|Expertise)\s*\n(.*?)"
-        r"(?:Professional\s+Experience|Work\s+Experience|Experience|Education|Certifications?|Projects?|$)",
-        t, flags=re.S | re.I,
-    )
-    if m:
-        block = m.group(1)
+    # section-based extraction
+    for line in t.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = re.match(r"^(?:core competencies|technical skills|key skills|skills?)\s*:\s*(.+)$", stripped, flags=re.I)
+        if m:
+            for part in re.split(r"[,;|/]", m.group(1)):
+                token = re.sub(r"^[-•·]\s*", "", part).strip()
+                if 1 < len(token) <= 60:
+                    _add(token)
 
 def _fuzzy_match_token(token: str, master: List[str], threshold: float = 0.84) -> Optional[str]:
     t = _clean_skill_token(token)
@@ -207,6 +208,27 @@ def _infer_project_skills_from_experience(experience: List[ExperienceModel]) -> 
     for label, pattern in mappings.items():
         if re.search(pattern, bullet_blob, flags=re.I):
             inferred.append(label)
+    return inferred
+
+
+def _infer_latent_skills(text: str, existing: List[str]) -> List[str]:
+    """Infer likely skills not explicitly listed but strongly implied by experience text."""
+    blob = (text or "").lower()
+    inferred: List[str] = []
+    mapping = {
+        "Solution Architecture": ["architecture", "solution design", "reference architecture"],
+        "Data Science": ["forecast", "model", "feature engineering", "a/b test"],
+        "Machine Learning": ["train", "inference", "ml pipeline"],
+        "AI/ML": ["llm", "genai", "ai assistant", "rag"],
+        "Cloud Engineering": ["aws", "azure", "gcp", "cloud"],
+        "Stakeholder Management": ["stakeholder", "cross-functional", "business partner"],
+    }
+    seen = {s.lower() for s in existing if s}
+    for skill, triggers in mapping.items():
+        if skill.lower() in seen:
+            continue
+        if any(t in blob for t in triggers):
+            inferred.append(skill)
     return inferred
 
 
@@ -618,8 +640,9 @@ class ParserAgentService:
             education=_parse_education(text),
         )
         inferred_skills = _infer_project_skills_from_experience(det.experience)
-        if inferred_skills:
-            det.skills = list(dict.fromkeys((det.skills or []) + inferred_skills))
+        latent_skills = _infer_latent_skills(text, det.skills)
+        if inferred_skills or latent_skills:
+            det.skills = list(dict.fromkeys((det.skills or []) + inferred_skills + latent_skills))
         det.skills = _validate_and_backfill_skills(text, det.skills)
         if len(det.skills) < 8:
             det.skills = self._llm_skill_backfill(text, det.skills)

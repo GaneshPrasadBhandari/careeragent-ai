@@ -333,6 +333,7 @@ def main() -> None:
                 {
                     "rank": idx,
                     "interview_%": float(x.get("interview_probability_percent") or 0.0),
+                    "offer_%": float(x.get("job_offer_probability_percent") or 0.0),
                     "missing_gap_%": float(x.get("missing_skills_gap_percent") or 0.0),
                     "match_%": mp,
                     "jd_align_%": comp["jd_align"],
