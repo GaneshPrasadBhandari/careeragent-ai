@@ -25,6 +25,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+
+import importlib.machinery
+import importlib.util
+
+
+def _repair_pydantic_shadowing() -> None:
+    """Ensure local src/pydantic shims never shadow real dependency."""
+    spec = importlib.util.find_spec("pydantic")
+    origin = str(getattr(spec, "origin", "") or "") if spec else ""
+    if "/src/pydantic" not in origin.replace("\\", "/"):
+        return
+
+    candidate_paths = []
+    for path in sys.path:
+        if not path:
+            continue
+        try:
+            resolved = str(Path(path).resolve())
+        except Exception:
+            continue
+        if resolved.endswith("/src"):
+            continue
+        candidate_paths.append(path)
+
+    real_spec = importlib.machinery.PathFinder.find_spec("pydantic", candidate_paths)
+    if real_spec and real_spec.loader:
+        module = importlib.util.module_from_spec(real_spec)
+        real_spec.loader.exec_module(module)
+        sys.modules["pydantic"] = module
+        return
+
+    raise RuntimeError(
+        "Detected local 'src/pydantic' shadowing the real pydantic package. "
+        "Delete the local folder and run `uv sync` in your virtual environment."
+    )
+
+_repair_pydantic_shadowing()
+
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
