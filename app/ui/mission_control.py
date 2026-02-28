@@ -513,12 +513,21 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
         ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", [])
         if ranked_jobs:
-            options = {f"{j.get('title','Role')} · {j.get('company','')} ({j.get('score',0)*100:.0f}%)": j.get("id") for j in ranked_jobs}
+            options = {
+                f"{j.get('title','Role')} · {j.get('company','')} "
+                f"(match {j.get('score',0)*100:.0f}% | interview {j.get('interview_probability_percent',0):.0f}%)": j.get("id")
+                for j in ranked_jobs
+            }
             selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys())[:5])
             selected_ids = [options[x] for x in selected_labels]
             with st.expander("Why these jobs are recommended"):
                 for j in ranked_jobs[:8]:
-                    st.markdown(f"- **{j.get('title','')} @ {j.get('company','')}** — score `{j.get('score',0)*100:.1f}%`, matched skills: {', '.join(j.get('matched_skills',[])[:6]) or 'N/A'}")
+                    st.markdown(
+                        f"- **{j.get('title','')} @ {j.get('company','')}** — "
+                        f"match `{j.get('score',0)*100:.1f}%`, interview `{j.get('interview_probability_percent',0):.1f}%`  \n"
+                        f"  reasoning: {j.get('llm_reasoning') or 'Skill overlap + ATS alignment'}  \n"
+                        f"  link: {j.get('url') or 'N/A'}"
+                    )
         else:
             selected_ids = []
 
@@ -587,6 +596,49 @@ def render_stepwise_details(status: Optional[dict]) -> None:
                 "L6": layer_debug.get("L6", {}),
                 "L7": layer_debug.get("L7", {}),
             })
+
+    missing = []
+    top_jobs = (layer_debug.get("L4", {}) or {}).get("top_jobs", [])
+    for job in top_jobs:
+        missing.extend(job.get("missing_skills") or [])
+    missing = list(dict.fromkeys([m for m in missing if m]))[:20]
+
+    full_report = {
+        "run_id": status.get("run_id"),
+        "uploaded_resume": {
+            "candidate_name": status.get("candidate_name"),
+            "skills_extracted": status.get("skills_extracted"),
+            "resume_path": (status.get("profile") or {}).get("source_resume_path", "stored server-side"),
+        },
+        "parsed_profile": profile,
+        "missing_skills_detected": missing,
+        "job_scraping": {
+            "jobs_discovered": status.get("jobs_discovered", 0),
+            "source_urls": [j.get("url") for j in (status.get("raw_job_leads_preview") or []) if j.get("url")],
+        },
+        "ranking_and_predictions": [
+            {
+                "title": j.get("title"),
+                "company": j.get("company"),
+                "url": j.get("url"),
+                "match_percent": round(float(j.get("score") or 0.0) * 100, 2),
+                "interview_probability_percent": j.get("interview_probability_percent", 0),
+                "reasoning": j.get("llm_reasoning"),
+            }
+            for j in ((layer_debug.get("L5", {}) or {}).get("qualified_jobs") or [])[:20]
+        ],
+        "layer_debug": layer_debug,
+    }
+    with st.expander("📜 One-click full pipeline report (scrollable)", expanded=False):
+        st.caption("Includes uploaded resume metadata, parsed content, missing skills, job scraping links, ranking reasons, and all layer outputs.")
+        st.text_area("Pipeline report", value=json.dumps(full_report, indent=2, default=str), height=420)
+        st.download_button(
+            "⬇️ Download full_pipeline_report.json",
+            data=json.dumps(full_report, indent=2, default=str),
+            file_name="full_pipeline_report.json",
+            mime="application/json",
+            use_container_width=True,
+        )
 
 
 def render_json_downloads(status: Optional[dict]) -> None:
@@ -659,9 +711,15 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
     min_score = st.slider("Job board score filter", 0.0, 1.0, 0.45, 0.05)
+    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5)
     only_remote = st.checkbox("Show remote only in board", value=False)
 
-    filtered = [j for j in jobs if j.get("score", 0) >= min_score and (not only_remote or j.get("remote"))]
+    filtered = [
+        j for j in jobs
+        if j.get("score", 0) >= min_score
+        and float(j.get("interview_probability_percent") or 0.0) >= float(min_interview)
+        and (not only_remote or j.get("remote"))
+    ]
     st.caption(f"Showing {len(filtered)} / {len(jobs)} jobs")
 
     for job in filtered[:40]:
@@ -675,12 +733,14 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div class="job-title">{job.get('title','')}</div>
                 <div class="job-company">{job.get('company','')}  ·  {remote_b}</div>
                 <div style="font-size:11px;color:#6e7681;margin-top:2px">
-                    LLM reasoning: {why}
+                    LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 {job.get('url','')}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
                 <div class="job-badge">{job.get('source','').upper()}</div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:4px">Interview {job.get('interview_probability_percent',0):.0f}%</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -778,8 +838,13 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         remote_only = st.checkbox("Remote Only", value=True)
         threshold   = st.slider("Match Threshold", 0.30, 0.90, 0.45, 0.05,
                                 help="Minimum score for a job to qualify")
-        posted_hours = st.selectbox("Posted within", [24, 48, 72, 168, 720], index=3, format_func=lambda x: f"Last {x} hours")
-        max_jobs = st.slider("How many jobs to fetch", 20, 100, 100, 10)
+        posted_hours = st.selectbox(
+            "Posted within",
+            [1, 3, 6, 12, 24, 48, 72, 168],
+            index=7,
+            format_func=lambda x: f"Last {x} hour{'s' if x != 1 else ''}",
+        )
+        max_jobs = st.slider("How many jobs to scrape today", 20, 150, 80, 5)
         salary_min, salary_max = st.slider("Salary range (USD)", 0, 400000, (80000, 220000), step=10000)
 
         require_ranking_approval = st.checkbox("Require ranking approval (HITL)", value=True)
