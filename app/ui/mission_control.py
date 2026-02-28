@@ -285,6 +285,15 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
         raw["progress_pct"] = raw.get("progress_percent", 0)
 
     pending = str(raw.get("pending_action") or "").strip().lower() or None
+    alias_map = {
+        "review_ranking": "approve_ranking",
+        "rankings_review": "approve_ranking",
+        "review_drafts": "approve_drafts",
+        "drafts_review": "approve_drafts",
+    }
+    if pending in alias_map:
+        raw["pending_action"] = alias_map[pending]
+        pending = raw["pending_action"]
     if raw.get("status") == "needs_human_approval" and not pending:
         layers = raw.get("layers") or []
         l5 = layers[5] if len(layers) > 5 else {}
@@ -487,6 +496,14 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
     if not run_id or not status:
         return
     pending = str(status.get("pending_action") or "").strip().lower() or None
+    alias_map = {
+        "review_ranking": "approve_ranking",
+        "rankings_review": "approve_ranking",
+        "review_drafts": "approve_drafts",
+        "drafts_review": "approve_drafts",
+    }
+    if pending in alias_map:
+        pending = alias_map[pending]
     if pending in {"human_approval", "approval", "rank_approval"}:
         pending = "approve_ranking"
     if pending in {"draft_approval", "approve_documents"}:
@@ -526,6 +543,12 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
             }
             selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys())[:5])
             selected_ids = [options[x] for x in selected_labels]
+            selected_urls = [
+                j.get("url")
+                for j in ranked_jobs
+                if j.get("id") in selected_ids and j.get("url")
+            ]
+            st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers.")
             with st.expander("Why these jobs are recommended"):
                 for j in ranked_jobs[:8]:
                     st.markdown(
@@ -536,11 +559,12 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
                     )
         else:
             selected_ids = []
+            selected_urls = []
 
         c1, c2 = st.columns(2)
         with c1:
             if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
-                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids}):
+                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids, "selected_job_urls": selected_urls}):
                     st.success("Ranking approved. Continuing to drafting layer...")
                     st.rerun()
         with c2:
@@ -983,8 +1007,10 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         langsmith = (status or {}).get("langsmith", {}) if status else {}
-        if langsmith.get("enabled") and langsmith.get("dashboard_url"):
-            st.markdown(f"[🧭 LangSmith dashboard]({langsmith['dashboard_url']})")
+        fallback_url = f"https://smith.langchain.com/o/default/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
+        if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
+            link = langsmith.get("dashboard_url") or fallback_url
+            st.markdown(f"[🧭 LangSmith dashboard]({link})")
 
     st.markdown("<hr style='border:none;border-top:1px solid #1e1e2e;margin:12px 0'>", unsafe_allow_html=True)
 
