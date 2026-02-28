@@ -23,19 +23,23 @@ def _ensure_real_pydantic_loaded() -> None:
     if not origin or "/src/pydantic" not in origin.replace('\\\\', '/'):
         return
 
-    # Try to resolve from non-project paths only.
+    # Try to resolve from non-shadow paths only.
     project_root = Path(__file__).resolve().parents[1]  # .../src
+    shadow_root = Path(origin).resolve().parents[1]  # .../src from shadowed import
     candidate_paths = [
         p for p in sys.path
-        if p and Path(p).resolve() != project_root.resolve()
+        if p
+        and Path(p).resolve() != project_root.resolve()
+        and Path(p).resolve() != shadow_root.resolve()
     ]
     real_spec = importlib.machinery.PathFinder.find_spec("pydantic", candidate_paths)
     if not real_spec or not real_spec.loader:
         return
 
     module = importlib.util.module_from_spec(real_spec)
-    real_spec.loader.exec_module(module)
+    # Register before execution so package-relative imports resolve correctly.
     sys.modules["pydantic"] = module
+    real_spec.loader.exec_module(module)
 
 
 _ensure_real_pydantic_loaded()
