@@ -938,7 +938,7 @@ async def health():
 async def start_hunt(
     background_tasks: BackgroundTasks,
     resume: UploadFile = File(...),
-    config: str = Form(default="{}"),
+    hunt_config: str = Form(default="{}", alias="config"),
 ):
     """
     Start a new pipeline run.
@@ -951,7 +951,7 @@ async def start_hunt(
     run_id = uuid.uuid4().hex[:12]
 
     try:
-        cfg = json.loads(config) if config else {}
+        cfg = json.loads(hunt_config) if hunt_config else {}
     except json.JSONDecodeError:
         cfg = {}
 
