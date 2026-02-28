@@ -9,6 +9,11 @@ _W_SKILL = 0.45
 _W_EXP = 0.35
 _W_ATS = 0.20
 
+# Hybrid scoring weights requested by product requirements:
+# semantic 60% + keyword 40%
+_W_KEYWORD = 0.40
+_W_SEMANTIC = 0.60
+
 _BLOCKED_SIGNALS = (
     "captcha",
     "access denied",
@@ -74,6 +79,34 @@ def _ats_keyword_match(resume_skills: List[str], jd_text: str) -> float:
     return max(0.1, min(1.0, matched / max(1, len(jd_skills))))
 
 
+def _semantic_similarity(profile: Dict[str, Any], jd_text: str, job: Dict[str, Any]) -> float:
+    """Dependency-free semantic proxy from role-family and entity overlap."""
+    jd = (jd_text or "").lower()
+    role_blob = " ".join(str(e.get("title") or "") for e in (profile.get("experience") or []))
+    role_blob = f"{role_blob} {' '.join(str(s) for s in profile.get('skills', []))}".lower()
+    title = str(job.get("title") or "").lower()
+
+    families = {
+        "ai": ["ai", "llm", "genai", "nlp", "computer vision", "machine learning"],
+        "data": ["data science", "analytics", "forecast", "model"],
+        "arch": ["architect", "architecture", "solution", "platform", "lead"],
+        "backend": ["backend", "api", "microservices", "distributed", "python"],
+    }
+    fam_hits = 0
+    fam_total = len(families)
+    for kws in families.values():
+        profile_hit = any(k in role_blob for k in kws)
+        jd_hit = any(k in jd or k in title for k in kws)
+        if profile_hit and jd_hit:
+            fam_hits += 1
+
+    jd_skills = set(extract_skills(jd_text, extra_candidates=profile.get("skills") or []))
+    rs = {normalize_skill(s) for s in (profile.get("skills") or []) if s}
+    overlap = len(jd_skills & rs) / max(1, len(jd_skills)) if jd_skills else 0.45
+    family_score = fam_hits / max(1, fam_total)
+    return max(0.2, min(1.0, (0.55 * overlap) + (0.45 * family_score)))
+
+
 class MatcherAgentService:
     """L4 scorer with robust fallback metrics and HITL-facing explanations."""
 
@@ -86,11 +119,14 @@ class MatcherAgentService:
             jd_text = _clean_jd_text(str(job.get("full_text_md") or ""), str(job.get("snippet") or ""))
             align = compute_jd_alignment(jd_text=jd_text, resume_skills=resume_skills)
 
-            skill_overlap = (align.jd_alignment_percent / 100.0) if (align.jd_alignment_percent > 0) else 0.30
+            keyword = _ats_keyword_match(resume_skills, jd_text)
+            semantic = _semantic_similarity(profile, jd_text, job)
             exp_align = _experience_alignment(profile, jd_text)
-            ats_kw = _ats_keyword_match(resume_skills, jd_text)
 
-            interview = (_W_SKILL * skill_overlap) + (_W_EXP * exp_align) + (_W_ATS * ats_kw)
+            hybrid_core = (_W_KEYWORD * keyword) + (_W_SEMANTIC * semantic)
+            # Seniority alignment gets a strong promotion to avoid filtering
+            # out experienced candidates for role-adjacent titles.
+            interview = (0.65 * hybrid_core) + (0.35 * exp_align)
             interview = max(0.0, min(1.0, interview))
             offer = max(0.0, min(1.0, interview * 0.78))
 
@@ -100,21 +136,28 @@ class MatcherAgentService:
                 "missing_jd_skills": align.missing_jd_skills[:40],
                 "jd_alignment_percent": round(align.jd_alignment_percent, 2),
                 "missing_skills_gap_percent": round(align.missing_skills_gap_percent, 2),
-                "ats_keyword_match_percent": round(ats_kw * 100.0, 2),
+                "ats_keyword_match_percent": round(keyword * 100.0, 2),
+                "semantic_alignment_percent": round(semantic * 100.0, 2),
                 "interview_probability_percent": round(interview * 100.0, 2),
                 "job_offer_probability_percent": round(offer * 100.0, 2),
                 "interview_chance_score": round(interview, 4),
                 "match_score": round(interview, 4),
                 "overall_match_percent": round(interview * 100.0, 2),
                 "components": {
-                    "skill_overlap": round(skill_overlap, 4),
+                    "skill_overlap": round((align.jd_alignment_percent / 100.0) if align.jd_alignment_percent > 0 else keyword, 4),
                     "experience_alignment": round(exp_align, 4),
-                    "ats_score": round(ats_kw, 4),
-                    "ats_proxy": round(ats_kw, 4),
+                    "ats_score": round(keyword, 4),
+                    "semantic_score": round(semantic, 4),
+                    "ats_proxy": round(keyword, 4),
                 },
+                "match_explanation": (
+                    f"Hybrid score uses 60% semantic + 40% keyword fit. "
+                    f"Semantic alignment {round(semantic*100,1)}% with strong role-family match; "
+                    f"seniority alignment {round(exp_align*100,1)}%."
+                ),
                 "selection_reason": (
-                    f"Skill match {round(align.jd_alignment_percent,1)}%, experience fit {round(exp_align*100,1)}%, "
-                    f"ATS keyword fit {round(ats_kw*100,1)}%."
+                    f"Skill match {round(align.jd_alignment_percent,1)}%, semantic fit {round(semantic*100,1)}%, "
+                    f"seniority fit {round(exp_align*100,1)}%."
                 ),
             }
             scored.append(enriched)

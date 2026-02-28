@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import time
+from html import escape
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
@@ -467,12 +468,12 @@ def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> No
 
     error_html = ""
     if error:
-        error_html = f'<div style="color:#f85149;font-size:12px;margin-top:4px">⚠ {error}</div>'
+        error_html = f'<div style="color:#f85149;font-size:12px;margin-top:4px">⚠ {escape(str(error))}</div>'
 
     output_html = f"""
     <div class="layer-output">
         <div class="output-label">Output Snapshot</div>
-        <div class="output-val">{output}</div>
+        <div class="output-val">{escape(str(output))}</div>
     </div>
     """
 
@@ -712,7 +713,7 @@ def render_agent_feed(status: Optional[dict]) -> None:
         for entry in reversed(feed[-20:]):  # newest first
             ts  = entry.get("ts", "")[:19].replace("T", " ")
             msg = entry.get("msg", "")
-            entries += f'<div class="feed-entry"><span class="feed-ts">{ts}</span><span class="feed-msg">{msg}</span></div>'
+            entries += f'<div class="feed-entry"><span class="feed-ts">{escape(str(ts))}</span><span class="feed-msg">{escape(str(msg))}</span></div>'
         feed_content = entries
 
     st.markdown(f"""
@@ -1078,12 +1079,11 @@ def main():
     if st.session_state.get("live_update") and run_id:
         run_state_now = (status or {}).get("status", "")
         if run_state_now not in ("completed", "error"):
-            refresh_ms = st.session_state["refresh_sec"] * 1000
-            # Use st.rerun scheduled via time check to avoid infinite loops
-            elapsed = time.time() - st.session_state["last_poll"]
-            if elapsed >= st.session_state["refresh_sec"] - 1:
-                time.sleep(max(0, st.session_state["refresh_sec"] - elapsed))
-                st.rerun()
+            refresh_sec = max(1, int(st.session_state.get("refresh_sec", 2)))
+            tick = st.empty()
+            tick.caption(f"Auto-refreshing every {refresh_sec}s…")
+            time.sleep(refresh_sec)
+            st.rerun()
 
 
 if __name__ == "__main__":
