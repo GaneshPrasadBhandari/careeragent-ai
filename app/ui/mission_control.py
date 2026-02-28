@@ -284,7 +284,7 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
     if "progress_pct" not in raw and "progress_percent" in raw:
         raw["progress_pct"] = raw.get("progress_percent", 0)
 
-    pending = raw.get("pending_action")
+    pending = str(raw.get("pending_action") or "").strip().lower() or None
     if raw.get("status") == "needs_human_approval" and not pending:
         layers = raw.get("layers") or []
         l5 = layers[5] if len(layers) > 5 else {}
@@ -486,12 +486,18 @@ def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> No
 def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
     if not run_id or not status:
         return
-    pending = status.get("pending_action")
-    if status.get("status") != "needs_human_approval":
+    pending = str(status.get("pending_action") or "").strip().lower() or None
+    if pending in {"human_approval", "approval", "rank_approval"}:
+        pending = "approve_ranking"
+    if pending in {"draft_approval", "approve_documents"}:
+        pending = "approve_drafts"
+
+    waiting_for_human = status.get("status") == "needs_human_approval" or bool(pending)
+    if not waiting_for_human:
         return
 
     if not pending:
-        st.info("Run is waiting for approval. Approval type was inferred from layer state.")
+        st.info("Run is waiting for approval. Approval type was inferred from layer state/job outputs.")
         layers = status.get("layers") or []
         l5 = layers[5] if len(layers) > 5 else {}
         l6 = layers[6] if len(layers) > 6 else {}
@@ -511,7 +517,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
 
     if pending == "approve_ranking":
         st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
-        ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", [])
+        ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", []) or status.get("approved_jobs_preview", [])
         if ranked_jobs:
             options = {
                 f"{j.get('title','Role')} · {j.get('company','')} "
@@ -852,7 +858,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         st.caption("Notifications")
         notif_email = st.text_input("Gmail for notifications", value="")
-        notif_phone = st.text_input("Phone number for SMS", value="")
+        notif_phone = st.text_input("Phone number for SMS", value="", placeholder="+1 415 555 0100")
+        profile_links = st.text_input("Profile links (LinkedIn/GitHub)", value="", help="Comma-separated URLs used by auto-apply forms")
         enable_email = st.checkbox("Enable email notifications", value=False)
         enable_sms = st.checkbox("Enable SMS notifications", value=False)
 
@@ -869,7 +876,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             "work_modes":               ["remote"] if remote_only else ["remote", "hybrid", "onsite"],
             "notifications": {
                 "email": notif_email,
-                "phone": notif_phone,
+                "phone": " ".join(notif_phone.split()),
+                "links": [u.strip() for u in profile_links.split(",") if u.strip()],
                 "enable_email": enable_email,
                 "enable_sms": enable_sms,
             },
@@ -974,6 +982,9 @@ def main():
             <span class="{state_cls}">{'— Idle' if run_state == 'idle' else run_state.title()}</span>
         </div>
         """, unsafe_allow_html=True)
+        langsmith = (status or {}).get("langsmith", {}) if status else {}
+        if langsmith.get("enabled") and langsmith.get("dashboard_url"):
+            st.markdown(f"[🧭 LangSmith dashboard]({langsmith['dashboard_url']})")
 
     st.markdown("<hr style='border:none;border-top:1px solid #1e1e2e;margin:12px 0'>", unsafe_allow_html=True)
 
