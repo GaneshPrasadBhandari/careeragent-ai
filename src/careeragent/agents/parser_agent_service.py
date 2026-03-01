@@ -86,6 +86,16 @@ def _extract_docx_text(file_bytes: bytes) -> str:
     return "\n".join(p.text.strip() for p in doc.paragraphs if p.text and p.text.strip())
 
 
+def _normalize_resume_text(text: str) -> str:
+    t = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Handles payloads where newlines are escaped (e.g., "line1\\nline2")
+    if "\\n" in t and "\n" not in t:
+        t = t.replace("\\n", "\n")
+    t = t.replace("\\t", " ")
+    t = t.replace("\uf06c", "-").replace("", "-").replace("•", "-")
+    return t
+
+
 def _parse_skills_phase1(text: str) -> List[str]:
     lexicon = [
         "Python", "AWS", "Azure", "GCP", "Machine Learning", "Deep Learning", "NLP",
@@ -99,13 +109,43 @@ def _parse_skills_phase1(text: str) -> List[str]:
         if re.search(r"\b" + re.escape(s.lower()) + r"\b", low):
             found.append(s)
 
-    for line in (text or "").splitlines():
-        m = re.match(r"^(?:skills?|technical skills|core competencies)\s*:\s*(.+)$", line.strip(), flags=re.I)
+    lines = (text or "").splitlines()
+    section_headers = {
+        "skills",
+        "key skills",
+        "technical skills",
+        "core competencies",
+        "programming and tools",
+        "cloud platforms",
+        "leadership & training",
+        "regulatory & security",
+        "certifications",
+    }
+
+    for idx, line in enumerate(lines):
+        m = re.match(r"^(?:skills?|technical skills|core competencies|key skills)\s*:\s*(.+)$", line.strip(), flags=re.I)
         if m:
             for part in re.split(r"[,;/|]", m.group(1)):
                 token = part.strip(" -•·")
                 if 2 <= len(token) <= 60:
                     found.append(token)
+
+        # Parse section-style skills blocks where header and values are on separate lines.
+        stripped = line.strip().rstrip(":").lower()
+        if stripped in section_headers:
+            for nxt in lines[idx + 1: idx + 8]:
+                candidate = nxt.strip()
+                if not candidate:
+                    break
+                if len(candidate) < 2:
+                    continue
+                lowered = candidate.rstrip(":").lower()
+                if lowered in section_headers or re.match(r"^(professional experience|notable projects|education)$", lowered):
+                    break
+                for part in re.split(r"[,;/|]", candidate):
+                    token = part.strip(" -•·")
+                    if 2 <= len(token) <= 80 and not re.search(r"\b(20\d{2}|19\d{2})\b", token):
+                        found.append(token)
     return list(dict.fromkeys(found))[:120]
 
 
@@ -169,12 +209,25 @@ def _parse_education(text: str) -> List[EducationModel]:
 
 def _parse_projects(text: str) -> List[str]:
     projects: List[str] = []
+    in_projects = False
     for line in (text or "").splitlines():
+        raw = line.strip()
+        low = raw.lower().rstrip(":")
+        if low in {"projects", "notable projects", "key projects"}:
+            in_projects = True
+            continue
+        if in_projects and re.match(r"^(professional affiliations|publications|education|experience)\b", low):
+            in_projects = False
         m = re.search(r"(?:project|projects)\s*[:\-]?\s*(.+)$", line, flags=re.I)
         if m:
             val = m.group(1).strip(" .-")
             if len(val) >= 6:
                 projects.append(val)
+            continue
+        if in_projects and raw:
+            p = re.split(r"\s+[–-]\s+", raw, maxsplit=1)[0].strip(" .-")
+            if len(p) >= 6:
+                projects.append(p)
     return list(dict.fromkeys(projects))[:12]
 
 
@@ -320,6 +373,7 @@ class ParserAgentService:
                 text = _extract_docx_text(file_bytes)
             else:
                 text = file_bytes.decode("utf-8", errors="ignore")
+        text = _normalize_resume_text(text)
 
         experience = _parse_experience(text)
         total_years = sum(float(e.years or 0.0) for e in experience)
