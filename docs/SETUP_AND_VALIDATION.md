@@ -47,6 +47,13 @@ python -V
 uv --version
 pytest -q tests/unit/test_hitl_contract.py
 python -m compileall -q src app tests
+python -m streamlit --version
+```
+
+If Streamlit is missing in your active environment:
+
+```bash
+python -m pip install "streamlit>=1.33" "streamlit-autorefresh>=1.0.1"
 ```
 
 ## 4) Full quality gates

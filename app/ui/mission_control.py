@@ -863,13 +863,89 @@ def render_analytics(status: Optional[dict]) -> None:
         """, unsafe_allow_html=True)
         return
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("Jobs Discovered",  status.get("jobs_discovered", 0))
+        st.metric("Jobs Discovered", status.get("jobs_discovered", 0))
     with c2:
-        st.metric("Applied To",       status.get("jobs_applied", 0))
+        st.metric("Applied To", status.get("jobs_applied", 0))
     with c3:
-        st.metric("Top Match",        f"{status.get('top_match_score',0):.0f}%")
+        st.metric("Top Match", f"{status.get('top_match_score',0):.0f}%")
+    with c4:
+        st.metric("Interviews", len(status.get("interviews", []) or []))
+
+    st.markdown("#### 🤖 LLM + Agent Tooling in this run")
+    llm_stack = status.get("llm_stack") or {}
+    if llm_stack:
+        stack_rows = []
+        for purpose, detail in llm_stack.items():
+            stack_rows.append({
+                "Purpose": purpose,
+                "Provider": detail.get("provider", "-"),
+                "Model": detail.get("model", "-"),
+                "Reason": detail.get("why", ""),
+            })
+        st.dataframe(stack_rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No LLM stack metadata captured yet.")
+
+    lcol1, lcol2 = st.columns(2)
+    with lcol1:
+        langsmith = status.get("langsmith", {}) or {}
+        st.markdown("**LangSmith tracing**")
+        if langsmith.get("enabled") and langsmith.get("dashboard_url"):
+            st.markdown(f"[Open LangSmith run trace]({langsmith.get('dashboard_url')})")
+        else:
+            st.caption("LangSmith disabled. Set LANGCHAIN_TRACING_V2 and LANGSMITH_API_KEY.")
+    with lcol2:
+        langgraph = status.get("langgraph", {}) or {}
+        st.markdown("**LangGraph tracing**")
+        if langgraph.get("enabled") and langgraph.get("dashboard_url"):
+            st.markdown(f"[Open LangGraph run trace]({langgraph.get('dashboard_url')})")
+        else:
+            st.caption(langgraph.get("note") or "LangGraph trace URL is not configured.")
+
+    applications = status.get("apply_results") or []
+    st.markdown("#### 📌 Application tracking")
+    if applications:
+        st.dataframe([
+            {
+                "Job ID": row.get("job_id"),
+                "Company": row.get("company"),
+                "Title": row.get("title"),
+                "Status": row.get("status"),
+                "Applied At": row.get("applied_at"),
+                "Channel": row.get("apply_channel"),
+                "Next Action": row.get("next_action"),
+                "Apply URL": row.get("url"),
+            }
+            for row in applications
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.caption("No application data yet.")
+
+    c5, c6 = st.columns(2)
+    with c5:
+        st.markdown("#### 📅 Interview queue")
+        interviews = status.get("interviews") or []
+        if interviews:
+            st.dataframe(interviews, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No interview invites yet.")
+    with c6:
+        st.markdown("#### ✉️ Employer follow-up drafts")
+        followups = status.get("followup_queue") or []
+        if followups:
+            st.dataframe(followups, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No follow-up drafts in queue.")
+
+    st.markdown("#### 🔔 Notification delivery log")
+    notification_log = status.get("notification_log") or []
+    if notification_log:
+        st.dataframe(notification_log, use_container_width=True, hide_index=True)
+        st.caption("Notifications are executed in dry-run mode in this environment unless provider credentials are configured.")
+    else:
+        st.caption("No notifications attempted yet.")
 
     errors = status.get("errors", [])
     if errors:
