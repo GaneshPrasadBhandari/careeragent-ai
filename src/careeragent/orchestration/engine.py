@@ -210,11 +210,14 @@ class OneClickAutomationEngine:
         self._s = get_settings()
         self._store = SqliteStateStore()
         self._health = HealthService()
-        self._notifier = NotificationService(dry_run=not bool(getattr(self._s, "ntfy_topic", None)))
+        self._notifier = NotificationService(
+            settings=self._s,
+            dry_run=not bool(getattr(self._s, "NTFY_TOPIC", None)),
+        )
         self._sanitize = SanitizeAgent()
         self._parser = ParserAgentService()
         self._parser_eval = ParserEvaluatorService()
-        self._learn = LearningResourceService(serper_api_key=getattr(self._s, "serper_api_key", None))
+        self._learn = LearningResourceService(serper_api_key=getattr(self._s, "SERPER_API_KEY", None))
 
     def _persist(self, st: AgentState) -> None:
         d = _run_dir(st.run_id)
