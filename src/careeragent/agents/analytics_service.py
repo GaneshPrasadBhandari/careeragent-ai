@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from careeragent.core.state import AgentState
-from careeragent.agents.analytics_schema import AnalyticsReport
+from careeragent.agents.analytics_schema import AnalyticsReport, FunnelAuditReport, SourceTelemetryReport
+from careeragent.agents.funnel_audit_service import FunnelAuditService
 
 
 class AnalyticsService:
@@ -75,12 +76,21 @@ class AnalyticsService:
             rate = sum(int(r["is_interview"]) for r in bucket) / len(bucket)
             interview_rate_by_bin[f"{lo:.1f}-{min(hi,1.0):.1f}"] = round(rate, 4)
 
+        funnel = FunnelAuditService.build(orchestration_state)
+        src = orchestration_state.meta.get("source_health") or {}
+
         return AnalyticsReport(
             total_submissions=len(submissions),
             outcomes_summary=outcomes_summary,
             mean_score_by_outcome=mean_score_by_outcome,
             interview_rate_by_score_bin=interview_rate_by_bin,
             dataset_rows=rows,
+            funnel_audit=FunnelAuditReport(**funnel),
+            source_telemetry=SourceTelemetryReport(
+                source_counts=src.get("source_counts") or {},
+                source_errors=src.get("source_errors") or {},
+                source_quota_targets=src.get("source_quota_targets") or {},
+            ),
         )
 
     @staticmethod

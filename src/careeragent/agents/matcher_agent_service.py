@@ -151,13 +151,16 @@ class MatcherAgentService:
                     "ats_proxy": round(keyword, 4),
                 },
                 "match_explanation": (
-                    f"Hybrid score uses 60% semantic + 40% keyword fit. "
-                    f"Semantic alignment {round(semantic*100,1)}% with strong role-family match; "
-                    f"seniority alignment {round(exp_align*100,1)}%."
+                    f"Recommendation rationale: semantic-role alignment {round(semantic*100,1)}%, "
+                    f"ATS keyword evidence {round(keyword*100,1)}%, and seniority fit {round(exp_align*100,1)}%. "
+                    f"Matched signals: {', '.join(align.matched_jd_skills[:6]) or 'transferable architecture and delivery experience'}. "
+                    f"Primary gaps to address: {', '.join(align.missing_jd_skills[:4]) or 'no major hard-skill gaps detected'}; "
+                    "these can be reduced through tailored bullets and project mapping."
                 ),
                 "selection_reason": (
-                    f"Skill match {round(align.jd_alignment_percent,1)}%, semantic fit {round(semantic*100,1)}%, "
-                    f"seniority fit {round(exp_align*100,1)}%."
+                    f"Selected for shortlist because the profile shows evidence of end-to-end delivery in comparable systems, "
+                    f"with skill match {round(align.jd_alignment_percent,1)}%, semantic fit {round(semantic*100,1)}%, "
+                    f"and seniority fit {round(exp_align*100,1)}%."
                 ),
             }
             scored.append(enriched)
