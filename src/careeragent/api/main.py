@@ -56,10 +56,9 @@ def _repair_pydantic_shadowing() -> None:
         sys.modules["pydantic"] = module
         return
 
-    raise RuntimeError(
-        "Detected local 'src/pydantic' shadowing the real pydantic package. "
-        "Delete the local folder and run `uv sync` in your virtual environment."
-    )
+    # Last-resort fallback: keep running with the local lightweight shim.
+    # This keeps diagnostics tooling usable in constrained environments.
+    os.environ.setdefault("CAREERAGENT_PYDANTIC_SHIM", "1")
 
 _repair_pydantic_shadowing()
 
@@ -212,12 +211,27 @@ def _calc_progress(state: dict) -> float:
     return round(done / total * 100, 1)
 
 
-def _default_step_meta(*, tools_used: list[str] | None = None, attempt_count: int = 1, latency: float = 0.0) -> dict:
-    return {
+def _default_step_meta(
+    *,
+    tools_used: list[str] | None = None,
+    attempt_count: int = 1,
+    latency: float = 0.0,
+    **extra: Any,
+) -> dict:
+    """Normalize common per-layer metadata and preserve additional fields.
+
+    Several pipeline stages pass stage-specific fields (e.g. ``skills``,
+    ``raw_jobs``, ``scored``). Accepting ``**extra`` keeps telemetry robust and
+    prevents type errors from crashing the run after successful work.
+    """
+    base = {
         "tools_used": list(tools_used or []),
         "attempt_count": int(max(1, attempt_count)),
         "latency": round(float(max(0.0, latency)), 3),
     }
+    if extra:
+        base.update(extra)
+    return base
 
 
 def _log_agent(state: dict, layer_id: int, msg: str, *, meta: dict | None = None) -> None:
