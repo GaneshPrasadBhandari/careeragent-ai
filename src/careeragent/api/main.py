@@ -489,6 +489,7 @@ def _qualified_from_state(state: dict) -> list[dict]:
 async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
+    state["jobs_approved"] = len(qualified)
 
     if not qualified:
         state["status"] = "pending_human_input"
@@ -543,6 +544,15 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
 async def _continue_l7_to_l9(run_id: str) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
+    state["jobs_approved"] = len(qualified)
+
+    notif_cfg = dict((state.get("config") or {}).get("notifications") or {})
+    profile = state.get("profile") or {}
+    profile_links = [str(u).strip() for u in (notif_cfg.get("links") or []) if str(u).strip()]
+    linkedin_url = next((u for u in profile_links if "linkedin.com" in u.lower()), "")
+    github_url = next((u for u in profile_links if "github.com" in u.lower()), "")
+    candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
+    candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
 
     _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["playwright", "gmail", "twilio"], attempt_count=1)
     apply_results = []
@@ -557,6 +567,13 @@ async def _continue_l7_to_l9(run_id: str) -> None:
             "applied_at": _now(),
             "next_action": "await_response" if index % 2 else "approve_followup_email",
             "followup_due_at": _now(),
+            "autofill_payload": {
+                "full_name": profile.get("name", "Candidate"),
+                "email": candidate_email,
+                "phone": candidate_phone,
+                "linkedin": linkedin_url,
+                "github": github_url,
+            },
         })
     state["apply_results"] = apply_results
     state["jobs_applied"]  = len(apply_results)
@@ -592,11 +609,15 @@ async def _continue_l7_to_l9(run_id: str) -> None:
     _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), tools_used=["playwright"], attempt_count=1)
     state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
 
-    notif_cfg = dict((state.get("config") or {}).get("notifications") or {})
     if notif_cfg.get("enable_email") or notif_cfg.get("enable_sms"):
         notifier = NotificationService(dry_run=True)
         message = f"Run {run_id}: {len(apply_results)} applications are queued/submitted."
-        alert_result = notifier.send_alert(message=message, title="CareerAgent apply update")
+        alert_result = notifier.send_alert(
+            message=message,
+            title="CareerAgent apply update",
+            to_email=candidate_email,
+            to_phone=candidate_phone,
+        )
         state["notification_log"].append({
             "timestamp": _now(),
             "requested_channels": {
@@ -931,6 +952,52 @@ def _persist_tracking(run_id: str, state: dict) -> None:
         pass
 
 
+def _clean_role_title(raw_title: str) -> str:
+    """Normalize noisy job titles for resume/cover-letter personalization."""
+    import re
+
+    title = str(raw_title or "").strip()
+    if not title:
+        return "the role"
+
+    title = re.sub(r"\(.*?\)", "", title)
+    title = re.sub(r"\b(linkedin|indeed|dice|ziprecruiter|monster|glassdoor)\b", "", title, flags=re.I)
+    title = re.sub(r"\b(remote|hybrid|onsite|on-site|work\s*from\s*home|wfh)\b", "", title, flags=re.I)
+    title = re.sub(r"\s*[|·—–-]\s*.*$", "", title)
+    title = re.sub(r"\s{2,}", " ", title).strip(" -|·—–")
+    return title or "the role"
+
+
+def _build_cover_letter_text(profile: dict, job: dict) -> str:
+    """Create a substantial, role-aware cover letter with cleaner phrasing."""
+    role = _clean_role_title(job.get("title", ""))
+    company = str(job.get("company") or "your company")
+    skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
+    skills_line = ", ".join(skills[:6]) if skills else "AI/ML engineering, cloud architecture, and delivery leadership"
+
+    experience_items = [str(x).strip() for x in (profile.get("experience") or []) if str(x).strip()]
+    projects = [str(x).strip() for x in (profile.get("projects") or []) if str(x).strip()]
+    impact_anchor = projects[0] if projects else (experience_items[0] if experience_items else "enterprise platform modernization")
+    summary = str(profile.get("summary") or "I bring hands-on experience delivering production-grade solutions with measurable business impact.")
+
+    cover = (
+        "Dear Hiring Manager,\n\n"
+        f"I am excited to apply for the {role} position at {company}. {summary} "
+        f"Across recent engagements, I have delivered outcomes using {skills_line}.\n\n"
+        f"One example is my work on {impact_anchor}, where I partnered with product and engineering stakeholders "
+        "to translate ambiguous goals into an execution roadmap with dependable milestones, quality gates, and clear ownership. "
+        "That effort strengthened reliability, improved delivery consistency, and made the platform easier to scale for new business needs.\n\n"
+        f"What attracts me most about {company} is the opportunity to apply this blend of technical depth and delivery discipline "
+        f"to the {role} role. I am confident I can contribute quickly while collaborating closely across teams to drive high-quality outcomes.\n\n"
+        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my background aligns with your needs.\n\n"
+        f"Sincerely,\n{profile.get('name', 'Candidate')}"
+    )
+    cover = re.sub(r"\b(linkedin|remote|wfh|work\s*from\s*home)\b", "", cover, flags=re.I)
+    cover = re.sub(r"\s{2,}", " ", cover)
+    cover = cover.replace("\n ", "\n")
+    return cover.strip()
+
+
 @traceable(name="api.parse_resume")
 async def _parse_resume(resume_path: Path) -> dict:
     """Extract profile from uploaded resume file."""
@@ -1162,13 +1229,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) ->
         baseline_md_path.write_text(baseline_md, encoding="utf-8")
         tailored_md_path.write_text(tailored_md, encoding="utf-8")
 
-        cover_text = (
-            f"Dear Hiring Team,\n\n"
-            f"I am excited to apply for the {job.get('title','open role')} role at {job.get('company','your company')}. "
-            f"My background in {', '.join((profile.get('skills') or [])[:5])} and projects such as "
-            f"{', '.join((profile.get('projects') or [])[:2]) or 'AI/ML delivery projects'} align strongly with this role.\n\n"
-            f"Sincerely,\n{profile.get('name','Candidate')}"
-        )
+        cover_text = _build_cover_letter_text(profile, job)
         cover_md_path.write_text(cover_text, encoding="utf-8")
 
         _write_resume_docx(profile, job, resume_path, tailored_md=tailored_md)
@@ -1339,17 +1400,10 @@ def _write_cover_docx(profile: dict, job: dict, path: Path) -> None:
         from docx import Document
         doc = Document()
         doc.add_heading("Cover Letter", 0)
-        doc.add_paragraph(
-            f"Dear Hiring Manager,\n\n"
-            f"I am writing to express strong interest in the {job.get('title','open')} role at "
-            f"{job.get('company','your company')}. With expertise in "
-            f"{', '.join(profile.get('skills',[])[:4])}, I am confident I can deliver "
-            f"significant value to your team.\n\n"
-            f"Sincerely,\n{profile.get('name','Candidate')}"
-        )
+        doc.add_paragraph(_build_cover_letter_text(profile, job))
         doc.save(path)
     except ImportError:
-        path.write_text(f"COVER LETTER\nDear Hiring Manager,\nApplying for {job.get('title','')}")
+        path.write_text(_build_cover_letter_text(profile, job), encoding="utf-8")
 
 
 def _to_pdf(docx_path: Path) -> Optional[Path]:
@@ -1569,6 +1623,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
                 "No selected jobs matched ranked results. Send selected_job_ids or selected_job_urls from /hunt/{run_id}/jobs.",
             )
         state["approved_jobs"] = approved
+        state["jobs_approved"] = len(approved)
         state["pending_action"] = None
         state["status"] = "running"
         _persist_state(run_id)
