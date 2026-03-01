@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from careeragent.core.state import AgentState
@@ -48,3 +49,10 @@ class HealthService:
     def enable_langsmith_tracing(self, *, project: str) -> None:
         # No-op: optional integration later.
         return
+
+
+def get_artifacts_root() -> Path:
+    """Return local artifacts root directory and create it when missing."""
+    root = Path("artifacts")
+    root.mkdir(parents=True, exist_ok=True)
+    return root

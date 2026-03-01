@@ -20,6 +20,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass, field
+from urllib.parse import urlparse
 from typing import Any, Optional
 
 log = logging.getLogger("leadscout")
@@ -73,6 +74,7 @@ class LeadScoutService:
     ):
         self.max_per_source = max_results_per_source
         self.enable_playwright = enable_playwright_scrape
+        self.last_search_telemetry: dict[str, Any] = {}
 
     # ── Canonical entry point ───────────────────────────────────────────────
 
@@ -106,8 +108,11 @@ class LeadScoutService:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         leads: list[JobLead] = []
-        for batch in results:
+        source_errors: dict[str, int] = {}
+        for idx, batch in enumerate(results):
             if isinstance(batch, Exception):
+                source_name = tasks[idx].cr_code.co_name if hasattr(tasks[idx], "cr_code") else "unknown"
+                source_errors[source_name] = source_errors.get(source_name, 0) + 1
                 log.warning("LeadScout source failed: %s", batch)
                 continue
             if isinstance(batch, list):
@@ -124,12 +129,24 @@ class LeadScoutService:
         recency_hours = float(intent_plan.get("recency_hours") or 24.0)
         filtered = self._filter_unavailable_jobs(unique)
         filtered = self._filter_by_recency(filtered, recency_hours=recency_hours)
+        quota_targets = self._build_source_quota_targets()
+        quota_applied = self._enforce_source_quotas(filtered, quota_targets=quota_targets)
+
+        source_counts = self._count_sources(quota_applied)
+        self.last_search_telemetry = {
+            "source_counts": source_counts,
+            "source_errors": source_errors,
+            "source_quota_targets": quota_targets,
+            "raw": len(leads),
+            "unique": len(unique),
+            "usable": len(quota_applied),
+        }
 
         log.info(
             "LeadScout found %d usable leads (%d unique / %d raw)",
-            len(filtered), len(unique), len(leads),
+            len(quota_applied), len(unique), len(leads),
         )
-        return [l.to_dict() for l in filtered[: self.max_per_source * 4]]
+        return [l.to_dict() for l in quota_applied[: self.max_per_source * 4]]
 
     # Aliases
     find_jobs   = search_jobs
@@ -199,6 +216,68 @@ class LeadScoutService:
         if "yesterday" in txt:
             return datetime.now(timezone.utc) - timedelta(days=1)
         return None
+
+
+    @staticmethod
+    def _source_domain(lead: JobLead) -> str:
+        host = (urlparse(lead.url).netloc or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if not host:
+            host = (lead.source or "unknown").lower()
+        return host
+
+    def _build_source_quota_targets(self) -> dict[str, int]:
+        # Top 8 US sites baseline quota (soft targets; filled opportunistically).
+        return {
+            "linkedin.com": 2,
+            "indeed.com": 2,
+            "glassdoor.com": 1,
+            "myvisajobs.com": 1,
+            "ziprecruiter.com": 1,
+            "greenhouse.io": 1,
+            "lever.co": 1,
+            "myworkdayjobs.com": 1,
+        }
+
+    def _enforce_source_quotas(self, leads: list[JobLead], *, quota_targets: dict[str, int]) -> list[JobLead]:
+        by_source: dict[str, list[JobLead]] = {}
+        for lead in leads:
+            src = self._source_domain(lead)
+            by_source.setdefault(src, []).append(lead)
+
+        selected: list[JobLead] = []
+        selected_urls: set[str] = set()
+
+        # Pass 1: satisfy soft quotas per source when inventory exists.
+        for source, target in quota_targets.items():
+            inventory: list[JobLead] = []
+            for key, entries in by_source.items():
+                if source in key:
+                    inventory.extend(entries)
+            for lead in inventory[: max(0, int(target))]:
+                if lead.url not in selected_urls:
+                    selected.append(lead)
+                    selected_urls.add(lead.url)
+
+        # Pass 2: fill remaining from global ranking order.
+        cap = self.max_per_source * 4
+        for lead in leads:
+            if len(selected) >= cap:
+                break
+            if lead.url in selected_urls:
+                continue
+            selected.append(lead)
+            selected_urls.add(lead.url)
+
+        return selected
+
+    def _count_sources(self, leads: list[JobLead]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for lead in leads:
+            src = self._source_domain(lead)
+            counts[src] = counts.get(src, 0) + 1
+        return counts
 
     # ── Query builder — THE KEY FIX ─────────────────────────────────────────
 

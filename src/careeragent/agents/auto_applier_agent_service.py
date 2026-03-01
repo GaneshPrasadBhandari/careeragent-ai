@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 
 from careeragent.core.settings import Settings
@@ -77,11 +78,14 @@ class AutoApplierAgentService:
         results: List[ApplyResult] = []
         profile = state.extracted_profile or {}
         ranking_map = {str(j.get("url") or ""): j for j in (state.ranking or [])}
+        state.meta.setdefault("apply_attempts", [])
 
         for url in state.approved_job_urls:
             score = float((ranking_map.get(url) or {}).get("phase2_score") or (ranking_map.get(url) or {}).get("match_score") or 0.0)
             if score < 0.65:
-                results.append(ApplyResult(job_url=url, status="skipped_low_score", message=f"score={score:.2f} below 0.65"))
+                msg = f"score={score:.2f} below 0.65"
+                results.append(ApplyResult(job_url=url, status="skipped_low_score", message=msg))
+                state.meta["apply_attempts"].append({"job_url": url, "status": "skipped_low_score", "reason": msg, "source": urlparse(url).netloc})
                 continue
             if 0.65 < score < 0.85:
                 self.notify.send_alert(
@@ -89,12 +93,15 @@ class AutoApplierAgentService:
                     title="CareerAgent Mid-Score Approval Needed",
                     priority="high",
                 )
-                results.append(ApplyResult(job_url=url, status="hitl_required", message=f"score={score:.2f} requires approval"))
+                msg = f"score={score:.2f} requires approval"
+                results.append(ApplyResult(job_url=url, status="hitl_required", message=msg))
+                state.meta["apply_attempts"].append({"job_url": url, "status": "hitl_required", "reason": msg, "source": urlparse(url).netloc})
                 continue
 
             dec = self.robots.allowed(url)
             if not dec.allowed:
                 results.append(ApplyResult(job_url=url, status="skipped", message=dec.reason))
+                state.meta["apply_attempts"].append({"job_url": url, "status": "skipped", "reason": dec.reason, "source": urlparse(url).netloc})
                 continue
 
             ats = "generic"
@@ -125,8 +132,12 @@ class AutoApplierAgentService:
 
                     browser.close()
                 status = "dry_run_mapped" if dry_run else "mapped_pending_submit"
-                results.append(ApplyResult(job_url=url, status=status, message=f"Mapped fields for {ats}"))
+                msg = f"Mapped fields for {ats}" if not missing else f"Mapped with missing fields for {ats}"
+                results.append(ApplyResult(job_url=url, status=status, message=msg))
+                state.meta["apply_attempts"].append({"job_url": url, "status": status, "reason": msg, "source": urlparse(url).netloc, "missing_fields": missing[:8]})
             except Exception as e:
-                results.append(ApplyResult(job_url=url, status="skipped", message=f"Playwright not available or failed: {e}"))
+                msg = f"Playwright not available or failed: {e}"
+                results.append(ApplyResult(job_url=url, status="skipped", message=msg))
+                state.meta["apply_attempts"].append({"job_url": url, "status": "skipped", "reason": msg, "source": urlparse(url).netloc})
 
         return results

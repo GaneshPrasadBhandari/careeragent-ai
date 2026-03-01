@@ -18,6 +18,11 @@ def Field(default: Any = None, default_factory: Callable[[], Any] | None = None,
     return _FieldSpec(default=default, default_factory=default_factory)
 
 
+def ConfigDict(**kwargs: Any) -> dict[str, Any]:
+    """Compatibility shim for pydantic v2 ConfigDict."""
+    return dict(kwargs)
+
+
 class BaseModel:
     def __init__(self, **data: Any) -> None:
         annotations = getattr(self.__class__, "__annotations__", {})
