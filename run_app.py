@@ -4,7 +4,23 @@ import os
 import subprocess
 import sys
 import time
+import importlib.util
 from pathlib import Path
+
+
+def _ensure_streamlit_installed() -> None:
+    """Bootstrap Streamlit if environment is missing UI deps."""
+    if importlib.util.find_spec("streamlit"):
+        return
+    print("Streamlit is not installed. Bootstrapping UI dependencies...")
+    subprocess.check_call([
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "streamlit>=1.33",
+        "streamlit-autorefresh>=1.0.1",
+    ])
 
 
 def main() -> int:
@@ -15,6 +31,7 @@ def main() -> int:
     Output: exit code
     """
     root = Path(__file__).resolve().parent
+    _ensure_streamlit_installed()
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root / "src") + (os.pathsep + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else "")

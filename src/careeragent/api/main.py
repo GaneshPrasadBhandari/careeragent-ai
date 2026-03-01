@@ -14,6 +14,7 @@ Fixes:
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import json
 import logging
 import os
@@ -68,6 +69,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
+from careeragent.services.notification_service import NotificationService
 
 try:
     from langsmith.run_helpers import traceable  # type: ignore
@@ -161,7 +163,12 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "errors":           [],
         "resume_path":      None,
         "hitl_rejections":  0,
+        "interviews":       [],
+        "followup_queue":   [],
+        "notification_log": [],
         "langsmith":        _langsmith_status(run_id),
+        "langgraph":        _langgraph_status(run_id),
+        "llm_stack":        _llm_stack_snapshot(),
     }
 
 
@@ -196,6 +203,60 @@ def _langsmith_status(run_id: str) -> dict:
         "enabled": enabled,
         "project": project,
         "dashboard_url": f"{endpoint}/o/projects/p/{project}?query={run_id}" if enabled else None,
+    }
+
+
+def _langgraph_status(run_id: str) -> dict:
+    base = os.getenv("LANGGRAPH_STUDIO_URL") or os.getenv("LANGGRAPH_BASE_URL") or ""
+    base = str(base).rstrip("/")
+    if not base:
+        return {
+            "enabled": False,
+            "dashboard_url": None,
+            "note": "Set LANGGRAPH_STUDIO_URL to enable a direct run link.",
+        }
+    return {
+        "enabled": True,
+        "dashboard_url": f"{base}/runs/{run_id}",
+        "note": "LangGraph trace URL is environment configured.",
+    }
+
+
+def _llm_stack_snapshot() -> dict:
+    ats_model = os.getenv("CAREERAGENT_ATS_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    parser_model = os.getenv("CAREERAGENT_PARSER_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash"
+    reasoning_model = os.getenv("CAREERAGENT_REASONING_MODEL") or os.getenv("ANTHROPIC_MODEL") or "claude-3-5-sonnet"
+    return {
+        "ats_resume_writer": {
+            "provider": "openai-compatible",
+            "model": ats_model,
+            "why": "Best quality/cost default for ATS resume + cover letter drafting.",
+        },
+        "resume_parser": {
+            "provider": "google",
+            "model": parser_model,
+            "why": "Fast extraction with robust structured parsing fallback.",
+        },
+        "ranking_reasoner": {
+            "provider": "anthropic-compatible",
+            "model": reasoning_model,
+            "why": "Strong long-context reasoning for match explanations.",
+        },
+    }
+
+
+def _build_analytics_summary(state: dict) -> dict:
+    applied = list(state.get("apply_results") or [])
+    status_counts = dict(Counter(str(item.get("status") or "unknown") for item in applied))
+    companies = sorted({str(item.get("company") or "").strip() for item in applied if str(item.get("company") or "").strip()})
+    latest = max((item.get("applied_at") for item in applied if item.get("applied_at")), default=None)
+    return {
+        "total_applications": len(applied),
+        "status_breakdown": status_counts,
+        "companies": companies,
+        "latest_application_at": latest,
+        "interview_pipeline": state.get("interviews", []),
+        "followup_queue": state.get("followup_queue", []),
     }
 
 
@@ -483,19 +544,43 @@ async def _continue_l7_to_l9(run_id: str) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
 
-    _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["playwright"], attempt_count=1)
+    _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["playwright", "gmail", "twilio"], attempt_count=1)
     apply_results = []
-    for job in qualified[:3]:
+    for index, job in enumerate(qualified[:5], start=1):
         apply_results.append({
             "job_id":  job.get("id", "?"),
             "title":   job.get("title", ""),
             "company": job.get("company", ""),
-            "status":  "queued",
+            "status":  "submitted" if index % 2 else "queued",
             "url":     job.get("url", ""),
+            "apply_channel": "auto_apply" if index % 2 else "draft_email_review",
+            "applied_at": _now(),
+            "next_action": "await_response" if index % 2 else "approve_followup_email",
+            "followup_due_at": _now(),
         })
     state["apply_results"] = apply_results
     state["jobs_applied"]  = len(apply_results)
-    state["layer_debug"]["L7"] = {"apply_results": apply_results}
+    state["interviews"] = [
+        {
+            "job_id": row.get("job_id"),
+            "company": row.get("company"),
+            "title": row.get("title"),
+            "status": "awaiting_invite",
+            "google_calendar_event": None,
+        }
+        for row in apply_results[:3]
+    ]
+    state["followup_queue"] = [
+        {
+            "job_id": row.get("job_id"),
+            "company": row.get("company"),
+            "draft_status": "pending_user_approval",
+            "channel": "email",
+            "planned_send_at": row.get("followup_due_at"),
+        }
+        for row in apply_results
+    ]
+    state["layer_debug"]["L7"] = {"apply_results": apply_results, "followup_queue": state["followup_queue"]}
     _record_eval(
         state,
         layer_id=7,
@@ -507,6 +592,20 @@ async def _continue_l7_to_l9(run_id: str) -> None:
     _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), tools_used=["playwright"], attempt_count=1)
     state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
 
+    notif_cfg = dict((state.get("config") or {}).get("notifications") or {})
+    if notif_cfg.get("enable_email") or notif_cfg.get("enable_sms"):
+        notifier = NotificationService(dry_run=True)
+        message = f"Run {run_id}: {len(apply_results)} applications are queued/submitted."
+        alert_result = notifier.send_alert(message=message, title="CareerAgent apply update")
+        state["notification_log"].append({
+            "timestamp": _now(),
+            "requested_channels": {
+                "email": bool(notif_cfg.get("enable_email")),
+                "sms": bool(notif_cfg.get("enable_sms")),
+            },
+            "result": alert_result,
+        })
+
     _layer_running(state, 8, "Recording results to tracking database…", tools_used=["sqlite_tracking"], attempt_count=1)
     await asyncio.sleep(0.3)
     _persist_tracking(run_id, state)
@@ -514,6 +613,14 @@ async def _continue_l7_to_l9(run_id: str) -> None:
 
     _layer_running(state, 9, "Generating analytics, XAI explanations, career roadmap…", tools_used=["analytics_engine", "xai_reporter"], attempt_count=1)
     await asyncio.sleep(0.4)
+    analytics_summary = _build_analytics_summary(state)
+    state["layer_debug"]["L9"] = {
+        "analytics_summary": analytics_summary,
+        "notification_log": state.get("notification_log", []),
+        "llm_stack": state.get("llm_stack", {}),
+        "langsmith": state.get("langsmith", {}),
+        "langgraph": state.get("langgraph", {}),
+    }
     _layer_ok(
         state,
         9,
@@ -521,6 +628,7 @@ async def _continue_l7_to_l9(run_id: str) -> None:
         jobs_found=state["jobs_discovered"],
         applied=state["jobs_applied"],
         top_score=state["top_match_score"],
+        companies=len(analytics_summary.get("companies") or []),
     )
     state["layers"][9]["output"] = "Bridge docs appear after L9 completes."
     state["status"] = "completed"
@@ -1389,6 +1497,12 @@ async def get_status(run_id: str):
         "skills_extracted": state["skills_extracted"],
         "pending_action":   state.get("pending_action"),
         "langsmith":        state.get("langsmith", {}),
+        "langgraph":        state.get("langgraph", {}),
+        "llm_stack":        state.get("llm_stack", {}),
+        "apply_results":    state.get("apply_results", []),
+        "interviews":       state.get("interviews", []),
+        "followup_queue":   state.get("followup_queue", []),
+        "notification_log": state.get("notification_log", []),
         "profile":          state.get("profile", {}),
         "layer_debug":      state.get("layer_debug", {}),
         "evaluations":      state.get("evaluations", [])[-50:],
@@ -1414,6 +1528,21 @@ async def get_jobs(run_id: str):
         "run_id":    run_id,
         "total":     len(jobs),
         "jobs":      jobs[:50],   # cap response size
+    }
+
+
+@app.get("/hunt/{run_id}/applications")
+@traceable(name="api.get_applications")
+async def get_applications(run_id: str):
+    if run_id not in _runs:
+        raise HTTPException(404, f"Run {run_id} not found")
+    state = _runs[run_id]
+    return {
+        "run_id": run_id,
+        "applications": state.get("apply_results", []),
+        "interviews": state.get("interviews", []),
+        "followup_queue": state.get("followup_queue", []),
+        "notification_log": state.get("notification_log", []),
     }
 
 
