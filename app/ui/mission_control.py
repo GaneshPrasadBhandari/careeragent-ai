@@ -41,51 +41,52 @@ def _inject_css() -> None:
     /* ── Global ── */
     html, body, [class*="css"] {
         font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
-        background-color: #0a0a0f;
-        color: #e2e8f0;
+        background-color: #F8F9FA;
+        color: #1B263B;
     }
-    .stApp { background-color: #0a0a0f; }
+    .stApp { background-color: #F8F9FA; }
 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {
-        background: #111118 !important;
+        background: #1B263B !important;
         border-right: 1px solid #1e1e2e;
     }
     section[data-testid="stSidebar"] * { color: #c9d1d9 !important; }
 
     /* ── Stat card ── */
     .stat-card {
-        background: #13131f;
-        border: 1px solid #1e1e2e;
+        background: #FFFFFF;
+        border: 1px solid #D9DEE5;
         border-radius: 10px;
         padding: 16px 20px;
         min-height: 80px;
     }
     .stat-label { font-size: 11px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.08em; }
-    .stat-value { font-size: 28px; font-weight: 700; color: #e2e8f0; margin: 4px 0 2px; }
-    .stat-sub   { font-size: 12px; color: #6e7681; }
-    .stat-value.green { color: #3fb950; }
+    .stat-value { font-size: 28px; font-weight: 700; color: #1B263B; margin: 4px 0 2px; }
+    .stat-sub   { font-size: 12px; color: #5C677D; }
+    .stat-value.green { color: #2D6A4F; }
     .stat-value.orange { color: #f0883e; }
 
     /* ── Progress bar container ── */
     .progress-wrap {
-        background: #13131f;
-        border: 1px solid #1e1e2e;
+        position: sticky; top: 0.5rem; z-index: 20;
+        background: #FFFFFF;
+        border: 1px solid #D9DEE5;
         border-radius: 10px;
         padding: 16px 20px 20px;
         margin: 12px 0;
     }
     .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     .progress-title  { font-size: 12px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.1em; }
-    .progress-pct    { font-size: 20px; font-weight: 700; color: #e2e8f0; }
+    .progress-pct    { font-size: 20px; font-weight: 700; color: #1B263B; }
     .progress-track  { background: #1e1e2e; border-radius: 6px; height: 8px; width: 100%; }
     .progress-fill   { height: 8px; border-radius: 6px; transition: width 0.5s ease;
-                        background: linear-gradient(90deg, #238636 0%, #3fb950 100%); }
+                        background: linear-gradient(90deg, #1B263B 0%, #2D6A4F 100%); }
 
     /* ── Layer card ── */
     .layer-card {
-        background: #13131f;
-        border: 1px solid #1e1e2e;
+        background: #FFFFFF;
+        border: 1px solid #D9DEE5;
         border-radius: 10px;
         padding: 14px 18px;
         margin-bottom: 8px;
@@ -97,13 +98,13 @@ def _inject_css() -> None:
     .layer-card.skipped { border-left: 3px solid #8b949e; }
 
     .layer-header   { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .layer-name     { font-size: 14px; font-weight: 600; color: #e2e8f0; }
+    .layer-name     { font-size: 14px; font-weight: 600; color: #1B263B; }
     .layer-status-badge {
         font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500;
     }
     .badge-waiting  { background: #21262d; color: #8b949e; }
     .badge-running  { background: #1c2d3f; color: #388bfd; }
-    .badge-ok       { background: #1a2e1a; color: #3fb950; }
+    .badge-ok       { background: #E6F4EA; color: #2D6A4F; }
     .badge-error    { background: #2d1a1a; color: #f85149; }
     .badge-skipped  { background: #21262d; color: #8b949e; }
 
@@ -120,7 +121,7 @@ def _inject_css() -> None:
     /* ── Agent Feed ── */
     .feed-wrap {
         background: #0d1117;
-        border: 1px solid #1e1e2e;
+        border: 1px solid #D9DEE5;
         border-radius: 10px;
         padding: 14px 18px;
         max-height: 200px;
@@ -147,16 +148,17 @@ def _inject_css() -> None:
         background: #21262d; color: #8b949e; font-weight: 500;
     }
     .run-status.running { background: #1c2d3f; color: #388bfd; }
-    .run-status.completed { background: #1a2e1a; color: #3fb950; }
-    .run-status.error { background: #2d1a1a; color: #f85149; }
+    .run-status.completed { background: #E6F4EA; color: #2D6A4F; }
+    .run-status.error { background: #FDECEC; color: #C92A2A; }
+    .run-status.pending_human_input { background:#FFF4E5; color:#B26A00; }
 
     /* ── Job table ── */
     .job-row {
-        background: #13131f; border: 1px solid #1e1e2e; border-radius: 8px;
+        background: #FFFFFF; border: 1px solid #D9DEE5; border-radius: 8px;
         padding: 12px 16px; margin-bottom: 6px;
         display: flex; justify-content: space-between; align-items: center;
     }
-    .job-title   { font-size: 14px; font-weight: 600; color: #e2e8f0; }
+    .job-title   { font-size: 14px; font-weight: 600; color: #1B263B; }
     .job-company { font-size: 12px; color: #8b949e; }
     .job-score   { font-size: 16px; font-weight: 700; color: #3fb950; }
     .job-badge   { font-size: 11px; padding: 2px 8px; border-radius: 20px;
@@ -291,11 +293,12 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
         "rankings_review": "approve_ranking",
         "review_drafts": "approve_drafts",
         "drafts_review": "approve_drafts",
+        "gap_analysis": "update_profile_skills",
     }
     if pending in alias_map:
         raw["pending_action"] = alias_map[pending]
         pending = raw["pending_action"]
-    if raw.get("status") == "needs_human_approval" and not pending:
+    if raw.get("status") in ("needs_human_approval", "pending_human_input") and not pending:
         layers = raw.get("layers") or []
         l5 = layers[5] if len(layers) > 5 else {}
         l6 = layers[6] if len(layers) > 6 else {}
@@ -436,6 +439,15 @@ def render_progress_bar(status: Optional[dict], layers_data: list[dict]) -> None
     </div>
     """, unsafe_allow_html=True)
 
+    if layers_data:
+        for ld in LAYERS:
+            layer_state = layers_data[ld["id"]]
+            meta = layer_state.get("meta") or {}
+            tools = meta.get("tools_used") or []
+            attempts = int(meta.get("attempt_count") or 1)
+            tool_txt = " & ".join([str(t) for t in tools]) if tools else "No explicit tools recorded"
+            st.caption(f"Step {ld['id']}: Used {tool_txt} | {attempts} attempts")
+
 
 def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> None:
     """Render one layer card with expandable details."""
@@ -502,6 +514,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         "rankings_review": "approve_ranking",
         "review_drafts": "approve_drafts",
         "drafts_review": "approve_drafts",
+        "gap_analysis": "update_profile_skills",
     }
     if pending in alias_map:
         pending = alias_map[pending]
@@ -510,7 +523,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
     if pending in {"draft_approval", "approve_documents"}:
         pending = "approve_drafts"
 
-    waiting_for_human = status.get("status") == "needs_human_approval" or bool(pending)
+    waiting_for_human = status.get("status") in ("needs_human_approval", "pending_human_input") or bool(pending)
     if not waiting_for_human:
         return
 
@@ -573,6 +586,21 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
                 if _api_action(api_base, run_id, "reject_ranking"):
                     st.success("Ranking rejected. Pipeline looped back to intake/planning.")
                     st.rerun()
+
+
+    elif pending == "update_profile_skills":
+        gap = ((status.get("layer_debug") or {}).get("L5") or {}).get("gap_analysis") or {}
+        checklist = gap.get("missing_skills_checklist") or []
+        st.warning("GapAnalysisAgent found near-threshold matches. Confirm skills you already have to update your profile and re-run from L4.")
+        if checklist:
+            selected = st.multiselect("Missing Skills Checklist", options=checklist, default=checklist[:3], key="gap_skill_selection")
+        else:
+            selected = st.text_input("Enter skills (comma separated)", key="gap_skill_text")
+            selected = [x.strip() for x in selected.split(",") if x.strip()]
+        if st.button("I have these skills, update my profile.", key="gap_update_profile_btn", type="primary"):
+            if _api_action(api_base, run_id, "update_profile_skills", {"skills": selected}):
+                st.success("Profile updated. Re-running scoring from L4.")
+                st.rerun()
 
     elif pending == "approve_drafts":
         st.warning("Draft resumes/cover letters are ready. Approve to continue auto-apply or reject to return to ranking review.")
@@ -660,6 +688,11 @@ def render_stepwise_details(status: Optional[dict]) -> None:
         ],
         "layer_debug": layer_debug,
     }
+    with st.expander("🧱 Layer Debug Logs (per layer)", expanded=False):
+        for lid in range(10):
+            with st.expander(f"L{lid} debug", expanded=False):
+                st.json((layer_debug.get(f"L{lid}", {}) if isinstance(layer_debug, dict) else {}))
+
     with st.expander("📜 One-click full pipeline report (scrollable)", expanded=False):
         st.caption("Includes uploaded resume metadata, parsed content, missing skills, job scraping links, ranking reasons, and all layer outputs.")
         st.text_area("Pipeline report", value=json.dumps(full_report, indent=2, default=str), height=420)
@@ -689,6 +722,16 @@ def render_json_downloads(status: Optional[dict]) -> None:
         "L7_apply_results.json": (status.get("layer_debug") or {}).get("L7", {}),
         "run_status.json": status,
     }
+
+    full_run_status_json = json.dumps(status, indent=2, default=str)
+    st.download_button(
+        label="📥 Download Full Operational Trace (JSON)",
+        data=full_run_status_json,
+        file_name="careeros_trace.json",
+        mime="application/json",
+        use_container_width=True,
+        type="primary",
+    )
 
     cols = st.columns(3)
     for i, (filename, payload) in enumerate(payloads.items()):
@@ -763,7 +806,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
             <div>
                 <div class="job-title">{job.get('title','')}</div>
                 <div class="job-company">{job.get('company','')}  ·  {remote_b}</div>
-                <div style="font-size:11px;color:#6e7681;margin-top:2px">
+                <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
                 <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 {job.get('url','')}</div>
@@ -776,6 +819,37 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         </div>
         """, unsafe_allow_html=True)
 
+
+
+
+def render_match_analysis(status: Optional[dict]) -> None:
+    if not status:
+        st.info("Run pipeline to see match analysis.")
+        return
+    layer_debug = status.get("layer_debug") or {}
+    l5 = layer_debug.get("L5") or {}
+    gap = l5.get("gap_analysis") or {}
+    qualified = l5.get("qualified_jobs") or []
+    matched = []
+    missing = list(gap.get("missing_skills_checklist") or [])
+    for j in qualified[:8]:
+        matched.extend(j.get("matched_skills") or [])
+    matched = list(dict.fromkeys([m for m in matched if m]))[:12]
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### ✅ Matched Skills")
+        if matched:
+            st.bar_chart({"matched": [len(matched)]})
+            st.caption(" | ".join(matched))
+        else:
+            st.caption("No matched skills yet")
+    with c2:
+        st.markdown("#### ⚠️ Missing Skills")
+        if missing:
+            st.bar_chart({"missing": [len(missing)]})
+            st.caption(" | ".join(missing))
+        else:
+            st.caption("No missing skills identified")
 
 def render_analytics(status: Optional[dict]) -> None:
     """Analytics tab."""
@@ -813,8 +887,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
     with st.sidebar:
         st.markdown("""
         <div style="padding:12px 0 20px">
-            <div style="font-size:18px;font-weight:700;color:#e2e8f0">🎯 CareerAgent-AI</div>
-            <div style="font-size:12px;color:#6e7681;margin-top:2px">Autonomous Job Hunt Engine</div>
+            <div style="font-size:18px;font-weight:700;color:#1B263B">🎯 CareerAgent-AI</div>
+            <div style="font-size:12px;color:#5C677D;margin-top:2px">Autonomous Job Hunt Engine</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -991,20 +1065,20 @@ def main():
     # ── Header ────────────────────────────────────────────────────────────────
     run_label  = f"Run: `{run_id}`  |  L0→L9 Planner-Director Pipeline" if run_id else "No active run"
     run_state  = (status or {}).get("status", "idle")
-    state_cls  = f"run-status {run_state}" if run_state in ("running","completed","error") else "run-status"
+    state_cls  = f"run-status {run_state}" if run_state in ("running","completed","error","pending_human_input") else "run-status"
 
     hcol1, hcol2 = st.columns([8, 2])
     with hcol1:
         st.markdown(f"""
-        <h2 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#e2e8f0">
+        <h2 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#1B263B">
             🎯 CareerAgent-AI — Mission Control
         </h2>
-        <div style="font-size:12px;color:#6e7681">{run_label}</div>
+        <div style="font-size:12px;color:#5C677D">{run_label}</div>
         """, unsafe_allow_html=True)
     with hcol2:
         st.markdown(f"""
         <div style="text-align:right;padding-top:10px">
-            <span class="{state_cls}">{'— Idle' if run_state == 'idle' else run_state.title()}</span>
+            <span class="{state_cls}">{'— Idle' if run_state == 'idle' else ('Pending Human Input' if run_state in ('pending_human_input','needs_human_approval') else run_state.title())}</span>
         </div>
         """, unsafe_allow_html=True)
         langsmith = (status or {}).get("langsmith", {}) if status else {}
@@ -1023,9 +1097,10 @@ def main():
     render_progress_bar(status, layers_data)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_pipeline, tab_jobs, tab_learn, tab_analytics = st.tabs([
+    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = st.tabs([
         "📋  Pipeline Layers",
         "💼  Job Board",
+        "🧩  Match Analysis",
         "🎓  Learning Center",
         "📊  Analytics",
     ])
@@ -1054,6 +1129,9 @@ def main():
     with tab_jobs:
         render_job_board(api_base, run_id, status)
 
+    with tab_match:
+        render_match_analysis(status)
+
     with tab_learn:
         if not status or status.get("progress_pct", 0) < 50:
             st.markdown("""
@@ -1067,7 +1145,7 @@ def main():
             skills = status.get("profile", {}).get("skills", []) if isinstance(status.get("profile"), dict) else []
             st.markdown(f"""
             <div style="color:#c9d1d9">
-                <h4 style="color:#e2e8f0">Skills Profile</h4>
+                <h4 style="color:#1B263B">Skills Profile</h4>
                 <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
             </div>
             """, unsafe_allow_html=True)
@@ -1078,7 +1156,7 @@ def main():
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:
         run_state_now = (status or {}).get("status", "")
-        if run_state_now not in ("completed", "error"):
+        if run_state_now not in ("completed", "error", "pending_human_input", "needs_human_approval"):
             refresh_sec = max(1, int(st.session_state.get("refresh_sec", 2)))
             tick = st.empty()
             tick.caption(f"Auto-refreshing every {refresh_sec}s…")
