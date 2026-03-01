@@ -6,6 +6,11 @@ from careeragent.core.state import AgentState, PlannerPersona
 
 
 ATS_SITES = [
+    "linkedin.com/jobs",
+    "indeed.com",
+    "glassdoor.com",
+    "myvisajobs.com",
+    "ziprecruiter.com",
     "greenhouse.io",
     "lever.co",
     "workdayjobs.com",
@@ -72,7 +77,7 @@ class Planner:
             persona_id="B",
             name=f"Cluster B (Cognitive) {geo_hint} 7d",
             strategy="ats_preferred",
-            recency_hours=max(168.0, state.preferences.recency_hours),
+            recency_hours=min(168.0, max(24.0, state.preferences.recency_hours)),
             must_include=list(dict.fromkeys(cognitive_cluster + ["remote", "hybrid"] + location_terms[:2])),
             negative_terms=negative,
             site_filters=ATS_SITES,
@@ -81,7 +86,7 @@ class Planner:
             persona_id="C",
             name=f"Cluster C (Leadership) {geo_hint}",
             strategy="broad",
-            recency_hours=max(168.0, state.preferences.recency_hours),
+            recency_hours=min(168.0, max(24.0, state.preferences.recency_hours)),
             must_include=list(dict.fromkeys(leadership_cluster + location_terms[:2])),
             negative_terms=negative,
             site_filters=[],

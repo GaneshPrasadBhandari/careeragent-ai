@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
@@ -120,17 +121,84 @@ class LeadScoutService:
                 seen.add(key)
                 unique.append(lead)
 
+        recency_hours = float(intent_plan.get("recency_hours") or 24.0)
+        filtered = self._filter_unavailable_jobs(unique)
+        filtered = self._filter_by_recency(filtered, recency_hours=recency_hours)
+
         log.info(
-            "LeadScout found %d unique leads (%d raw)",
-            len(unique), len(leads),
+            "LeadScout found %d usable leads (%d unique / %d raw)",
+            len(filtered), len(unique), len(leads),
         )
-        return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+        return [l.to_dict() for l in filtered[: self.max_per_source * 4]]
 
     # Aliases
     find_jobs   = search_jobs
     scrape_jobs = search_jobs
     run         = search_jobs
     execute     = search_jobs
+
+
+    @staticmethod
+    def _filter_unavailable_jobs(leads: list[JobLead]) -> list[JobLead]:
+        blocked_terms = (
+            "position filled",
+            "application closed",
+            "no longer accepting",
+            "job expired",
+            "applications are no longer being accepted",
+        )
+        out: list[JobLead] = []
+        for lead in leads:
+            blob = f"{lead.title} {lead.description} {lead.url}".lower()
+            if any(term in blob for term in blocked_terms):
+                continue
+            out.append(lead)
+        return out
+
+    @staticmethod
+    def _filter_by_recency(leads: list[JobLead], *, recency_hours: float) -> list[JobLead]:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1.0, float(recency_hours)))
+        out: list[JobLead] = []
+        for lead in leads:
+            if not lead.posted_date:
+                out.append(lead)
+                continue
+            dt = LeadScoutService._parse_posted_date(lead.posted_date)
+            if dt is None or dt >= cutoff:
+                out.append(lead)
+        return out
+
+    @staticmethod
+    def _parse_posted_date(raw: str) -> Optional[datetime]:
+        txt = str(raw or "").strip().lower()
+        if not txt:
+            return None
+
+        abs_formats = ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y")
+        for fmt in abs_formats:
+            try:
+                return datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        rel = re.search(r"(\d+)\s*(hour|hr|day|week|month)s?\s*ago", txt)
+        if rel:
+            qty = int(rel.group(1))
+            unit = rel.group(2)
+            if unit in {"hour", "hr"}:
+                return datetime.now(timezone.utc) - timedelta(hours=qty)
+            if unit == "day":
+                return datetime.now(timezone.utc) - timedelta(days=qty)
+            if unit == "week":
+                return datetime.now(timezone.utc) - timedelta(weeks=qty)
+            if unit == "month":
+                return datetime.now(timezone.utc) - timedelta(days=30 * qty)
+
+        if "today" in txt or "just posted" in txt:
+            return datetime.now(timezone.utc)
+        if "yesterday" in txt:
+            return datetime.now(timezone.utc) - timedelta(days=1)
+        return None
 
     # ── Query builder — THE KEY FIX ─────────────────────────────────────────
 
