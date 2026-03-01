@@ -155,11 +155,11 @@ async def mcp_invoke(s: RuntimeSettings, tool: str, payload: Dict[str, Any]) -> 
     if not (s.MCP_SERVER_URL and mcp_token(s)):
         return False, 0.0, None, "MCP not configured"
     base = s.MCP_SERVER_URL.rstrip("/")
+    root = base[:-4] if base.endswith("/mcp") else base
     if "careeros-backend" in base.lower():
         return False, 0.0, None, "MCP points to legacy CareerOS backend"
-    urls = [base + "/invoke"]
-    if not base.endswith("/mcp"):
-        urls.append(base + "/mcp/invoke")
+    urls = [root + "/invoke", root + "/mcp/invoke", base + "/invoke"]
+    urls = list(dict.fromkeys(urls))
     headers = {"Authorization": f"Bearer {mcp_token(s)}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=35.0) as client:
         for url in urls:
