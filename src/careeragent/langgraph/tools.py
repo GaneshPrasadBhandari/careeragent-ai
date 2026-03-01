@@ -73,9 +73,10 @@ class MCPClient:
             return ToolResult(ok=False, confidence=0.0, error="MCP points to legacy CareerOS backend")
         try:
             headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-            urls = [f"{self.base_url}/invoke"]
-            if not self.base_url.endswith("/mcp"):
-                urls.append(f"{self.base_url}/mcp/invoke")
+            base = self.base_url.rstrip("/")
+            root = base[:-4] if base.endswith("/mcp") else base
+            urls = [f"{root}/invoke", f"{root}/mcp/invoke", f"{base}/invoke"]
+            urls = list(dict.fromkeys(urls))
             async with httpx.AsyncClient(timeout=timeout) as client:
                 for url in urls:
                     r = await client.post(url, headers=headers, json={"tool": tool, "payload": payload})
