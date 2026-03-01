@@ -109,6 +109,24 @@ def _parse_skills_phase1(text: str) -> List[str]:
     return list(dict.fromkeys(found))[:120]
 
 
+def _validate_and_backfill_skills(text: str, current_skills: List[str]) -> List[str]:
+    """Backfill skills from explicit skill sections and preserve existing skills.
+
+    This is intentionally vocabulary-agnostic for parser guard tests.
+    """
+    merged = list(dict.fromkeys([str(s).strip() for s in (current_skills or []) if str(s).strip()]))
+    lines = (text or "").splitlines()
+    for line in lines:
+        m = re.match(r"^(?:skills?|technical skills|core competencies)\s*:\s*(.+)$", line.strip(), flags=re.I)
+        if not m:
+            continue
+        for part in re.split(r"[,;/|]", m.group(1)):
+            token = part.strip(" -•·")
+            if 2 <= len(token) <= 80 and token.lower() not in {x.lower() for x in merged}:
+                merged.append(token)
+    return merged
+
+
 def _parse_experience(text: str) -> List[ExperienceModel]:
     out: List[ExperienceModel] = []
     lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
@@ -331,4 +349,5 @@ __all__ = [
     "EducationModel",
     "_infer_latent_skills",
     "_infer_project_skills_from_experience",
+    "_validate_and_backfill_skills",
 ]
