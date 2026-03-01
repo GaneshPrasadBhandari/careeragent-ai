@@ -17,12 +17,12 @@ class NotificationService:
         self._settings = settings or Settings()
         self._dry_run = dry_run
 
-    def _send_gmail(self, *, subject: str, body: str) -> Dict[str, Any]:
-        to_addr = self._settings.GMAIL_TO_EMAIL
+    def _send_gmail(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
+        to_addr = to_addr or self._settings.GMAIL_TO_EMAIL
         from_addr = self._settings.GMAIL_FROM_EMAIL
         sa_path = self._settings.GMAIL_SERVICE_ACCOUNT_JSON
         if not (to_addr and from_addr and sa_path):
-            return {"sent": False, "skipped": True, "reason": "gmail_not_configured"}
+            return {"sent": False, "skipped": True, "reason": "gmail_not_configured", "to": to_addr}
         try:
             from google.oauth2 import service_account
             from googleapiclient.discovery import build
@@ -48,13 +48,13 @@ class NotificationService:
         except Exception as e:
             return {"sent": False, "channel": "gmail", "error": str(e)}
 
-    def _send_twilio_sms(self, *, body: str) -> Dict[str, Any]:
+    def _send_twilio_sms(self, *, body: str, to_number: str = "") -> Dict[str, Any]:
         sid = self._settings.TWILIO_ACCOUNT_SID
         token = self._settings.TWILIO_AUTH_TOKEN
         from_number = self._settings.TWILIO_FROM_NUMBER
-        to_number = self._settings.TWILIO_TO_NUMBER
+        to_number = to_number or self._settings.TWILIO_TO_NUMBER
         if not (sid and token and from_number and to_number):
-            return {"sent": False, "skipped": True, "reason": "twilio_not_configured"}
+            return {"sent": False, "skipped": True, "reason": "twilio_not_configured", "to": to_number}
         if self._dry_run:
             return {"sent": False, "dry_run": True, "to": to_number, "channel": "sms"}
         try:
@@ -69,9 +69,17 @@ class NotificationService:
         except Exception as e:
             return {"sent": False, "channel": "sms", "error": str(e)}
 
-    def send_alert(self, *, message: str, title: str = "CareerAgent HITL Required", priority: str = "high") -> Dict[str, Any]:
-        gmail_res = self._send_gmail(subject=title, body=message)
-        sms_res = self._send_twilio_sms(body=f"{title}: {message}")
+    def send_alert(
+        self,
+        *,
+        message: str,
+        title: str = "CareerAgent HITL Required",
+        priority: str = "high",
+        to_email: str = "",
+        to_phone: str = "",
+    ) -> Dict[str, Any]:
+        gmail_res = self._send_gmail(subject=title, body=message, to_addr=to_email)
+        sms_res = self._send_twilio_sms(body=f"{title}: {message}", to_number=to_phone)
 
         topic = self._settings.NTFY_TOPIC or "careeragent_alerts_ganesh"
         url = f"{self._settings.NTFY_BASE_URL.rstrip('/')}/{topic}"
