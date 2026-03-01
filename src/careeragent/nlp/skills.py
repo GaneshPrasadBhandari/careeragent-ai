@@ -92,6 +92,7 @@ _SKILL_LEXICON = {
     "fine-tuning", "rlhf", "peft", "lora",
     # Product / architecture
     "system design", "solution architecture", "enterprise architecture",
+    "solution architect", "ai architect", "ai solution architect", "genai solution architect",
     "microservices", "serverless", "fastapi", "flask", "django",
     "rest api", "graphql", "grpc", "openapi", "event-driven",
     "data mesh", "data lakehouse", "data warehouse",
@@ -116,7 +117,10 @@ def normalize_skill(skill: str) -> str:
         "ai": "machine learning",
         "gen ai": "genai",
         "generative ai": "genai",
+        "genai architect": "genai solution architect",
+        "ai/ml architect": "ai architect",
         "azureopenai": "azure openai",
+        "azure ml studio": "azure ml",
         "scikit learn": "scikit-learn",
         "k8s": "kubernetes",
         "gha": "github actions",

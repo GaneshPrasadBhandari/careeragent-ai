@@ -11,6 +11,8 @@ import re
 import logging
 from typing import Any, Dict, List, Optional, Set
 
+from careeragent.nlp.skills import extract_skills, normalize_skill
+
 log = logging.getLogger("managers")
 
 
@@ -213,22 +215,23 @@ class ExtractionManager:
         # Build profile skill set — normalise to lowercase
         profile_skills: Set[str] = set()
         for s in profile.get("skills", []):
-            profile_skills.add(str(s).lower().strip())
+            ns = normalize_skill(str(s).lower().strip())
+            if ns:
+                profile_skills.add(ns)
 
         # Also extract skills from raw_text if available (catches skills
         # the regex parser missed)
         raw_text = (profile.get("raw_text") or "").lower()
         for skill_key in SKILL_WEIGHTS:
             if skill_key in raw_text:
-                profile_skills.add(skill_key)
+                profile_skills.add(normalize_skill(skill_key))
 
-        profile_title = ""
+        profile_title_parts: List[str] = []
         exp = profile.get("experience") or []
-        if exp:
-            first = exp[0]
-            profile_title = (
-                first.get("title", "") if isinstance(first, dict) else ""
-            ).lower()
+        for item in exp[:5]:
+            if isinstance(item, dict) and item.get("title"):
+                profile_title_parts.append(str(item.get("title") or ""))
+        profile_title = " ".join(profile_title_parts).lower()
 
         profile_years = sum(
             (e.get("years", 0) if isinstance(e, dict) else 0)
@@ -246,6 +249,8 @@ class ExtractionManager:
                 # Combine all text fields for matching
                 jd_text = " ".join([
                     job.get("description", ""),
+                    job.get("full_text", ""),
+                    job.get("full_text_md", ""),
                     job.get("title", ""),
                     job.get("snippet", ""),
                     job.get("company", ""),
@@ -294,6 +299,13 @@ class ExtractionManager:
     def _score_skills(self, jd_text: str, profile_skills: Set[str]) -> float:
         if not profile_skills:
             return 0.3  # neutral rather than 0
+
+        jd_skills = {normalize_skill(s) for s in extract_skills(jd_text, extra_candidates=profile_skills)}
+        if jd_skills:
+            overlap = len(jd_skills & profile_skills) / max(1, len(jd_skills))
+            if len(jd_text) < 300:
+                overlap = max(overlap, 0.45)
+            return min(1.0, max(overlap, 0.2))
 
         matched_weight = 0.0
         total_weight   = 0.0
@@ -358,4 +370,7 @@ class ExtractionManager:
         return 0.30
 
     def _find_matches(self, jd_text: str, profile_skills: Set[str]) -> List[str]:
+        jd_skills = {normalize_skill(s) for s in extract_skills(jd_text, extra_candidates=profile_skills)}
+        if jd_skills:
+            return sorted(s for s in profile_skills if s in jd_skills)[:20]
         return sorted(s for s in profile_skills if s in jd_text)[:20]
