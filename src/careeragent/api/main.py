@@ -419,13 +419,59 @@ def _layer_ok(state: dict, layer_id: int, msg: str = "", **meta: Any) -> None:
 
 
 def _qualified_from_state(state: dict) -> list[dict]:
-    return list(state.get("approved_jobs") or state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs") or [])
+    approved = list(state.get("approved_jobs") or [])
+    if approved:
+        return approved
+
+    qualified = list(state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs") or [])
+    if qualified:
+        return qualified
+
+    # Final resilience fallback: if strict thresholding produced zero qualified
+    # roles, continue with top scored opportunities so downstream L6/L7 are not
+    # blocked and users still receive tailored ATS drafts.
+    return list(state.get("scored_jobs") or [])[:5]
+
+
+def _job_selection_keyset(job: dict) -> set[str]:
+    """Return robust identifiers used by frontend selection payloads."""
+    keys: set[str] = set()
+    for candidate in (
+        job.get("id"),
+        job.get("job_id"),
+        job.get("url"),
+        f"{job.get('title','')}|{job.get('company','')}",
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            keys.add(value)
+    return keys
+
+
+def _pick_approved_jobs(ranked: list[dict], selected_values: list[str]) -> list[dict]:
+    """Pick approved jobs, tolerating different frontend identifier formats."""
+    if not selected_values:
+        return list(ranked)
+
+    selected = {str(v).strip() for v in selected_values if str(v).strip()}
+    approved: list[dict] = []
+    for job in ranked:
+        if _job_selection_keyset(job) & selected:
+            approved.append(job)
+    return approved
 
 
 @traceable(name="api.continue_l6_l9")
 async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
+
+    if not qualified:
+        state["status"] = "pending_human_input"
+        state["pending_action"] = "approve_ranking"
+        _log_agent(state, 6, "No approved jobs found for drafting. Please approve at least one ranked job.")
+        _persist_state(run_id)
+        return
 
     _layer_running(state, 6, f"Generating ATS-optimized resume + cover letters for {len(qualified[:5])} jobs…", tools_used=["resume_builder", "cover_letter_builder"], attempt_count=1)
     try:
@@ -1038,6 +1084,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) ->
         baseline_md_path = job_dir / "resume_baseline.md"
         tailored_md_path = job_dir / "resume_tailored.md"
         cover_md_path = job_dir / "cover_letter.md"
+        ats_report_path = job_dir / "ats_verification.json"
         resume_path = job_dir / "resume.docx"
         cover_path = job_dir / "cover_letter.docx"
 
@@ -1059,6 +1106,25 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) ->
         resume_pdf = _to_pdf(resume_path)
         cover_pdf = _to_pdf(cover_path)
 
+        ats_report_path.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "job_title": job.get("title", ""),
+                    "company": job.get("company", ""),
+                    "verification_tool": "careeragent_internal_ats_v1",
+                    "ats_score_before": baseline_ats,
+                    "ats_score_after": tailored_ats,
+                    "improvement": round(
+                        float(tailored_ats.get("overall") or 0.0) - float(baseline_ats.get("overall") or 0.0),
+                        2,
+                    ),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
         artifacts[job_id] = {
             "resume_docx": str(resume_path),
             "cover_docx": str(cover_path),
@@ -1067,6 +1133,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) ->
             "resume_baseline_md": str(baseline_md_path),
             "resume_tailored_md": str(tailored_md_path),
             "cover_letter_md": str(cover_md_path),
+            "ats_verification_report": str(ats_report_path),
             "ats_score_before": baseline_ats,
             "ats_score_after": tailored_ats,
             "keywords_injected": keyword_hints,
@@ -1396,9 +1463,19 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
     action = (body or {}).get("action")
 
     if action == "approve_ranking":
-        selected_ids = set((body or {}).get("selected_job_ids") or [])
+        selected_values = (
+            (body or {}).get("selected_job_ids")
+            or (body or {}).get("selected_job_urls")
+            or (body or {}).get("selected_jobs")
+            or []
+        )
         ranked = state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs", [])
-        approved = [j for j in ranked if not selected_ids or j.get("id") in selected_ids]
+        approved = _pick_approved_jobs(ranked, selected_values)
+        if selected_values and not approved:
+            raise HTTPException(
+                400,
+                "No selected jobs matched ranked results. Send selected_job_ids or selected_job_urls from /hunt/{run_id}/jobs.",
+            )
         state["approved_jobs"] = approved
         state["pending_action"] = None
         state["status"] = "running"
