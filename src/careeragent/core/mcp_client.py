@@ -49,7 +49,11 @@ class MCPClient:
         Output: MCPResult or None if not available
         """
 
-        base = (self.s.MCP_SERVER_URL or "").rstrip("/")
+        base = (self.s.MCP_SERVER_URL or "").strip().rstrip("/")
+        for suffix in ("/mcp/invoke", "/invoke", "/mcp"):
+            if base.lower().endswith(suffix):
+                base = base[: -len(suffix)]
+                break
         if not base:
             return None
 
@@ -60,9 +64,9 @@ class MCPClient:
         try:
             import httpx
 
-            candidate_urls = [f"{base}/invoke"]
-            if not base.endswith("/mcp"):
-                candidate_urls.append(f"{base}/mcp/invoke")
+            root = base[:-4] if base.endswith("/mcp") else base
+            candidate_urls = [f"{root}/invoke", f"{root}/mcp/invoke", f"{base}/invoke"]
+            candidate_urls = list(dict.fromkeys(candidate_urls))
 
             with httpx.Client(timeout=self.s.MAX_HTTP_SECONDS) as client:
                 last_error = None

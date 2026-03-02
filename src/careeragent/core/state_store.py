@@ -37,7 +37,8 @@ class StateStore:
             rd = self.run_dir(run_id)
             rd.mkdir(parents=True, exist_ok=True)
             path = rd / "state.json"
-            payload = json.dumps(state.model_dump(mode="json"), indent=2).encode("utf-8")
+            data = state.model_dump() if hasattr(state, "model_dump") else state.dict()
+            payload = json.dumps(data, indent=2, default=str).encode("utf-8")
             self.mcp.write_file(str(path), payload)
 
             # sqlite

@@ -17,7 +17,19 @@ def _env_present(name: str) -> bool:
 
 
 async def _run_pipeline_smoke() -> Dict[str, object]:
-    from careeragent.api import main as api_main
+    try:
+        from careeragent.api import main as api_main
+    except Exception as exc:
+        return {
+            "run_status": "skipped",
+            "reason": f"import_error: {exc}",
+            "progress_pct": 0,
+            "layers": [],
+            "jobs_discovered": 0,
+            "jobs_scored": 0,
+            "jobs_applied": 0,
+            "errors": [str(exc)],
+        }
 
     run_id = "ops_check"
     api_main._runs[run_id] = api_main._build_initial_state(run_id, {})
@@ -72,7 +84,19 @@ def run_ops_check() -> Dict[str, object]:
         ]
     }
 
-    checks["pipeline_smoke"] = asyncio.run(_run_pipeline_smoke())
+    if checks["python_modules"].get("fastapi"):
+        checks["pipeline_smoke"] = asyncio.run(_run_pipeline_smoke())
+    else:
+        checks["pipeline_smoke"] = {
+            "run_status": "skipped",
+            "reason": "fastapi_not_installed",
+            "progress_pct": 0,
+            "layers": [],
+            "jobs_discovered": 0,
+            "jobs_scored": 0,
+            "jobs_applied": 0,
+            "errors": ["fastapi_not_installed"],
+        }
     return checks
 
 

@@ -416,8 +416,60 @@ class DraftingAgentService:
         if not cover_md or len(cover_md) < 80:
             cover_md = fallback_cover
 
+        resume_md = _sanitize_resume_markdown(resume_md, profile=clean_profile, title=title, jd=jd)
+        cover_md = _sanitize_cover_letter(cover_md, profile=clean_profile, title=title)
         return resume_md, cover_md
 
+
+
+def _sanitize_resume_markdown(resume_md: str, *, profile: Dict[str, Any], title: str, jd: str) -> str:
+    txt = (resume_md or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln.rstrip() for ln in txt.splitlines()]
+
+    # Remove duplicate contact/summary labels often caused by malformed prompts.
+    deduped: List[str] = []
+    seen_compact: set[str] = set()
+    for line in lines:
+        compact = re.sub(r"\s+", " ", line.strip().lower())
+        if compact and compact in seen_compact and (
+            "professional summary" in compact or "http" in compact or "@" in compact
+        ):
+            continue
+        if compact:
+            seen_compact.add(compact)
+        deduped.append(line)
+
+    txt = "\n".join(deduped).strip()
+
+    # Ensure clean section headers with ATS-friendly title casing.
+    txt = re.sub(r"^##\s*professional summary\s*$", "## Summary", txt, flags=re.I | re.M)
+    txt = re.sub(r"^##\s*technical skills\s*$", "## Skills", txt, flags=re.I | re.M)
+
+    required = ["## Summary", "## Skills", "## Experience", "## Education"]
+    if not txt.startswith("# ") or any(sec.lower() not in txt.lower() for sec in required):
+        return _build_fallback_resume(profile, title, jd)
+
+    # Remove markdown emphasis from bullet labels to keep ATS parsing stable.
+    txt = re.sub(r"\*\*(AI/ML|Cloud Engineering|Data Ops):\*\*", r"\1:", txt)
+    return txt + ("\n" if not txt.endswith("\n") else "")
+
+
+def _sanitize_cover_letter(cover_md: str, *, profile: Dict[str, Any], title: str) -> str:
+    txt = (cover_md or "").strip()
+    if txt.lower().startswith("cover letter"):
+        txt = re.sub(r"^cover letter\s*", "", txt, flags=re.I).strip()
+
+    # Ensure proper salutation and close.
+    if "dear " not in txt.lower()[:40]:
+        txt = f"Dear Hiring Manager,\n\n{txt}"
+    if "sincerely" not in txt.lower():
+        name = str(profile.get("name") or "Candidate")
+        txt = txt.rstrip() + f"\n\nSincerely,\n{name}"
+
+    # Guardrail against ultra-short cover letters.
+    if len(txt) < 220:
+        return _build_fallback_cover(profile, title)
+    return txt + ("\n" if not txt.endswith("\n") else "")
 
 
 def _strip_markdown(text: str) -> str:

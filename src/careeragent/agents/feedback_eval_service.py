@@ -12,7 +12,7 @@ from careeragent.core.state import AgentState
 from careeragent.services.health_service import get_artifacts_root
 
 
-FeedbackLabel = Literal["spam_fake", "legitimate_bug"]
+FeedbackLabel = Literal["spam_fake", "legitimate_bug", "employer_outcome"]
 
 
 class FeedbackItem(BaseModel):
@@ -29,6 +29,20 @@ class FeedbackItem(BaseModel):
     text: str
     context: Optional[str] = None
     meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+
+
+class EmployerOutcomeEvent(BaseModel):
+    """Parsed employer email/SMS feedback for self-learning loops."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["rejected", "interview", "selected", "waitlist", "unknown"]
+    confidence: float = 0.0
+    evidence: List[str] = Field(default_factory=list)
+    company: Optional[str] = None
+    job_url: Optional[str] = None
 
 
 class FeedbackClassification(BaseModel):
@@ -158,6 +172,12 @@ class FeedbackEvaluatorService:
         low = t.lower()
         reasons: List[str] = []
 
+        if item.source == "employer":
+            evt = self.parse_employer_outcome(item=item)
+            if evt.outcome != "unknown":
+                reasons.append(f"Employer outcome detected: {evt.outcome}.")
+                return FeedbackClassification(label="employer_outcome", confidence=max(0.6, evt.confidence), reasons=reasons)
+
         spam_hits = sum(1 for s in self._SPAM_SIGNALS if s in low)
         bug_hits = sum(1 for s in self._BUG_SIGNALS if s in low)
 
@@ -182,6 +202,53 @@ class FeedbackEvaluatorService:
         reasons.append("Low-signal feedback without reproducible details; treated as spam/fake by policy.")
         return FeedbackClassification(label="spam_fake", confidence=0.60, reasons=reasons)
 
+    def parse_employer_outcome(self, *, item: FeedbackItem) -> EmployerOutcomeEvent:
+        text = (item.text or "").lower()
+        evidence: List[str] = []
+
+        patterns = {
+            "selected": ["offer", "congratulations", "selected", "we are excited to move forward"],
+            "interview": ["interview", "schedule", "meet with", "next round"],
+            "rejected": ["not moving forward", "rejected", "position has been filled", "other candidates"],
+            "waitlist": ["keep your resume", "future opportunities", "pipeline"],
+        }
+
+        best = "unknown"
+        best_hits = 0
+        for outcome, kws in patterns.items():
+            hits = [kw for kw in kws if kw in text]
+            if len(hits) > best_hits:
+                best_hits = len(hits)
+                best = outcome
+                evidence = hits
+
+        conf = round(min(0.95, 0.45 + (0.15 * best_hits)), 3) if best != "unknown" else 0.0
+        meta = item.meta or {}
+        return EmployerOutcomeEvent(
+            outcome=best,
+            confidence=conf,
+            evidence=evidence,
+            company=str(meta.get("company") or "") or None,
+            job_url=str(meta.get("job_url") or "") or None,
+        )
+
+    def _update_learning_loop(self, *, state: AgentState, event: EmployerOutcomeEvent) -> None:
+        state.meta.setdefault("learning_loop", {"rejected": 0, "interview": 0, "selected": 0, "waitlist": 0})
+        loop = state.meta["learning_loop"]
+        if event.outcome in loop:
+            loop[event.outcome] = int(loop.get(event.outcome) or 0) + 1
+
+        state.meta.setdefault("status_updates", [])
+        state.meta["status_updates"].append(
+            {
+                "submission_id": str(event.job_url or event.company or "employer_signal"),
+                "status": "interviewing" if event.outcome == "interview" else ("offer" if event.outcome == "selected" else event.outcome),
+                "confidence": event.confidence,
+                "source": "employer",
+                "evidence": event.evidence,
+            }
+        )
+
     def ingest(self, *, state: AgentState, item: FeedbackItem) -> FeedbackIngestResult:
         """
         Description: Store legitimate feedback into RAG store for refinement and log classification to state.
@@ -194,6 +261,15 @@ class FeedbackEvaluatorService:
         state.meta.setdefault("feedback_events", [])
         state.meta["feedback_events"].append({"label": cls.label, "confidence": cls.confidence, "text": item.text[:300]})
         state.touch()
+
+        if cls.label == "employer_outcome":
+            event = self.parse_employer_outcome(item=item)
+            self._update_learning_loop(state=state, event=event)
+            doc_id = self._store.add_text(
+                text=item.text,
+                metadata={"source": item.source, "context": item.context, "outcome": event.outcome, **(item.meta or {})},
+            )
+            return FeedbackIngestResult(stored=True, doc_id=doc_id, classification=cls)
 
         if cls.label != "legitimate_bug":
             return FeedbackIngestResult(stored=False, doc_id=None, classification=cls)
