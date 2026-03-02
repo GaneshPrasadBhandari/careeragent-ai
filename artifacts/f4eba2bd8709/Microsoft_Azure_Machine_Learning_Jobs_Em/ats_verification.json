@@ -1,0 +1,24 @@
+{
+  "job_id": "Microsoft_Azure_Machine_Learning_Jobs_Em",
+  "job_title": "Microsoft Azure Machine Learning Jobs, Employment in Remote | Indeed",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "azure",
+      "machine learning"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}
