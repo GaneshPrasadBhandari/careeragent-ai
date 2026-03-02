@@ -60,7 +60,16 @@ class MCPClient:
     """
 
     def __init__(self, base_url: Optional[str], api_key: Optional[str]) -> None:
-        self.base_url = (base_url or "").rstrip("/")
+        raw = (base_url or "").strip().rstrip("/")
+        # Normalize accidental endpoint-level URLs to base host.
+        for suffix in ("/mcp/invoke", "/invoke", "/mcp"):
+            if raw.lower().endswith(suffix):
+                raw = raw[: -len(suffix)]
+                break
+        # Legacy CareerOS backend is incompatible and causes noisy 404 loops.
+        if "careeros-backend" in raw.lower():
+            raw = ""
+        self.base_url = raw
         self.api_key = api_key
 
     def available(self) -> bool:
