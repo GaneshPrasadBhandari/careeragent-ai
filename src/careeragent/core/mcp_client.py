@@ -49,7 +49,11 @@ class MCPClient:
         Output: MCPResult or None if not available
         """
 
-        base = (self.s.MCP_SERVER_URL or "").rstrip("/")
+        base = (self.s.MCP_SERVER_URL or "").strip().rstrip("/")
+        for suffix in ("/mcp/invoke", "/invoke", "/mcp"):
+            if base.lower().endswith(suffix):
+                base = base[: -len(suffix)]
+                break
         if not base:
             return None
 

@@ -53,3 +53,11 @@ def test_scored_jobs_include_rationale():
     out = _augment_scored_jobs(jobs, profile)
     assert out[0]["recommendation_rationale"]
     assert any("Context fit" in line for line in out[0]["recommendation_rationale"])
+
+
+def test_normalize_config_handles_malformed_nested_values():
+    cfg = _normalize_config({"notifications": "bad", "work_modes": "remote", "geo_preferences": []})
+    assert isinstance(cfg["notifications"], dict)
+    assert cfg["notifications"]["email"] == ""
+    assert cfg["work_modes"] == ["remote", "hybrid", "onsite"]
+    assert cfg["geo_preferences"] == {"remote": True, "locations": []}

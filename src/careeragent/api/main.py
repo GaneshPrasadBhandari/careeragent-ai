@@ -176,10 +176,14 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
 
 
 def _normalize_config(config: dict) -> dict:
-    cfg = dict(config or {})
+    cfg = dict(config) if isinstance(config, dict) else {}
     cfg.setdefault("target_roles", ["Software Engineer"])
+    if not isinstance(cfg.get("target_roles"), list):
+        cfg["target_roles"] = [str(cfg.get("target_roles") or "Software Engineer")]
     cfg.setdefault("match_threshold", 0.45)
     cfg.setdefault("geo_preferences", {"remote": True, "locations": []})
+    if not isinstance(cfg.get("geo_preferences"), dict):
+        cfg["geo_preferences"] = {"remote": True, "locations": []}
     cfg.setdefault("require_ranking_approval", True)
     cfg.setdefault("require_draft_approval", True)
     cfg.setdefault("max_jobs", 100)
@@ -187,10 +191,17 @@ def _normalize_config(config: dict) -> dict:
     cfg.setdefault("salary_min", 0)
     cfg.setdefault("salary_max", 400000)
     cfg.setdefault("work_modes", ["remote", "hybrid", "onsite"])
+    if not isinstance(cfg.get("work_modes"), list):
+        cfg["work_modes"] = ["remote", "hybrid", "onsite"]
     cfg.setdefault("draft_jobs_limit", 0)
     cfg.setdefault("apply_jobs_limit", 0)
     cfg.setdefault("notifications", {"email": "", "phone": "", "enable_email": False, "enable_sms": False})
-    notifications = dict(cfg.get("notifications") or {})
+    raw_notifications = cfg.get("notifications")
+    notifications = dict(raw_notifications) if isinstance(raw_notifications, dict) else {}
+    notifications.setdefault("email", "")
+    notifications.setdefault("phone", "")
+    notifications.setdefault("enable_email", False)
+    notifications.setdefault("enable_sms", False)
     notifications["phone"] = _sanitize_phone(notifications.get("phone", ""))
     cfg["notifications"] = notifications
     return cfg
@@ -1592,26 +1603,33 @@ async def start_hunt(
 
     try:
         cfg = json.loads(hunt_config) if hunt_config else {}
+        if not isinstance(cfg, dict):
+            cfg = {}
     except json.JSONDecodeError:
         cfg = {}
 
-    # Save uploaded file
-    suffix   = Path(resume.filename or "resume.pdf").suffix or ".pdf"
-    save_path = UPLOADS_DIR / f"{run_id}{suffix}"
-    content  = await resume.read()
-    if not content:
-        raise HTTPException(400, "Uploaded resume file is empty")
-    save_path.write_bytes(content)
-    log.info("Resume saved: %s (%d bytes)", save_path, len(content))
+    try:
+        # Save uploaded file
+        suffix = Path(resume.filename or "resume.pdf").suffix or ".pdf"
+        save_path = UPLOADS_DIR / f"{run_id}{suffix}"
+        content = await resume.read()
+        if not content:
+            raise HTTPException(400, "Uploaded resume file is empty")
+        save_path.write_bytes(content)
+        log.info("Resume saved: %s (%d bytes)", save_path, len(content))
 
-    # Initialize state
-    _runs[run_id] = _build_initial_state(run_id, cfg)
-    _runs[run_id]["resume_path"] = str(save_path)
+        # Initialize state
+        _runs[run_id] = _build_initial_state(run_id, cfg)
+        _runs[run_id]["resume_path"] = str(save_path)
 
-    # Launch pipeline in background
-    background_tasks.add_task(run_pipeline, run_id, save_path)
-
-    return {"run_id": run_id, "status": "started", "message": "Pipeline launched"}
+        # Launch pipeline in background
+        background_tasks.add_task(run_pipeline, run_id, save_path)
+        return {"run_id": run_id, "status": "started", "message": "Pipeline launched"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("Failed to start run %s", run_id)
+        raise HTTPException(500, f"Failed to start run: {exc}") from exc
 
 
 @app.get("/hunt/{run_id}/status")
