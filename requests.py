@@ -37,7 +37,16 @@ def _load_real_requests() -> object | None:
         return None
 
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    existing = sys.modules.get("requests")
+    sys.modules["requests"] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        if existing is not None:
+            sys.modules["requests"] = existing
+        else:
+            sys.modules.pop("requests", None)
+        raise
     return module
 
 
