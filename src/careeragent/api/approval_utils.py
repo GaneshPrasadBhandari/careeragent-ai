@@ -16,7 +16,7 @@ def qualified_from_state(state: dict[str, Any]) -> list[dict[str, Any]]:
     # Final resilience fallback: if strict thresholding produced zero qualified
     # roles, continue with top scored opportunities so downstream L6/L7 are not
     # blocked and users still receive tailored ATS drafts.
-    return list(state.get("scored_jobs") or [])[:5]
+    return list(state.get("scored_jobs") or [])[:40]
 
 
 def job_selection_keyset(job: dict[str, Any]) -> set[str]:
