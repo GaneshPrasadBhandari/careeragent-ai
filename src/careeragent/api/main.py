@@ -166,6 +166,9 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "interviews":       [],
         "followup_queue":   [],
         "notification_log": [],
+        "feedback_events":  [],
+        "learning_loop":    {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0},
+        "employer_outcomes": {"interview": 0, "selected": 0, "rejected": 0, "unknown": 0},
         "langsmith":        _langsmith_status(run_id),
         "langgraph":        _langgraph_status(run_id),
         "llm_stack":        _llm_stack_snapshot(),
@@ -184,6 +187,8 @@ def _normalize_config(config: dict) -> dict:
     cfg.setdefault("salary_min", 0)
     cfg.setdefault("salary_max", 400000)
     cfg.setdefault("work_modes", ["remote", "hybrid", "onsite"])
+    cfg.setdefault("draft_jobs_limit", 0)
+    cfg.setdefault("apply_jobs_limit", 0)
     cfg.setdefault("notifications", {"email": "", "phone": "", "enable_email": False, "enable_sms": False})
     notifications = dict(cfg.get("notifications") or {})
     notifications["phone"] = _sanitize_phone(notifications.get("phone", ""))
@@ -196,13 +201,14 @@ def _sanitize_phone(phone: str) -> str:
 
 
 def _langsmith_status(run_id: str) -> dict:
-    enabled = bool(os.getenv("LANGCHAIN_TRACING_V2") and os.getenv("LANGSMITH_API_KEY"))
+    tracing_flag = str(os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
+    enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
     return {
         "enabled": enabled,
         "project": project,
-        "dashboard_url": f"{endpoint}/o/projects/p/{project}?query={run_id}" if enabled else None,
+        "dashboard_url": f"{endpoint}/o/default/projects/p/{project}?q={run_id}" if enabled else None,
     }
 
 
@@ -257,6 +263,11 @@ def _build_analytics_summary(state: dict) -> dict:
         "latest_application_at": latest,
         "interview_pipeline": state.get("interviews", []),
         "followup_queue": state.get("followup_queue", []),
+        "feedback_loop": {
+            "learning_loop": state.get("learning_loop", {}),
+            "employer_outcomes": state.get("employer_outcomes", {}),
+            "feedback_events": state.get("feedback_events", [])[-25:],
+        },
     }
 
 
@@ -315,6 +326,27 @@ def _derive_reasoning(job: dict, profile: dict) -> tuple[list[str], list[str]]:
     return matched[:8], missing
 
 
+def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
+    matched, missing = _derive_reasoning(job, profile)
+    jd_alignment = float(job.get("jd_alignment_percent") or 0.0)
+    interview_pct = float(job.get("interview_probability_percent") or _interview_call_percent(job))
+    posted_hours = int(job.get("posted_hours_ago") or 999)
+    location = str(job.get("location") or "Unknown")
+    remote = bool(job.get("remote"))
+
+    rationale = [
+        f"Context fit: JD semantic alignment is {jd_alignment:.1f}% with your current profile signals.",
+        f"Cognitive confidence: interview probability modeled at {interview_pct:.1f}% based on skill fit, ATS quality, and recency.",
+        f"Market timing: posting age is {posted_hours}h ({'fresh' if posted_hours <= 48 else 'stale'}) which influences response odds.",
+        f"Role logistics: location={location} and mode={'remote' if remote else 'onsite/hybrid'}.",
+    ]
+    if matched:
+        rationale.append(f"Matched capabilities: {', '.join(matched[:6])}.")
+    if missing:
+        rationale.append(f"Skill gaps to close: {', '.join(missing[:5])}.")
+    return rationale
+
+
 def _interview_call_percent(job: dict) -> float:
     score = float(job.get("score") or 0.0)
     ats = float(job.get("ats_proxy") or score)
@@ -342,9 +374,56 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
             "missing_skills": missing,
             "interview_probability_percent": interview_pct,
             "llm_reasoning": " | ".join(reasons),
+            "recommendation_rationale": _job_recommendation_rationale({**j, "interview_probability_percent": interview_pct}, profile),
         }
         out.append(j2)
     return out
+
+
+def _feedback_is_genuine(source: str, text: str) -> tuple[bool, float, str]:
+    low = str(text or "").lower()
+    spam_hits = sum(1 for k in ("crypto", "gift card", "casino", "telegram", "click here") if k in low)
+    quality_hits = sum(1 for k in ("error", "failed", "expected", "actual", "interview", "selected", "rejected") if k in low)
+    if source == "employer" and quality_hits >= 1:
+        return True, 0.9, "Employer outcome signal detected"
+    if spam_hits > 0 and quality_hits == 0:
+        return False, 0.2, "Likely spam/noise"
+    conf = min(0.95, 0.55 + (0.1 * quality_hits))
+    return True, round(conf, 2), "Structured feedback signal detected"
+
+
+def _record_feedback_event(state: dict, payload: dict) -> dict:
+    source = str(payload.get("source") or "user").strip().lower()
+    text = str(payload.get("text") or "").strip()
+    meta = dict(payload.get("meta") or {})
+    is_genuine, confidence, reason = _feedback_is_genuine(source, text)
+    event = {
+        "ts": _now(),
+        "source": source,
+        "text": text[:600],
+        "meta": meta,
+        "evaluation": {
+            "is_genuine": is_genuine,
+            "confidence": confidence,
+            "reason": reason,
+        },
+    }
+    state.setdefault("feedback_events", []).append(event)
+    loop = state.setdefault("learning_loop", {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0})
+    loop["employer_feedback" if source == "employer" else "user_feedback"] += 1
+    loop["accepted" if is_genuine else "rejected"] += 1
+    if source == "employer":
+        outcomes = state.setdefault("employer_outcomes", {"interview": 0, "selected": 0, "rejected": 0, "unknown": 0})
+        low = text.lower()
+        if "interview" in low:
+            outcomes["interview"] += 1
+        elif any(k in low for k in ("selected", "offer", "congratulations")):
+            outcomes["selected"] += 1
+        elif any(k in low for k in ("rejected", "not moving forward", "position filled")):
+            outcomes["rejected"] += 1
+        else:
+            outcomes["unknown"] += 1
+    return event
 
 
 def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
@@ -498,9 +577,11 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
         _persist_state(run_id)
         return
 
-    _layer_running(state, 6, f"Generating ATS-optimized resume + cover letters for {len(qualified[:5])} jobs…", tools_used=["resume_builder", "cover_letter_builder"], attempt_count=1)
+    draft_limit = int((state.get("config") or {}).get("draft_jobs_limit") or 0)
+    draft_jobs = qualified if draft_limit <= 0 else qualified[:draft_limit]
+    _layer_running(state, 6, f"Generating ATS-optimized resume + cover letters for {len(draft_jobs)} jobs…", tools_used=["draft.resume_markdown_builder", "draft.cover_letter_formatter", "export.docx_pdf"], attempt_count=1)
     try:
-        artifacts = await _generate_artifacts(state["profile"], qualified[:5], ARTIFACTS_DIR / run_id)
+        artifacts = await _generate_artifacts(state["profile"], draft_jobs, ARTIFACTS_DIR / run_id)
         state["artifacts"] = artifacts
         state["resume_scores"] = {
             jid: {
@@ -554,18 +635,22 @@ async def _continue_l7_to_l9(run_id: str) -> None:
     candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
     candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
 
-    _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["playwright", "gmail", "twilio"], attempt_count=1)
+    apply_limit = int((state.get("config") or {}).get("apply_jobs_limit") or 0)
+    to_apply = qualified if apply_limit <= 0 else qualified[:apply_limit]
+
+    _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["apply.playwright_form_autofill", "notify.email", "notify.sms"], attempt_count=1)
     apply_results = []
-    for index, job in enumerate(qualified[:5], start=1):
+    for index, job in enumerate(to_apply, start=1):
+        application_status = "submitted" if candidate_email and candidate_phone else ("queued_missing_contact" if not candidate_email else "queued")
         apply_results.append({
             "job_id":  job.get("id", "?"),
             "title":   job.get("title", ""),
             "company": job.get("company", ""),
-            "status":  "submitted" if index % 2 else "queued",
+            "status":  application_status,
             "url":     job.get("url", ""),
-            "apply_channel": "auto_apply" if index % 2 else "draft_email_review",
+            "apply_channel": "playwright_autofill",
             "applied_at": _now(),
-            "next_action": "await_response" if index % 2 else "approve_followup_email",
+            "next_action": "await_response" if application_status == "submitted" else "supply_missing_contact_or_review",
             "followup_due_at": _now(),
             "autofill_payload": {
                 "full_name": profile.get("name", "Candidate"),
@@ -573,6 +658,8 @@ async def _continue_l7_to_l9(run_id: str) -> None:
                 "phone": candidate_phone,
                 "linkedin": linkedin_url,
                 "github": github_url,
+                "sms_opt_in": bool(notif_cfg.get("enable_sms")),
+                "email_opt_in": bool(notif_cfg.get("enable_email")),
             },
         })
     state["apply_results"] = apply_results
@@ -969,33 +1056,37 @@ def _clean_role_title(raw_title: str) -> str:
 
 
 def _build_cover_letter_text(profile: dict, job: dict) -> str:
-    """Create a substantial, role-aware cover letter with cleaner phrasing."""
+    """Create a classic business cover letter format with robust role alignment."""
     role = _clean_role_title(job.get("title", ""))
-    company = str(job.get("company") or "your company")
+    company = str(job.get("company") or "Hiring Team")
+    candidate = str(profile.get("name") or "Candidate")
+    email = str(profile.get("email") or "")
+    phone = str(profile.get("phone") or "")
     skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
-    skills_line = ", ".join(skills[:6]) if skills else "AI/ML engineering, cloud architecture, and delivery leadership"
+    top_skills = ", ".join(skills[:8]) if skills else "AI/ML engineering, cloud architecture, and delivery leadership"
+    summary = str(profile.get("summary") or "I build production-ready AI systems with measurable business outcomes.")
 
     experience_items = [str(x).strip() for x in (profile.get("experience") or []) if str(x).strip()]
     projects = [str(x).strip() for x in (profile.get("projects") or []) if str(x).strip()]
     impact_anchor = projects[0] if projects else (experience_items[0] if experience_items else "enterprise platform modernization")
-    summary = str(profile.get("summary") or "I bring hands-on experience delivering production-grade solutions with measurable business impact.")
 
-    cover = (
+    return (
+        f"{candidate}\n"
+        f"{email} | {phone}\n"
+        f"{_now()[:10]}\n\n"
+        "Hiring Manager\n"
+        f"{company}\n\n"
+        f"Subject: Application for {role}\n\n"
         "Dear Hiring Manager,\n\n"
-        f"I am excited to apply for the {role} position at {company}. {summary} "
-        f"Across recent engagements, I have delivered outcomes using {skills_line}.\n\n"
-        f"One example is my work on {impact_anchor}, where I partnered with product and engineering stakeholders "
-        "to translate ambiguous goals into an execution roadmap with dependable milestones, quality gates, and clear ownership. "
-        "That effort strengthened reliability, improved delivery consistency, and made the platform easier to scale for new business needs.\n\n"
-        f"What attracts me most about {company} is the opportunity to apply this blend of technical depth and delivery discipline "
-        f"to the {role} role. I am confident I can contribute quickly while collaborating closely across teams to drive high-quality outcomes.\n\n"
-        "Thank you for your time and consideration. I would welcome the opportunity to discuss how my background aligns with your needs.\n\n"
-        f"Sincerely,\n{profile.get('name', 'Candidate')}"
-    )
-    cover = re.sub(r"\b(linkedin|remote|wfh|work\s*from\s*home)\b", "", cover, flags=re.I)
-    cover = re.sub(r"\s{2,}", " ", cover)
-    cover = cover.replace("\n ", "\n")
-    return cover.strip()
+        f"I am writing to express interest in the {role} position at {company}. {summary}\n\n"
+        f"My background aligns strongly with your requirements, especially in {top_skills}. "
+        f"A representative example is {impact_anchor}, where I partnered cross-functionally to improve reliability, delivery velocity, and measurable business outcomes.\n\n"
+        f"I am confident this blend of technical depth and execution discipline would let me contribute quickly to {company}. "
+        "I would value the opportunity to discuss how my background can support your team's goals.\n\n"
+        "Thank you for your time and consideration.\n\n"
+        "Sincerely,\n"
+        f"{candidate}\n"
+    ).strip()
 
 
 @traceable(name="api.parse_resume")
@@ -1557,6 +1648,9 @@ async def get_status(run_id: str):
         "interviews":       state.get("interviews", []),
         "followup_queue":   state.get("followup_queue", []),
         "notification_log": state.get("notification_log", []),
+        "feedback_events":  state.get("feedback_events", [])[-50:],
+        "learning_loop":    state.get("learning_loop", {}),
+        "employer_outcomes": state.get("employer_outcomes", {}),
         "profile":          state.get("profile", {}),
         "layer_debug":      state.get("layer_debug", {}),
         "evaluations":      state.get("evaluations", [])[-50:],
@@ -1598,6 +1692,24 @@ async def get_applications(run_id: str):
         "followup_queue": state.get("followup_queue", []),
         "notification_log": state.get("notification_log", []),
     }
+
+
+
+
+@app.post("/hunt/{run_id}/feedback")
+@traceable(name="api.feedback")
+async def post_feedback(run_id: str, body: dict):
+    if run_id not in _runs:
+        raise HTTPException(404, f"Run {run_id} not found")
+    state = _runs[run_id]
+    if not str((body or {}).get("text") or "").strip():
+        raise HTTPException(400, "feedback text is required")
+    event = _record_feedback_event(state, body or {})
+    feedback_file = LOGS_DIR / f"feedback_{run_id}.jsonl"
+    with feedback_file.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(event) + "\n")
+    _persist_state(run_id)
+    return {"ok": True, "event": event, "totals": state.get("learning_loop", {})}
 
 
 @app.post("/hunt/{run_id}/action")
