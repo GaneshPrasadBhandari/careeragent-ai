@@ -218,11 +218,15 @@ def _langsmith_status(run_id: str) -> dict:
     tracing_flag = str(os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
     enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
-    project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
+    project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai").strip().strip('"')
+    workspace = (os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
+    base = f"{endpoint}/o/{workspace}" if workspace else endpoint
     return {
         "enabled": enabled,
         "project": project,
-        "dashboard_url": f"{endpoint}/o/default/projects/p/{project}?q={run_id}" if enabled else None,
+        "workspace": workspace or None,
+        "dashboard_url": f"{base}/projects/p/{project}" if enabled else None,
+        "run_filter": run_id,
     }
 
 
@@ -789,13 +793,15 @@ async def _continue_l8_to_l9(run_id: str) -> None:
     apply_results = state.get("apply_results") or []
 
     if notif_cfg.get("enable_email") or notif_cfg.get("enable_sms"):
-        notifier = NotificationService(dry_run=True)
+        notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
         message = f"Run {run_id}: {len(apply_results)} applications are queued/submitted."
         alert_result = notifier.send_alert(
             message=message,
             title="CareerAgent apply update",
             to_email=candidate_email,
             to_phone=candidate_phone,
+            enable_email=bool(notif_cfg.get("enable_email")),
+            enable_sms=bool(notif_cfg.get("enable_sms")),
         )
         state["notification_log"].append({
             "timestamp": _now(),

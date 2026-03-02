@@ -883,7 +883,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
         else:
             st.caption("No missing skills identified")
 
-def render_analytics(status: Optional[dict]) -> None:
+def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
     """Analytics tab."""
     if not status or status.get("progress_pct", 0) < 90:
         st.markdown("""
@@ -971,6 +971,31 @@ def render_analytics(status: Optional[dict]) -> None:
     st.markdown("#### 🧠 Self-Learning insights")
     st.json(feedback_loop or {"info": "No feedback insights yet."})
 
+    st.markdown("#### 💬 Feedback ingestion")
+    if run_id:
+        with st.form("feedback_form", clear_on_submit=True):
+            fb_source = st.selectbox("Feedback source", options=["user", "employer"], index=0)
+            fb_text = st.text_area("Feedback text", placeholder="Share what worked / failed, interview updates, rejection reason, bugs, etc.")
+            fb_submitted = st.form_submit_button("Submit feedback")
+        if fb_submitted:
+            if fb_text.strip():
+                try:
+                    _api_post(api_base, f"/hunt/{run_id}/feedback", json={"source": fb_source, "text": fb_text.strip()}, timeout=25)
+                    st.success("Feedback saved and added to self-learning signals.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to submit feedback: {e}")
+            else:
+                st.warning("Feedback text is required.")
+    else:
+        st.caption("Start a run to submit feedback.")
+
+    feedback_events = status.get("feedback_events") or []
+    if feedback_events:
+        st.dataframe(feedback_events[-20:], use_container_width=True, hide_index=True)
+    else:
+        st.caption("No feedback captured yet. Submit feedback above to improve future runs.")
+
     c5, c6 = st.columns(2)
     with c5:
         st.markdown("#### 📅 Interview queue")
@@ -991,7 +1016,7 @@ def render_analytics(status: Optional[dict]) -> None:
     notification_log = status.get("notification_log") or []
     if notification_log:
         st.dataframe(notification_log, use_container_width=True, hide_index=True)
-        st.caption("Notifications are executed in dry-run mode in this environment unless provider credentials are configured.")
+        st.caption("Notification results include provider-level delivery attempts and responses.")
     else:
         st.caption("No notifications attempted yet.")
 
@@ -1208,7 +1233,7 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         langsmith = (status or {}).get("langsmith", {}) if status else {}
-        fallback_url = f"https://smith.langchain.com/o/default/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
+        fallback_url = f"https://smith.langchain.com/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
         if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
             link = langsmith.get("dashboard_url") or fallback_url
             st.markdown(f"[🧭 LangSmith dashboard]({link})")
@@ -1277,7 +1302,7 @@ def main():
             """, unsafe_allow_html=True)
 
     with tab_analytics:
-        render_analytics(status)
+        render_analytics(api_base, run_id, status)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:

@@ -15,7 +15,9 @@ class Settings(BaseModel):
     SERPER_API_KEY: Optional[str] = None
 
     LANGSMITH_API_KEY: Optional[str] = None
-    LANGSMITH_PROJECT: str = "careeragent-ai-phase2"
+    LANGSMITH_PROJECT: str = "careeragent-ai"
+    LANGSMITH_WORKSPACE_ID: Optional[str] = None
+    LANGSMITH_ENDPOINT: str = "https://smith.langchain.com"
     LANGCHAIN_API_KEY: Optional[str] = None
     LANGCHAIN_PROJECT: str = "careeragent-ai"
     LANGCHAIN_TRACING_V2: str = "true"
@@ -35,6 +37,9 @@ class Settings(BaseModel):
     GMAIL_TO_EMAIL: Optional[str] = None
     GMAIL_FROM_EMAIL: Optional[str] = None
     GMAIL_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    RESEND_API_KEY: Optional[str] = None
+    SENDER_EMAIL: Optional[str] = None
+    SENDGRID_API_KEY: Optional[str] = None
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_FROM_NUMBER: Optional[str] = None
@@ -52,6 +57,8 @@ class Settings(BaseModel):
                 "SERPER_API_KEY",
                 "LANGSMITH_API_KEY",
                 "LANGSMITH_PROJECT",
+                "LANGSMITH_WORKSPACE_ID",
+                "LANGSMITH_ENDPOINT",
                 "LANGCHAIN_API_KEY",
                 "LANGCHAIN_PROJECT",
                 "LANGCHAIN_TRACING_V2",
@@ -66,6 +73,9 @@ class Settings(BaseModel):
                 "GMAIL_TO_EMAIL",
                 "GMAIL_FROM_EMAIL",
                 "GMAIL_SERVICE_ACCOUNT_JSON",
+                "RESEND_API_KEY",
+                "SENDER_EMAIL",
+                "SENDGRID_API_KEY",
                 "TWILIO_ACCOUNT_SID",
                 "TWILIO_AUTH_TOKEN",
                 "TWILIO_FROM_NUMBER",
@@ -85,4 +95,5 @@ def bootstrap_langsmith(s: Settings) -> None:
     os.environ["LANGCHAIN_API_KEY"] = langchain_key or langsmith_key
     os.environ["LANGCHAIN_TRACING_V2"] = str(s.LANGCHAIN_TRACING_V2 or "true")
     os.environ["LANGCHAIN_PROJECT"] = str(s.LANGCHAIN_PROJECT or "careeragent-ai")
-    os.environ["LANGSMITH_PROJECT"] = str(s.LANGCHAIN_PROJECT or "careeragent-ai")
+    os.environ["LANGSMITH_PROJECT"] = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai")
+    os.environ["LANGSMITH_ENDPOINT"] = str(s.LANGSMITH_ENDPOINT or "https://smith.langchain.com")
