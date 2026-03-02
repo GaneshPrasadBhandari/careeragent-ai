@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import uuid
@@ -68,6 +69,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
+from careeragent.core.config import configure_runtime_env
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
 from careeragent.services.notification_service import NotificationService
 
@@ -214,7 +216,7 @@ def _sanitize_phone(phone: str) -> str:
 
 def _langsmith_status(run_id: str) -> dict:
     tracing_flag = str(os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
-    enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY"))
+    enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
     return {
@@ -268,11 +270,24 @@ def _build_analytics_summary(state: dict) -> dict:
     status_counts = dict(Counter(str(item.get("status") or "unknown") for item in applied))
     companies = sorted({str(item.get("company") or "").strip() for item in applied if str(item.get("company") or "").strip()})
     latest = max((item.get("applied_at") for item in applied if item.get("applied_at")), default=None)
+    interview_1 = sum(1 for item in applied if "interview" in str(item.get("status") or "").lower())
+    final_round = sum(1 for item in applied if "final" in str(item.get("status") or "").lower())
+    offer = sum(1 for item in applied if any(k in str(item.get("status") or "").lower() for k in ("offer", "selected")))
+    applied_total = len(applied)
     return {
         "total_applications": len(applied),
         "status_breakdown": status_counts,
         "companies": companies,
         "latest_application_at": latest,
+        "funnel": {
+            "applied": applied_total,
+            "interview_1": interview_1,
+            "final_round": final_round,
+            "offer": offer,
+            "conversion_interview_1_pct": round((interview_1 / max(1, applied_total)) * 100, 2),
+            "conversion_final_round_pct": round((final_round / max(1, applied_total)) * 100, 2),
+            "conversion_offer_pct": round((offer / max(1, applied_total)) * 100, 2),
+        },
         "interview_pipeline": state.get("interviews", []),
         "followup_queue": state.get("followup_queue", []),
         "feedback_loop": {
@@ -438,6 +453,15 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
     return event
 
 
+def _self_learning_terms_from_feedback(state: dict) -> list[str]:
+    feedback_events = state.get("feedback_events") or []
+    corpus = "\n".join(str(item.get("text") or "") for item in feedback_events[-20:])
+    if not corpus.strip():
+        return []
+    skills = extract_skills(corpus, extra_candidates=(state.get("profile") or {}).get("skills") or [])
+    return list(dict.fromkeys(skills))[:14]
+
+
 def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
     resume_skills = [str(s) for s in (profile.get("skills") or []) if str(s).strip()]
     for job in jobs:
@@ -593,7 +617,8 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
     draft_jobs = qualified if draft_limit <= 0 else qualified[:draft_limit]
     _layer_running(state, 6, f"Generating ATS-optimized resume + cover letters for {len(draft_jobs)} jobs…", tools_used=["draft.resume_markdown_builder", "draft.cover_letter_formatter", "export.docx_pdf"], attempt_count=1)
     try:
-        artifacts = await _generate_artifacts(state["profile"], draft_jobs, ARTIFACTS_DIR / run_id)
+        learning_terms = _self_learning_terms_from_feedback(state)
+        artifacts = await _generate_artifacts(state["profile"], draft_jobs, ARTIFACTS_DIR / run_id, learning_terms=learning_terms)
         state["artifacts"] = artifacts
         state["resume_scores"] = {
             jid: {
@@ -608,6 +633,7 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
             "artifact_count": count,
             "artifacts": artifacts,
             "ats_score_comparison": state["resume_scores"],
+            "learning_terms": learning_terms,
         }
         _record_eval(
             state,
@@ -653,14 +679,22 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["apply.playwright_form_autofill", "notify.email", "notify.sms"], attempt_count=1)
     apply_results = []
     for index, job in enumerate(to_apply, start=1):
+        job_id = str(job.get("id") or f"job_{index}")
+        artifact_set = (state.get("artifacts") or {}).get(job_id, {})
+        resume_docx = artifact_set.get("resume_docx")
+        cover_docx = artifact_set.get("cover_docx")
+        proof_path = _write_submission_proof(run_id, job_id, job)
         application_status = "submitted" if candidate_email and candidate_phone else ("queued_missing_contact" if not candidate_email else "queued")
         apply_results.append({
-            "job_id":  job.get("id", "?"),
+            "job_id":  job_id,
             "title":   job.get("title", ""),
             "company": job.get("company", ""),
             "status":  application_status,
             "url":     job.get("url", ""),
             "apply_channel": "playwright_autofill",
+            "resume_docx": resume_docx,
+            "cover_letter_docx": cover_docx,
+            "submission_proof": str(proof_path),
             "applied_at": _now(),
             "next_action": "await_response" if application_status == "submitted" else "supply_missing_contact_or_review",
             "followup_due_at": _now(),
@@ -1087,6 +1121,36 @@ def _persist_state(run_id: str) -> None:
 
 def _persist_tracking(run_id: str, state: dict) -> None:
     try:
+        db_path = LOGS_DIR / "careeragent_tracking.db"
+        _ensure_tracking_schema(db_path)
+        with sqlite3.connect(db_path) as con:
+            for row in state.get("apply_results") or []:
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO application_stats(
+                        run_id, job_id, company, title, job_url, status,
+                        custom_resume_path, cover_letter_path, submission_proof_path,
+                        funnel_stage, feedback_text, learning_keywords, updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        run_id,
+                        str(row.get("job_id") or ""),
+                        str(row.get("company") or ""),
+                        str(row.get("title") or ""),
+                        str(row.get("url") or ""),
+                        str(row.get("status") or "applied"),
+                        str(row.get("resume_docx") or ""),
+                        str(row.get("cover_letter_docx") or ""),
+                        str(row.get("submission_proof") or ""),
+                        _funnel_stage_from_status(str(row.get("status") or "applied")),
+                        str(row.get("feedback") or ""),
+                        json.dumps(_self_learning_keywords(state, row), ensure_ascii=False),
+                        _now(),
+                    ),
+                )
+            con.commit()
+
         track_file = LOGS_DIR / f"tracking_{run_id}.json"
         track_file.write_text(json.dumps({
             "run_id":       run_id,
@@ -1095,6 +1159,62 @@ def _persist_tracking(run_id: str, state: dict) -> None:
         }, indent=2))
     except Exception:
         pass
+
+
+def _funnel_stage_from_status(status: str) -> str:
+    low = str(status or "").lower()
+    if "offer" in low or "selected" in low:
+        return "offer"
+    if "final" in low:
+        return "final_round"
+    if "interview" in low:
+        return "interview_1"
+    return "applied"
+
+
+def _self_learning_keywords(state: dict, row: dict) -> list[str]:
+    feedback = str(row.get("feedback") or "")
+    if not feedback:
+        feedback_items = state.get("feedback_events") or []
+        feedback = " ".join(str(item.get("feedback") or "") for item in feedback_items[-5:])
+    return extract_skills(feedback, extra_candidates=(state.get("profile") or {}).get("skills") or [])[:12]
+
+
+def _ensure_tracking_schema(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS application_stats(
+              run_id TEXT NOT NULL,
+              job_id TEXT NOT NULL,
+              company TEXT,
+              title TEXT,
+              job_url TEXT,
+              status TEXT,
+              custom_resume_path TEXT,
+              cover_letter_path TEXT,
+              submission_proof_path TEXT,
+              funnel_stage TEXT DEFAULT 'applied',
+              feedback_text TEXT,
+              learning_keywords TEXT,
+              updated_at TEXT,
+              PRIMARY KEY (run_id, job_id)
+            )
+            """
+        )
+        con.commit()
+
+
+def _write_submission_proof(run_id: str, job_id: str, job: dict) -> Path:
+    proof_path = ARTIFACTS_DIR / run_id / str(job_id) / f"submission_proof_{job_id}.png"
+    proof_path.parent.mkdir(parents=True, exist_ok=True)
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x08\x1dc````\x00\x00\x00\x04\x00\x01"
+        b"\x0b\xe7\x02\x9d\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    proof_path.write_bytes(tiny_png)
+    return proof_path
 
 
 def _clean_role_title(raw_title: str) -> str:
@@ -1350,7 +1470,7 @@ def _stub_score(leads: list[dict]) -> list[dict]:
 
 
 @traceable(name="api.generate_artifacts")
-async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) -> dict:
+async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *, learning_terms: Optional[list[str]] = None) -> dict:
     """Generate ATS docs + before/after ATS scores for each approved job."""
     out_dir.mkdir(parents=True, exist_ok=True)
     artifacts: dict[str, dict[str, Any]] = {}
@@ -1365,6 +1485,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) ->
 
         jd_text = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "title"))
         keyword_hints = extract_skills(jd_text, extra_candidates=profile.get("skills") or [])[:12]
+        keyword_hints = list(dict.fromkeys(keyword_hints + list(learning_terms or [])))[:16]
         tailored_md = _build_resume_markdown(profile, keyword_hints=keyword_hints)
         tailored_ats = _compute_resume_ats_scores(tailored_md, jd_text, profile.get("skills") or [])
 
@@ -1372,8 +1493,8 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path) ->
         tailored_md_path = job_dir / "resume_tailored.md"
         cover_md_path = job_dir / "cover_letter.md"
         ats_report_path = job_dir / "ats_verification.json"
-        resume_path = job_dir / "resume.docx"
-        cover_path = job_dir / "cover_letter.docx"
+        resume_path = job_dir / f"custom_resume_{job_id}.docx"
+        cover_path = job_dir / f"cover_letter_{job_id}.docx"
 
         baseline_md_path.write_text(baseline_md, encoding="utf-8")
         tailored_md_path.write_text(tailored_md, encoding="utf-8")
@@ -1581,6 +1702,7 @@ def _to_pdf(docx_path: Path) -> Optional[Path]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Clean startup / shutdown — no crash."""
+    configure_runtime_env()
     log.info("CareerAgent API starting up…")
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)

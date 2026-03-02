@@ -925,6 +925,7 @@ def render_analytics(status: Optional[dict]) -> None:
         langsmith = status.get("langsmith", {}) or {}
         st.markdown("**LangSmith tracing**")
         if langsmith.get("enabled") and langsmith.get("dashboard_url"):
+            st.success("Active")
             st.markdown(f"[Open LangSmith run trace]({langsmith.get('dashboard_url')})")
         else:
             st.caption("LangSmith disabled. Set LANGCHAIN_TRACING_V2 and LANGSMITH_API_KEY.")
@@ -954,6 +955,21 @@ def render_analytics(status: Optional[dict]) -> None:
         ], use_container_width=True, hide_index=True)
     else:
         st.caption("No application data yet.")
+
+    st.markdown("#### 📈 Analytics Dashboard")
+    applied = len(applications)
+    interview_1 = sum(1 for row in applications if "interview" in str(row.get("status") or "").lower())
+    final_round = sum(1 for row in applications if "final" in str(row.get("status") or "").lower())
+    offer = sum(1 for row in applications if any(k in str(row.get("status") or "").lower() for k in ("offer", "selected")))
+    ac1, ac2, ac3, ac4 = st.columns(4)
+    ac1.metric("Applied", applied)
+    ac2.metric("Interview 1", interview_1, f"{(interview_1 / max(1, applied)) * 100:.1f}%")
+    ac3.metric("Final Round", final_round, f"{(final_round / max(1, applied)) * 100:.1f}%")
+    ac4.metric("Offer", offer, f"{(offer / max(1, applied)) * 100:.1f}%")
+
+    feedback_loop = (((status.get("layer_debug") or {}).get("L9") or {}).get("analytics_summary") or {}).get("feedback_loop") or {}
+    st.markdown("#### 🧠 Self-Learning insights")
+    st.json(feedback_loop or {"info": "No feedback insights yet."})
 
     c5, c6 = st.columns(2)
     with c5:
