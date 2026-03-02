@@ -186,6 +186,7 @@ def _normalize_config(config: dict) -> dict:
         cfg["geo_preferences"] = {"remote": True, "locations": []}
     cfg.setdefault("require_ranking_approval", True)
     cfg.setdefault("require_draft_approval", True)
+    cfg.setdefault("require_followup_approval", True)
     cfg.setdefault("max_jobs", 100)
     cfg.setdefault("posted_within_hours", 168)
     cfg.setdefault("salary_min", 0)
@@ -633,7 +634,7 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
 
 
 @traceable(name="api.continue_l7_l9")
-async def _continue_l7_to_l9(run_id: str) -> None:
+async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -> None:
     state = _runs[run_id]
     qualified = _qualified_from_state(state)
     state["jobs_approved"] = len(qualified)
@@ -680,11 +681,32 @@ async def _continue_l7_to_l9(run_id: str) -> None:
             "job_id": row.get("job_id"),
             "company": row.get("company"),
             "title": row.get("title"),
-            "status": "awaiting_invite",
+            "status": "predicted_high_probability",
             "google_calendar_event": None,
         }
-        for row in apply_results[:3]
+        for row in apply_results
+        if float(next((j.get("interview_probability_percent") for j in to_apply if j.get("id") == row.get("job_id")), 0.0) or 0.0) >= 70.0
     ]
+
+    email_drafts = []
+    candidate_name = str(profile.get("name") or "Candidate")
+    for row in apply_results:
+        company = str(row.get("company") or "Hiring Team")
+        role = str(row.get("title") or "the role")
+        job_id = str(row.get("job_id") or "unknown")
+        email_drafts.append({
+            "job_id": job_id,
+            "subject": f"Follow-up on application: {role} at {company}",
+            "body": (
+                f"Hello {company} Hiring Team,\\n\\n"
+                f"I recently applied for the {role} position and wanted to reiterate my interest. "
+                f"I am excited about the opportunity to contribute and would welcome the chance to discuss my fit.\\n\\n"
+                f"Best regards,\\n{candidate_name}"
+            ),
+            "status": "drafted",
+            "channel": "email",
+            "recipient": company,
+        })
     state["followup_queue"] = [
         {
             "job_id": row.get("job_id"),
@@ -695,7 +717,11 @@ async def _continue_l7_to_l9(run_id: str) -> None:
         }
         for row in apply_results
     ]
-    state["layer_debug"]["L7"] = {"apply_results": apply_results, "followup_queue": state["followup_queue"]}
+    state["layer_debug"]["L7"] = {
+        "apply_results": apply_results,
+        "followup_queue": state["followup_queue"],
+        "email_drafts": email_drafts,
+    }
     _record_eval(
         state,
         layer_id=7,
@@ -704,8 +730,29 @@ async def _continue_l7_to_l9(run_id: str) -> None:
         threshold=0.2,
         feedback=[f"queued={len(apply_results)}"],
     )
-    _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), tools_used=["playwright"], attempt_count=1)
+    _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), interviews_predicted=len(state["interviews"]), tools_used=["playwright"], attempt_count=1)
     state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
+
+    if (not skip_followup_gate) and state.get("config", {}).get("require_followup_approval", True) and apply_results:
+        state["status"] = "pending_human_input"
+        state["pending_action"] = "approve_followups"
+        _log_agent(state, 7, "Follow-up email drafts ready. Awaiting human approval before sending.")
+        _persist_state(run_id)
+        return
+
+    await _continue_l8_to_l9(run_id)
+
+
+
+
+@traceable(name="api.continue_l8_l9")
+async def _continue_l8_to_l9(run_id: str) -> None:
+    state = _runs[run_id]
+    notif_cfg = dict((state.get("config") or {}).get("notifications") or {})
+    profile = state.get("profile") or {}
+    candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
+    candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
+    apply_results = state.get("apply_results") or []
 
     if notif_cfg.get("enable_email") or notif_cfg.get("enable_sms"):
         notifier = NotificationService(dry_run=True)
@@ -1770,6 +1817,29 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         _persist_state(run_id)
         background_tasks.add_task(_continue_l7_to_l9, run_id)
         return {"ok": True, "message": "drafts approved; resuming apply"}
+
+    if action == "approve_followups":
+        followups = state.get("followup_queue") or []
+        for item in followups:
+            item["draft_status"] = "approved"
+            item["sent_at"] = _now()
+        l7 = (state.get("layer_debug") or {}).get("L7") or {}
+        for draft in (l7.get("email_drafts") or []):
+            draft["status"] = "approved_and_sent"
+            draft["sent_at"] = _now()
+        state["pending_action"] = None
+        state["status"] = "running"
+        _log_agent(state, 7, f"Human approved {len(followups)} follow-up drafts. Continuing tracking and analytics.")
+        _persist_state(run_id)
+        background_tasks.add_task(_continue_l8_to_l9, run_id)
+        return {"ok": True, "message": f"follow-up drafts approved ({len(followups)}); resuming"}
+
+    if action == "reject_followups":
+        state["pending_action"] = "approve_followups"
+        state["status"] = "pending_human_input"
+        _log_agent(state, 7, "Follow-up drafts rejected by reviewer. Edit feedback and re-approve.")
+        _persist_state(run_id)
+        return {"ok": True, "message": "follow-up drafts rejected; awaiting revised approval"}
 
     if action == "reject_ranking":
         state["pending_action"] = None

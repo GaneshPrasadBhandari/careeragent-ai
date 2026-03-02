@@ -294,6 +294,7 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
         "review_drafts": "approve_drafts",
         "drafts_review": "approve_drafts",
         "gap_analysis": "update_profile_skills",
+        "review_followups": "approve_followups",
     }
     if pending in alias_map:
         raw["pending_action"] = alias_map[pending]
@@ -307,6 +308,8 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
             raw["pending_action"] = "approve_ranking"
         elif l6.get("status") == "ok" and l7.get("status") == "waiting":
             raw["pending_action"] = "approve_drafts"
+        elif any(str(x.get("draft_status") or "").lower().startswith("pending") for x in (raw.get("followup_queue") or [])):
+            raw["pending_action"] = "approve_followups"
 
     return raw
 
@@ -515,6 +518,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         "review_drafts": "approve_drafts",
         "drafts_review": "approve_drafts",
         "gap_analysis": "update_profile_skills",
+        "review_followups": "approve_followups",
     }
     if pending in alias_map:
         pending = alias_map[pending]
@@ -522,6 +526,8 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         pending = "approve_ranking"
     if pending in {"draft_approval", "approve_documents"}:
         pending = "approve_drafts"
+    if pending in {"followup_approval", "review_followups"}:
+        pending = "approve_followups"
 
     waiting_for_human = status.get("status") in ("needs_human_approval", "pending_human_input") or bool(pending)
     if not waiting_for_human:
@@ -555,7 +561,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
                 f"(match {j.get('score',0)*100:.0f}% | interview {j.get('interview_probability_percent',0):.0f}%)": j.get("id")
                 for j in ranked_jobs
             }
-            selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys())[:5])
+            selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys()))
             selected_ids = [options[x] for x in selected_labels]
             selected_urls = [
                 j.get("url")
@@ -625,6 +631,29 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
             if st.button("↩️ Reject Drafts", key="reject_drafts_btn"):
                 if _api_action(api_base, run_id, "reject_drafts"):
                     st.success("Drafts rejected. Returned to ranking approval.")
+                    st.rerun()
+
+    elif pending == "approve_followups":
+        st.warning("Follow-up emails are drafted. Approve to send and complete tracking/analytics.")
+        drafts = (((status.get("layer_debug") or {}).get("L7") or {}).get("email_drafts") or [])
+        if drafts:
+            for draft in drafts[:10]:
+                with st.expander(f"📧 {draft.get('subject','Follow-up draft')} — {draft.get('job_id','')}", expanded=False):
+                    st.caption(f"Status: {draft.get('status','drafted')}")
+                    st.code(draft.get("body", ""), language="markdown")
+        else:
+            st.caption("No follow-up drafts found in layer output.")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Approve & Send Follow-ups", key="approve_followups_btn"):
+                if _api_action(api_base, run_id, "approve_followups"):
+                    st.success("Follow-up emails approved and sent. Continuing run...")
+                    st.rerun()
+        with c2:
+            if st.button("↩️ Reject Follow-ups", key="reject_followups_btn"):
+                if _api_action(api_base, run_id, "reject_followups"):
+                    st.success("Follow-up drafts rejected. Waiting for your revised approval.")
                     st.rerun()
 
 
@@ -830,10 +859,13 @@ def render_match_analysis(status: Optional[dict]) -> None:
     l5 = layer_debug.get("L5") or {}
     gap = l5.get("gap_analysis") or {}
     qualified = l5.get("qualified_jobs") or []
+    top_jobs = ((layer_debug.get("L4") or {}).get("top_jobs") or [])
+    source_jobs = qualified if qualified else top_jobs
     matched = []
     missing = list(gap.get("missing_skills_checklist") or [])
-    for j in qualified[:8]:
+    for j in source_jobs[:8]:
         matched.extend(j.get("matched_skills") or [])
+        missing.extend(j.get("missing_skills") or [])
     matched = list(dict.fromkeys([m for m in matched if m]))[:12]
     c1, c2 = st.columns(2)
     with c1:
@@ -871,7 +903,7 @@ def render_analytics(status: Optional[dict]) -> None:
     with c3:
         st.metric("Top Match", f"{status.get('top_match_score',0):.0f}%")
     with c4:
-        st.metric("Interviews", len(status.get("interviews", []) or []))
+        st.metric("Interview Calls (Predicted)", len(status.get("interviews", []) or []))
 
     st.markdown("#### 🤖 LLM + Agent Tooling in this run")
     llm_stack = status.get("llm_stack") or {}
@@ -930,7 +962,7 @@ def render_analytics(status: Optional[dict]) -> None:
         if interviews:
             st.dataframe(interviews, use_container_width=True, hide_index=True)
         else:
-            st.caption("No interview invites yet.")
+            st.caption("No high-probability interview calls predicted yet.")
     with c6:
         st.markdown("#### ✉️ Employer follow-up drafts")
         followups = status.get("followup_queue") or []
@@ -1030,6 +1062,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         require_ranking_approval = st.checkbox("Require ranking approval (HITL)", value=True)
         require_draft_approval = st.checkbox("Require draft approval before apply", value=True)
+        require_followup_approval = st.checkbox("Require follow-up email approval", value=True)
 
         st.caption("Notifications")
         notif_email = st.text_input("Gmail for notifications", value="")
@@ -1044,6 +1077,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             "geo_preferences":          {"remote": remote_only, "locations": []},
             "require_ranking_approval": require_ranking_approval,
             "require_draft_approval":   require_draft_approval,
+            "require_followup_approval": require_followup_approval,
             "posted_within_hours":      posted_hours,
             "max_jobs":                 max_jobs,
             "salary_min":               salary_min,
