@@ -46,7 +46,7 @@ class Settings(BaseSettings):
 
     # Tracing
     langsmith_api_key: Optional[str] = None
-    langsmith_project: str = "careeragent-ai"
+    langsmith_project: str = "careeragent-ai-new"
 
     # LLM backends (local-first)
     ollama_base_url: Optional[str] = None
