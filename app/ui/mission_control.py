@@ -878,6 +878,54 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
 
 
 
+def _dedupe_skills(skills: list[str], *, exclude: list[str] | None = None, limit: int = 20) -> list[str]:
+    ex = {str(s).strip().lower() for s in (exclude or []) if str(s).strip()}
+    out: list[str] = []
+    seen = set()
+    for skill in skills or []:
+        s = str(skill).strip()
+        if not s:
+            continue
+        key = s.lower()
+        if key in seen or key in ex:
+            continue
+        seen.add(key)
+        out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _learning_resources_for_skill(skill: str) -> list[tuple[str, str]]:
+    k = str(skill or "").lower()
+    curated = {
+        "langgraph": [("LangGraph docs", "https://python.langchain.com/docs/langgraph"), ("LangGraph quickstart", "https://langchain-ai.github.io/langgraph/tutorials/introduction/")],
+        "langsmith": [("LangSmith observability docs", "https://docs.smith.langchain.com/"), ("Tracing quickstart", "https://docs.smith.langchain.com/observability/quick-start")],
+        "rag": [("RAG conceptual guide", "https://python.langchain.com/docs/concepts/rag/"), ("DeepLearning.AI RAG short course", "https://www.deeplearning.ai/short-courses/retrieval-augmented-generation-rag/")],
+        "llm": [("OpenAI cookbook", "https://cookbook.openai.com/"), ("Prompt engineering guide", "https://www.promptingguide.ai/")],
+        "azure": [("Microsoft Learn: Azure AI", "https://learn.microsoft.com/en-us/training/azure/"), ("Azure AI Foundry", "https://learn.microsoft.com/en-us/azure/ai-studio/")],
+        "python": [("Python official tutorial", "https://docs.python.org/3/tutorial/"), ("Real Python paths", "https://realpython.com/learning-paths/")],
+        "tableau": [("Tableau learning", "https://www.tableau.com/learn/training"), ("Tableau docs", "https://help.tableau.com/")],
+        "power bi": [("Power BI learning path", "https://learn.microsoft.com/en-us/training/powerplatform/power-bi/"), ("Power BI docs", "https://learn.microsoft.com/en-us/power-bi/")],
+    }
+    for key, links in curated.items():
+        if key in k:
+            return links
+    slug = skill.strip().replace(" ", "+")
+    return [("Roadmap.sh", f"https://roadmap.sh/search?q={slug}"), ("YouTube practical tutorials", f"https://www.youtube.com/results?search_query={slug}+hands+on+tutorial")]
+
+
+def _render_learning_recommendations(missing_skills: list[str]) -> None:
+    if not missing_skills:
+        st.caption("No high-confidence skill gaps detected yet.")
+        return
+    for skill in missing_skills[:8]:
+        links = _learning_resources_for_skill(skill)
+        st.markdown(f"- **{skill}**: " + " · ".join([f"[{label}]({url})" for label, url in links]))
+
+
+
+
 def render_match_analysis(status: Optional[dict]) -> None:
     if not status:
         st.info("Run pipeline to see match analysis.")
@@ -888,12 +936,17 @@ def render_match_analysis(status: Optional[dict]) -> None:
     qualified = l5.get("qualified_jobs") or []
     top_jobs = ((layer_debug.get("L4") or {}).get("top_jobs") or [])
     source_jobs = qualified if qualified else top_jobs
-    matched = []
-    missing = list(gap.get("missing_skills_checklist") or [])
+
+    matched: list[str] = []
+    missing: list[str] = list(gap.get("missing_skills_checklist") or [])
     for j in source_jobs[:8]:
-        matched.extend(j.get("matched_skills") or [])
-        missing.extend(j.get("missing_skills") or [])
-    matched = list(dict.fromkeys([m for m in matched if m]))[:12]
+        matched.extend(j.get("matched_jd_skills") or j.get("matched_skills") or [])
+        missing.extend(j.get("missing_jd_skills") or j.get("missing_skills") or [])
+
+    profile_skills = ((status.get("profile") or {}).get("skills") or []) if isinstance(status.get("profile"), dict) else []
+    matched = _dedupe_skills(matched, limit=18)
+    missing = _dedupe_skills(missing, exclude=matched + profile_skills, limit=20)
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### ✅ Matched Skills")
@@ -909,6 +962,10 @@ def render_match_analysis(status: Optional[dict]) -> None:
             st.caption(" | ".join(missing))
         else:
             st.caption("No missing skills identified")
+
+    st.markdown("#### 📚 Best learning resources for the missing skills")
+    _render_learning_recommendations(missing)
+
 
 def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
     """Analytics tab."""
@@ -1136,6 +1193,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         notif_email = st.text_input("Gmail for notifications", value="")
         notif_phone = st.text_input("Phone number for SMS", value="", placeholder="+1 415 555 0100")
         profile_links = st.text_input("Profile links (LinkedIn/GitHub)", value="", help="Comma-separated URLs used by auto-apply forms")
+        additional_skills_raw = st.text_area("Skills you already have (comma/newline separated)", value="", height=70)
+        additional_skills = [x.strip() for x in additional_skills_raw.replace("\n", ",").split(",") if x.strip()]
         enable_email = st.checkbox("Enable email notifications", value=False)
         enable_sms = st.checkbox("Enable SMS notifications", value=False)
 
@@ -1158,6 +1217,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                 "enable_email": enable_email,
                 "enable_sms": enable_sms,
             },
+            "additional_skills": additional_skills,
         }
 
         st.divider()
@@ -1260,7 +1320,7 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         langsmith = (status or {}).get("langsmith", {}) if status else {}
-        fallback_url = f"https://smith.langchain.com/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
+        fallback_url = f"https://smith.langchain.com/projects?name={langsmith.get('project') or 'careeragent-ai-new'}"
         if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
             link = langsmith.get("dashboard_url") or fallback_url
             st.markdown(f"[🧭 LangSmith dashboard]({link})")
@@ -1324,9 +1384,18 @@ def main():
             st.markdown(f"""
             <div style="color:#c9d1d9">
                 <h4 style="color:#1B263B">Skills Profile</h4>
-                <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
+                <p>{', '.join(skills[:20]) if skills else 'Run pipeline to extract skills'}</p>
             </div>
             """, unsafe_allow_html=True)
+            missing_for_learning = []
+            l5 = ((status.get("layer_debug") or {}).get("L5") or {})
+            gap = l5.get("gap_analysis") or {}
+            missing_for_learning.extend(gap.get("missing_skills_checklist") or [])
+            for j in (l5.get("qualified_jobs") or [])[:8]:
+                missing_for_learning.extend(j.get("missing_jd_skills") or j.get("missing_skills") or [])
+            missing_for_learning = _dedupe_skills(missing_for_learning, exclude=skills, limit=15)
+            st.markdown("#### Personalized upskilling path")
+            _render_learning_recommendations(missing_for_learning)
 
     with tab_analytics:
         render_analytics(api_base, run_id, status)
