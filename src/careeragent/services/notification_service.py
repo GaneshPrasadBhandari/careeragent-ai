@@ -51,7 +51,7 @@ class NotificationService:
     def _send_resend(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         api_key = str(getattr(self._settings, "RESEND_API_KEY", "") or "").strip()
         from_addr = str((getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
-        to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or "")).strip()
+        to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or "")).strip()
         if not (api_key and from_addr and to_addr):
             return {"sent": False, "skipped": True, "reason": "resend_not_configured", "to": to_addr}
         if self._dry_run:
@@ -70,7 +70,7 @@ class NotificationService:
     def _send_sendgrid(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         api_key = str(getattr(self._settings, "SENDGRID_API_KEY", "") or "").strip()
         from_addr = str((getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
-        to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or "")).strip()
+        to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or "")).strip()
         if not (api_key and from_addr and to_addr):
             return {"sent": False, "skipped": True, "reason": "sendgrid_not_configured", "to": to_addr}
         if self._dry_run:
@@ -93,7 +93,7 @@ class NotificationService:
 
     def _send_twilio_sms(self, *, body: str, to_number: str = "") -> Dict[str, Any]:
         sid = self._settings.TWILIO_ACCOUNT_SID
-        token = self._settings.TWILIO_AUTH_TOKEN
+        token = self._settings.TWILIO_AUTH_TOKEN or getattr(self._settings, "TWILIO_CLIENT_SECRET", None)
         from_number = self._settings.TWILIO_FROM_NUMBER
         to_number = to_number or self._settings.TWILIO_TO_NUMBER
         if not (sid and token and from_number and to_number):

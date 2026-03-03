@@ -27,6 +27,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote_plus
 
 
 import importlib.machinery
@@ -219,13 +220,15 @@ def _langsmith_status(run_id: str) -> dict:
     enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai").strip().strip('"')
-    workspace = (os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
+    workspace_raw = str(os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
+    workspace = workspace_raw if re.match(r"^[0-9a-fA-F-]{36}$", workspace_raw) else ""
     base = f"{endpoint}/o/{workspace}" if workspace else endpoint
+    project_q = quote_plus(project)
     return {
         "enabled": enabled,
         "project": project,
         "workspace": workspace or None,
-        "dashboard_url": f"{base}/projects/p/{project}" if enabled else None,
+        "dashboard_url": f"{base}/projects?name={project_q}" if enabled else None,
         "run_filter": run_id,
     }
 
@@ -688,7 +691,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
         resume_docx = artifact_set.get("resume_docx")
         cover_docx = artifact_set.get("cover_docx")
         proof_path = _write_submission_proof(run_id, job_id, job)
-        application_status = "submitted" if candidate_email and candidate_phone else ("queued_missing_contact" if not candidate_email else "queued")
+        application_status = "submitted" if candidate_email else "queued_missing_contact"
         apply_results.append({
             "job_id":  job_id,
             "title":   job.get("title", ""),
@@ -701,6 +704,8 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
             "submission_proof": str(proof_path),
             "applied_at": _now(),
             "next_action": "await_response" if application_status == "submitted" else "supply_missing_contact_or_review",
+            "verification_method": "Check employer ATS portal/email inbox for confirmation ID and await recruiter response",
+            "verification_status": "pending_employer_confirmation",
             "followup_due_at": _now(),
             "autofill_payload": {
                 "full_name": profile.get("name", "Candidate"),
