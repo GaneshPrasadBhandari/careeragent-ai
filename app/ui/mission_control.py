@@ -41,10 +41,33 @@ def _inject_css() -> None:
     /* ── Global ── */
     html, body, [class*="css"] {
         font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
-        background-color: #F8F9FA;
+        background-color: #F3F6FB;
         color: #1B263B;
     }
-    .stApp { background-color: #F8F9FA; }
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"] {
+        background-color: #F3F6FB;
+        color: #1B263B;
+    }
+
+    /* Force readable text in main area (prevents white-on-white in dark browser mode) */
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"],
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] li,
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] span,
+    [data-testid="stMain"] label,
+    [data-testid="stMain"] .stCaption {
+        color: #1B263B !important;
+    }
+
+    [data-testid="stMain"] [data-baseweb="tab-list"] button {
+        color: #475569 !important;
+    }
+    [data-testid="stMain"] [data-baseweb="tab-list"] button[aria-selected="true"] {
+        color: #DC2626 !important;
+    }
 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {
@@ -111,12 +134,12 @@ def _inject_css() -> None:
     .layer-meta { display: flex; gap: 24px; margin: 8px 0; }
     .meta-item  { font-size: 12px; color: #8b949e; }
     .meta-key   { color: #6e7681; }
-    .meta-val   { color: #c9d1d9; }
+    .meta-val   { color: #334155; }
     .layer-desc    { font-size: 12px; color: #6e7681; margin: 4px 0; }
     .layer-output  { font-size: 12px; color: #8b949e; margin-top: 8px; padding-top: 8px;
                      border-top: 1px solid #1e1e2e; }
     .output-label  { color: #6e7681; font-size: 11px; text-transform: uppercase; }
-    .output-val    { color: #c9d1d9; margin-top: 2px; }
+    .output-val    { color: #334155; margin-top: 2px; }
 
     /* ── Agent Feed ── */
     .feed-wrap {
