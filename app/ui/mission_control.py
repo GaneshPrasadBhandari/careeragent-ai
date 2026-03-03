@@ -255,6 +255,10 @@ def _api_get(api_base: str, path: str, timeout: int = 5) -> Optional[dict]:
     return None
 
 
+def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests.Response:
+    return requests.post(f"{api_base.rstrip('/')}{path}", timeout=timeout, **kwargs)
+
+
 def _api_health(api_base: str) -> bool:
     resp = _api_get(api_base, "/health", timeout=3)
     return resp is not None and resp.get("status") == "ok"

@@ -41,6 +41,8 @@ class Settings(BaseModel):
     SENDER_EMAIL: Optional[str] = None
     SENDGRID_API_KEY: Optional[str] = None
     TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_CLIENT_ID: Optional[str] = None
+    TWILIO_CLIENT_SECRET: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_FROM_NUMBER: Optional[str] = None
     TWILIO_TO_NUMBER: Optional[str] = None
@@ -78,6 +80,8 @@ class Settings(BaseModel):
                 "SENDGRID_API_KEY",
                 "TWILIO_ACCOUNT_SID",
                 "TWILIO_AUTH_TOKEN",
+                "TWILIO_CLIENT_ID",
+                "TWILIO_CLIENT_SECRET",
                 "TWILIO_FROM_NUMBER",
                 "TWILIO_TO_NUMBER",
                 "MAX_HTTP_SECONDS",
