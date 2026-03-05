@@ -27,9 +27,9 @@ Create `docs/media/` and add:
 - `03_outputs_and_evidence.png` — tailored resume/cover letter + tracker table/evidence log
 
 Embed them:
-![Architecture](docs/media/01_architecture.png)
-![Mission Control](docs/media/02_mission_control.png)
-![Outputs + Evidence](docs/media/03_outputs_and_evidence.png)
+![Architecture](media/01_architecture.png)
+![Mission Control](media/02_mission_control.png)
+![Outputs + Evidence](media/03_outputs_and_evidence.png)
 
 ---
 
