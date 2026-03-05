@@ -90,6 +90,13 @@ Embed them:
 
 ---
 
+### Writing / Thought Leadership
+- AI Vanguard (LinkedIn Newsletter): https://www.linkedin.com/newsletters/7220489256505331712/
+- Medium (AI Innovations Digest): https://medium.com/@ganeshprasadbhandari79
+- https://medium.com/ai-innovations-digest
+
+---
+
 ## Contact
 LinkedIn: https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/  
 GitHub: https://github.com/GaneshPrasadBhandari  
