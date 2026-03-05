@@ -26,10 +26,15 @@ Create `docs/media/` and add:
 - `02_mission_control.png` — Streamlit mission control (layer-by-layer progress + approval gates)
 - `03_outputs_and_evidence.png` — tailored resume/cover letter + tracker table/evidence log
 
+
 Embed them:
 ![Architecture](media/01_architecture.png)
+
 ![Mission Control](media/02_mission_control.png)
+
 ![Outputs + Evidence](media/03_outputs_and_evidence.png)
+
+![Outputs + Evidence](media/04_outputs_and_evidence.png)
 
 ---
 
