@@ -1,7 +1,7 @@
 # Portfolio — Ganesh Prasad Bhandari (AI / GenAI / Agentic Systems)
 
-## Recruiter quick pitch (15 seconds)
-I design and ship **production-grade agentic AI systems** with **evaluation gates, human approvals, and auditability**—so automation is reliable, explainable, and safe in real enterprise workflows.
+## Snapshot
+GenAI / AI Solution Architect who ships **production-grade agentic + RAG systems** and end-to-end AI platforms—built with **evaluation gates, human approvals, and auditability** so automation is reliable, secure, and enterprise-ready.
 
 ---
 
