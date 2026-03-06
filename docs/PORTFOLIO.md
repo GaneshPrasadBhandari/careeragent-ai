@@ -9,7 +9,7 @@ GenAI / AI Solution Architect who ships **production-grade agentic + RAG systems
 **Repo:** https://github.com/GaneshPrasadBhandari/careeragent-ai
 
 ### Demos
-- **Recruiter-friendly walkthrough (8–15 min; silent is fine):** [paste link after upload]
+- **Recruiter-friendly walkthrough (8–15 min; silent is fine):** https://youtu.be/_IpHNsKfmmE
 - **Deep technical walkthrough (long-form):** https://www.youtube.com/watch?v=xI3dF-FLsy8&t=2255s
 
 ### Architecture highlights (6 bullets)
