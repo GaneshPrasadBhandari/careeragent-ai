@@ -9,7 +9,7 @@ GenAI / AI Solution Architect who ships **production-grade agentic + RAG systems
 **Repo:** https://github.com/GaneshPrasadBhandari/careeragent-ai
 
 ### Demos
-- **Recruiter-friendly walkthrough (8–15 min; silent is fine):** https://youtu.be/_IpHNsKfmmE
+- **Recruiter-friendly walkthrough (8–15 min; No voice):** https://youtu.be/_IpHNsKfmmE
 - **Deep technical walkthrough (long-form):** https://www.youtube.com/watch?v=xI3dF-FLsy8&t=2255s
 
 ### Architecture highlights (6 bullets)
@@ -20,14 +20,14 @@ GenAI / AI Solution Architect who ships **production-grade agentic + RAG systems
 5. **Automation that actually executes:** browser-based job application flows (dynamic forms + uploads) with evidence logs.
 6. **Observability + auditability by design:** trace logs per step (reasoning + evidence + outputs) + application tracker store (SQLite → PostgreSQL path).
 
-### Screenshots (add these 3 to the repo)
+### Screenshots 
 Create `docs/media/` and add:
 - `01_architecture.png` — overall system architecture diagram
 - `02_mission_control.png` — Streamlit mission control (layer-by-layer progress + approval gates)
 - `03_outputs_and_evidence.png` — tailored resume/cover letter + tracker table/evidence log
 
 
-Embed them:
+
 ![Architecture](media/01_architecture.png)
 
 ![Mission Control](media/02_mission_control.png)
@@ -83,7 +83,7 @@ Embed them:
 **IEEE DataPort page:** https://ieee-dataport.org/documents/btxrd-2024-augmented-bone-tumor-segmentation-and-triage-dataset-balanced-malignant-class
 
 ### Bone tumor detection (YOLOv8) — CDSS manuscript
-**Status:** Manuscript in revision (format + technical updates in progress)
+**Status:** Manuscript in revision.
 
 ---
 
@@ -106,4 +106,4 @@ Embed them:
 LinkedIn: https://www.linkedin.com/in/ganesh-prasad-bhandari-b165b9187/  
 GitHub: https://github.com/GaneshPrasadBhandari  
 ORCID: https://orcid.org/0009-0002-7308-4279  
-Location: Worcester, MA (MSIT graduation May 2026; OPT starts July 2026)
+Location: Worcester, MA (MSIT graduation May 2026)
