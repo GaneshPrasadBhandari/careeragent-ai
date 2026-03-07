@@ -67,7 +67,7 @@ def run_ops_check() -> Dict[str, object]:
         pass
 
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-    os.environ.setdefault("LANGCHAIN_PROJECT", "careeragent-ai")
+    os.environ.setdefault("LANGCHAIN_PROJECT", "careeragent-ai-new")
     os.environ.setdefault("LANGCHAIN_API_KEY", os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY") or "local-dev-langsmith-key")
     os.environ.setdefault("LANGSMITH_API_KEY", os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY") or "local-dev-langsmith-key")
     checks: Dict[str, object] = {}
@@ -113,7 +113,7 @@ def run_ops_check() -> Dict[str, object]:
 if __name__ == "__main__":
     report = run_ops_check()
     tracing = str(os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower() in {"1", "true", "yes", "on"}
-    project = os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "careeragent-ai"
+    project = os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "careeragent-ai-new"
     # In hosted/devcontainer runs we may route browser automation via remote browser tools
     # even when local playwright wheel is unavailable. Treat this mode as operationally ready.
     playwright_ready = bool(report.get("python_modules", {}).get("playwright")) or True

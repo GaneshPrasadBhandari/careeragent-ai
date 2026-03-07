@@ -27,6 +27,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote_plus
 
 
 import importlib.machinery
@@ -198,6 +199,9 @@ def _normalize_config(config: dict) -> dict:
         cfg["work_modes"] = ["remote", "hybrid", "onsite"]
     cfg.setdefault("draft_jobs_limit", 0)
     cfg.setdefault("apply_jobs_limit", 0)
+    cfg.setdefault("additional_skills", [])
+    if not isinstance(cfg.get("additional_skills"), list):
+        cfg["additional_skills"] = [str(cfg.get("additional_skills") or "")]
     cfg.setdefault("notifications", {"email": "", "phone": "", "enable_email": False, "enable_sms": False})
     raw_notifications = cfg.get("notifications")
     notifications = dict(raw_notifications) if isinstance(raw_notifications, dict) else {}
@@ -211,18 +215,25 @@ def _normalize_config(config: dict) -> dict:
 
 
 def _sanitize_phone(phone: str) -> str:
-    return " ".join(str(phone or "").strip().split())
+    compact = "".join(str(phone or "").strip().split())
+    return compact
 
 
 def _langsmith_status(run_id: str) -> dict:
     tracing_flag = str(os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
     enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
-    project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
+    project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai-new").strip().strip('"')
+    workspace_raw = str(os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
+    workspace = workspace_raw if re.match(r"^[0-9a-fA-F-]{36}$", workspace_raw) else ""
+    base = f"{endpoint}/o/{workspace}" if workspace else endpoint
+    project_q = quote_plus(project)
     return {
         "enabled": enabled,
         "project": project,
-        "dashboard_url": f"{endpoint}/o/default/projects/p/{project}?q={run_id}" if enabled else None,
+        "workspace": workspace or None,
+        "dashboard_url": f"{base}/projects?name={project_q}" if enabled else None,
+        "run_filter": run_id,
     }
 
 
@@ -343,14 +354,29 @@ def _log_agent(state: dict, layer_id: int, msg: str, *, meta: dict | None = None
 
 
 def _derive_reasoning(job: dict, profile: dict) -> tuple[list[str], list[str]]:
-    profile_skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
-    matched = [str(s) for s in (job.get("matched_skills") or []) if str(s).strip()]
-    if not matched:
+    profile_skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
+    profile_set = {s.lower() for s in profile_skills}
+    matched_raw = [str(s).strip() for s in (job.get("matched_skills") or job.get("matched_jd_skills") or []) if str(s).strip()]
+    if not matched_raw:
         desc = str(job.get("description") or "").lower()
-        matched = [s for s in profile_skills if s and s in desc][:8]
-    matched_l = {m.lower() for m in matched}
-    missing = [s for s in profile_skills if s not in matched_l][:8]
-    return matched[:8], missing
+        matched_raw = [s for s in profile_skills if s and s.lower() in desc][:12]
+    matched: list[str] = []
+    seen = set()
+    for s in matched_raw:
+        k = s.lower()
+        if k and k not in seen:
+            matched.append(s)
+            seen.add(k)
+    missing_raw = [str(s).strip() for s in (job.get("missing_jd_skills") or job.get("missing_skills") or []) if str(s).strip()]
+    missing: list[str] = []
+    miss_seen = set()
+    for s in missing_raw:
+        k = s.lower()
+        if not k or k in seen or k in profile_set or k in miss_seen:
+            continue
+        missing.append(s)
+        miss_seen.add(k)
+    return matched[:10], missing[:12]
 
 
 def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
@@ -361,16 +387,20 @@ def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
     location = str(job.get("location") or "Unknown")
     remote = bool(job.get("remote"))
 
+    decision = "Recommend" if interview_pct >= 55 and jd_alignment >= 45 else "Consider" if interview_pct >= 35 else "Low-priority"
+    tradeoff = "high upside with manageable gaps" if missing and len(missing) <= 4 else ("strong fit now" if not missing else "material upskilling needed")
+
     rationale = [
-        f"Context fit: JD semantic alignment is {jd_alignment:.1f}% with your current profile signals.",
-        f"Cognitive confidence: interview probability modeled at {interview_pct:.1f}% based on skill fit, ATS quality, and recency.",
-        f"Market timing: posting age is {posted_hours}h ({'fresh' if posted_hours <= 48 else 'stale'}) which influences response odds.",
+        f"Decision: {decision} — projected interview probability {interview_pct:.1f}% and semantic alignment {jd_alignment:.1f}%.",
+        f"Cognitive factors: model weighs skill evidence, ATS readiness, recency, and role logistics instead of raw keyword overlap.",
+        f"Tradeoff summary: {tradeoff}.",
+        f"Market timing: posting age is {posted_hours}h ({'fresh' if posted_hours <= 48 else 'stale'}).",
         f"Role logistics: location={location} and mode={'remote' if remote else 'onsite/hybrid'}.",
     ]
     if matched:
-        rationale.append(f"Matched capabilities: {', '.join(matched[:6])}.")
+        rationale.append(f"Evidence in your profile: {', '.join(matched[:7])}.")
     if missing:
-        rationale.append(f"Skill gaps to close: {', '.join(missing[:5])}.")
+        rationale.append(f"Missing capabilities (priority to learn): {', '.join(missing[:6])}.")
     return rationale
 
 
@@ -684,7 +714,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
         resume_docx = artifact_set.get("resume_docx")
         cover_docx = artifact_set.get("cover_docx")
         proof_path = _write_submission_proof(run_id, job_id, job)
-        application_status = "submitted" if candidate_email and candidate_phone else ("queued_missing_contact" if not candidate_email else "queued")
+        application_status = "submitted" if candidate_email else "queued_missing_contact"
         apply_results.append({
             "job_id":  job_id,
             "title":   job.get("title", ""),
@@ -697,6 +727,8 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
             "submission_proof": str(proof_path),
             "applied_at": _now(),
             "next_action": "await_response" if application_status == "submitted" else "supply_missing_contact_or_review",
+            "verification_method": "Check employer ATS portal/email inbox for confirmation ID and await recruiter response",
+            "verification_status": "pending_employer_confirmation",
             "followup_due_at": _now(),
             "autofill_payload": {
                 "full_name": profile.get("name", "Candidate"),
@@ -789,13 +821,15 @@ async def _continue_l8_to_l9(run_id: str) -> None:
     apply_results = state.get("apply_results") or []
 
     if notif_cfg.get("enable_email") or notif_cfg.get("enable_sms"):
-        notifier = NotificationService(dry_run=True)
+        notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
         message = f"Run {run_id}: {len(apply_results)} applications are queued/submitted."
         alert_result = notifier.send_alert(
             message=message,
             title="CareerAgent apply update",
             to_email=candidate_email,
             to_phone=candidate_phone,
+            enable_email=bool(notif_cfg.get("enable_email")),
+            enable_sms=bool(notif_cfg.get("enable_sms")),
         )
         state["notification_log"].append({
             "timestamp": _now(),
@@ -913,6 +947,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         try:
             profile = await _parse_resume(resume_path)
             profile["source_resume_path"] = str(resume_path)
+            manual_skills = [str(s).strip() for s in (state.get("config", {}).get("additional_skills") or []) if str(s).strip()]
+            if manual_skills:
+                merged_skills = list(dict.fromkeys([*(profile.get("skills") or []), *manual_skills]))
+                profile["skills"] = merged_skills
+                profile["manual_skills"] = manual_skills
             state["profile"]          = profile
             state["candidate_name"]   = profile.get("name", "Candidate")
             state["skills_extracted"] = len(profile.get("skills", []))
@@ -1161,6 +1200,31 @@ def _persist_tracking(run_id: str, state: dict) -> None:
         pass
 
 
+
+
+def _persist_feedback_event(run_id: str, event: dict) -> None:
+    try:
+        db_path = LOGS_DIR / "careeragent_tracking.db"
+        _ensure_tracking_schema(db_path)
+        with sqlite3.connect(db_path) as con:
+            con.execute(
+                """
+                INSERT INTO feedback_events(run_id, ts, source, text, confidence, is_genuine)
+                VALUES(?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    str(event.get("ts") or _now()),
+                    str(event.get("source") or "user"),
+                    str(event.get("text") or "")[:1000],
+                    float(((event.get("evaluation") or {}).get("confidence") or 0.0)),
+                    1 if ((event.get("evaluation") or {}).get("is_genuine")) else 0,
+                ),
+            )
+            con.commit()
+    except Exception:
+        pass
+
 def _funnel_stage_from_status(status: str) -> str:
     low = str(status or "").lower()
     if "offer" in low or "selected" in low:
@@ -1199,6 +1263,20 @@ def _ensure_tracking_schema(db_path: Path) -> None:
               learning_keywords TEXT,
               updated_at TEXT,
               PRIMARY KEY (run_id, job_id)
+            )
+            """
+        )
+
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback_events(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              run_id TEXT NOT NULL,
+              ts TEXT,
+              source TEXT,
+              text TEXT,
+              confidence REAL,
+              is_genuine INTEGER
             )
             """
         )
@@ -1895,6 +1973,7 @@ async def post_feedback(run_id: str, body: dict):
     feedback_file = LOGS_DIR / f"feedback_{run_id}.jsonl"
     with feedback_file.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
+    _persist_feedback_event(run_id, event)
     _persist_state(run_id)
     return {"ok": True, "event": event, "totals": state.get("learning_loop", {})}
 

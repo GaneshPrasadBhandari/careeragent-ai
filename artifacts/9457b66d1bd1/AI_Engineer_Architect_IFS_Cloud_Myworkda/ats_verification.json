@@ -1,0 +1,24 @@
+{
+  "job_id": "AI_Engineer_Architect_IFS_Cloud_Myworkda",
+  "job_title": "AI Engineer/Architect-IFS Cloud - Myworkdayjobs.com",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "agentic ai",
+      "machine learning"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}

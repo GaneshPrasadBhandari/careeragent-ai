@@ -1,0 +1,25 @@
+{
+  "job_id": "4_000_Microsoft_Azure_Machine_Learning_j",
+  "job_title": "4,000+ Microsoft Azure Machine Learning jobs in United States (92 new)",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "azure",
+      "machine learning",
+      "openai"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}

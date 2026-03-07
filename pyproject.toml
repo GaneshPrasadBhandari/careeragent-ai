@@ -36,6 +36,7 @@ dependencies = [   # Environment variable and config management
   "fastapi[standard]>=0.110.0",
   "pydantic>=2.6.0",
   "pydantic-settings>=2.1.0",
+  "pdfplumber>=0.11.9",
 ]
 
 [project.optional-dependencies]

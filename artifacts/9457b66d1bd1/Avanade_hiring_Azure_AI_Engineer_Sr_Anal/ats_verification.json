@@ -1,0 +1,24 @@
+{
+  "job_id": "Avanade_hiring_Azure_AI_Engineer_Sr_Anal",
+  "job_title": "Avanade hiring Azure AI Engineer, Sr Analyst in Chicago, IL | LinkedIn",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "azure",
+      "machine learning"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}

@@ -1,0 +1,28 @@
+{
+  "job_id": "Microsoft_hiring_Cloud_Solution_Architec",
+  "job_title": "Microsoft hiring Cloud Solution Architect, Azure AI & Machine Learning in United States | LinkedIn",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "azure",
+      "computer vision",
+      "deep learning",
+      "machine learning",
+      "nlp",
+      "solution architect"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}
