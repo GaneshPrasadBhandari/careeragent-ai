@@ -1,0 +1,23 @@
+{
+  "job_id": "Job_Application_for_Senior_AI_Engineer_a",
+  "job_title": "Job Application for Senior AI Engineer at Remote People",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "machine learning"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}

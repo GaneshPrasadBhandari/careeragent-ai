@@ -1,0 +1,25 @@
+{
+  "job_id": "Agentic_AI_Engineer_Azure_Agent_Framewor",
+  "job_title": "Agentic AI Engineer (Azure Agent Framework) - Remote - LinkedIn",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "ai architect",
+      "azure",
+      "machine learning"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}

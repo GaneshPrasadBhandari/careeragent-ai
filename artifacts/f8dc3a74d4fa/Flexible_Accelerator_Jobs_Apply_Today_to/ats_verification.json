@@ -1,0 +1,29 @@
+{
+  "job_id": "Flexible_Accelerator_Jobs_Apply_Today_to",
+  "job_title": "Flexible Accelerator Jobs \u2013 Apply Today to Work From Home in Remote (July 13, 2025) | Indeed",
+  "company": "",
+  "verification_tool": "careeragent_internal_ats_v1",
+  "ats_score_before": {
+    "overall": 55.0,
+    "layout": 100.0,
+    "keyword": 0.0,
+    "matched_keywords": [],
+    "missing_keywords": []
+  },
+  "ats_score_after": {
+    "overall": 100.0,
+    "layout": 100.0,
+    "keyword": 100.0,
+    "matched_keywords": [
+      "aws",
+      "azure",
+      "azure ml",
+      "lambda",
+      "machine learning",
+      "openai",
+      "sagemaker"
+    ],
+    "missing_keywords": []
+  },
+  "improvement": 45.0
+}
