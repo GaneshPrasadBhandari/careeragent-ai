@@ -1,502 +1,642 @@
-# CareerAgent.AI
-### An AI-Driven Career Operating System (Capstone → Startup-Ready Product)
+# CareerAgent-AI
+### An AI-Driven Career Operating System (Capstone → Deployable Beta Product)
 
-CareerOS is a full-stack AI platform that functions as a **career operating system** for individuals and early professionals.  
-It orchestrates **AI agents, ML models, and automation workflows** to manage the entire job-hunting lifecycle:
+CareerAgent-AI is a full-stack AI product designed to transform fragmented job-search tasks into one orchestrated workflow.
 
-Plan → Discover → Match → Prepare → Apply → Track → Learn → Improve
+It helps users move from **planning and discovery** to **matching, ATS-tailored application assets, approvals, tracking, and continuous improvement** through a controlled, human-centered AI system.
 
-CareerOS is designed not just as a capstone project, but as a **real AI product** that can evolve into a startup offering for students, professionals, and global job seekers.
+This repository reflects a **capstone-to-product build** evolving toward a deployable beta platform for AI-assisted career workflow automation.
 
 ---
 
-## 1. Vision & Problem Statement
+## Overview
+
+Modern job searching is still broken.
+
+Candidates jump across job boards, rewrite resumes manually, track applications in spreadsheets, lose context between follow-ups, and spend too much time on repetitive work that should be streamlined.
+
+CareerAgent-AI addresses that problem by acting as a **career operating system**. Instead of solving one isolated task, it coordinates the end-to-end workflow:
+
+**Plan → Discover → Match → Prepare → Approve → Apply → Track → Learn → Improve**
+
+The platform is designed around:
+
+- agentic workflow orchestration with **LangGraph**
+- evaluator-controlled quality gates at each major layer
+- **MCP-compatible tool access patterns** for structured external actions
+- human approval for sensitive decisions
+- explainability and evidence visibility
+- **LangSmith-based tracing and observability**
+- multi-tool and multi-model execution flexibility
+- tracking, analytics, and feedback-driven improvement
+
+The long-term vision is not just document generation. It is a governed, intelligent system that can assist across the full journey from initial search to interview scheduling, follow-ups, offer-stage support, and continuous upskilling.
+
+---
+
+## 1. Vision and Problem Statement
 
 ### The Problem
-Job searching today is:
-- fragmented across platforms (LinkedIn, Indeed, MyVisaJobs, etc.)
-- manual and repetitive (resume tailoring, applications, follow-ups)
-- poorly tracked (spreadsheets, emails, memory)
-- emotionally stressful and inefficient
 
-Existing tools solve **only fragments**:
+Job searching today is:
+
+- fragmented across platforms
+- manual and repetitive
+- difficult to track consistently
+- emotionally stressful and time-consuming
+- often optimized for volume instead of quality
+
+Most existing tools solve only one part of the workflow:
+
 - job boards list jobs
 - resume tools rewrite text
 - trackers log applications
+- auto-apply tools focus on speed
 
-No system **orchestrates the entire workflow intelligently**.
+CareerAgent-AI is designed to orchestrate the full workflow while keeping the user in control of high-stakes decisions.
 
 ---
 
-### The Solution: CareerOS
-CareerOS acts as a **personal career operating system**, coordinating:
+### The Solution
+
+CareerAgent-AI acts as a **personal career operating system**, coordinating:
+
 - job discovery
 - intelligent job matching
-- resume and document generation
-- assisted and semi-automated applications
-- tracking and analytics
-- learning from outcomes
+- ATS-oriented resume and cover letter generation
+- evaluator-based validation at every workflow layer
+- assisted and semi-automated application workflows
+- explainable recommendations with evidence and rationale
+- tracking, analytics, and feedback-aware improvement
+- recruiter communication support
+- interview coordination and approval-driven scheduling
+- skill-gap detection and guided upskilling support
 
-The system keeps **humans in control** for critical decisions while automating everything else safely and transparently.
+The system is designed to automate as much of the workflow as possible while keeping **humans in control of critical and life-impacting decisions**.
+
+That includes actions such as:
+
+- final resume approval
+- cover letter approval
+- job shortlist confirmation
+- auto-apply approval
+- interview scheduling approval
+- sensitive recruiter communication review
+
+This makes the product closer to a **career execution operating system** than a narrow AI assistant.
 
 ---
 
-## 2. Product Philosophy (Why This Is Startup-Grade)
+## 2. Product Philosophy
 
-CareerOS is built on **enterprise AI principles**, not chatbot tricks:
+CareerAgent-AI is built on **enterprise-minded AI principles**, not one-shot chatbot behavior:
 
-- **Assisted automation first** (safe, compliant, scalable)
-- **Human-in-the-loop** for critical actions
+- **Assisted automation first**
+- **Human-in-the-loop for critical actions**
 - **Explainability by design**
 - **Agent orchestration, not monolithic AI**
-- **Provider-agnostic LLM layer**
-- **Free + open-source first**
+- **Provider-agnostic model layer**
 - **Composable, extensible architecture**
+- **Deployment-ready product direction**
 
 This makes it suitable for:
-- real users
+
 - real demos
-- real investors
-- real scale
+- recruiter and evaluator review
+- beta-user testing
+- future startup packaging and commercialization
 
 ---
 
-## 🏗️ System Architecture
+## 3. Evaluator-Driven Workflow Design
 
-![CareerOS Agents Architecture](./CareerAgent-AI_Architecture.png)
+A core design principle in CareerAgent-AI is that **each major workflow layer can be paired with an evaluator agent**.
 
-> *Figure 1: CareerOS Agents architecture blueprint — Interface → Control Plane (ORCH) → Execution Plane (Tool Agents + Evidence Logging).*
+The evaluator reviews the output of that layer for:
 
----
+- relevance
+- completeness
+- grounding quality
+- policy alignment
+- hallucination risk
+- bias risk
+- execution readiness
+- user-value quality
 
-## 3. High-Level Architecture
+If the output passes, it moves to the next layer.
 
-CareerOS consists of six major layers:
+If the output does not pass, the workflow can loop back to the same layer, refine the result, and try again until it reaches an acceptable threshold or requires human intervention.
 
-1. **UI Layer**
-   - Streamlit (MVP)
-   - Future: Web/mobile apps
+This creates a more reliable and governed execution pattern than one-shot generation.
 
-2. **API & Backend Layer**
-   - FastAPI
-   - OpenAPI contracts
-   - Structured logging & error handling
-
-3. **Agent Orchestration Layer**
-   - CrewAI (role-based agents)
-   - MCP-style tool contracts (optional)
-   - LangGraph (workflow/state alternative)
-
-4. **AI & ML Layer**
-   - Open-source LLMs (Ollama, Llama, Mistral)
-   - Optional hosted LLM APIs
-   - ML models for ranking and prediction
-
-5. **Data & Memory Layer**
-   - SQLite → PostgreSQL
-   - Vector DB (Chroma / FAISS)
-   - Audit & analytics tables
-
-6. **Governance & Trust Layer**
-   - Human approval gates
-   - Policy rules
-   - Explainability logs
+The broader design also supports the use of **multiple tools, LLMs, APIs, retrieval strategies, and fallback paths** so the system can choose the most suitable route for each task instead of depending on a single brittle component.
 
 ---
 
+## 4. System Architecture
 
+![CareerAgent-AI Architecture](./CareerAgent-AI_Architecture.png)
 
-## FINAL, STORY-DRIVEN LAYOUT
-<pre>
-<b>FINAL, STORY-DRIVEN LAYOUT</b>
+> *CareerAgent-AI architecture blueprint — user interface, orchestration core, managers, agent services, approval gates, tracking, analytics, memory, and governance.*
 
-┌───────────────────────────────┐
-│ <span style="color:#ff4d6d;"><b>0.</b></span> User                        │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐
-│ <span style="color:#ff4d6d;"><b>1.</b></span> Entry Layer                 │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐  ← THE BRAIN
-│ <span style="color:#ff4d6d;"><b>2.</b></span> Orchestration Core          │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐  ← DECISION MAKERS
-│ <span style="color:#ff4d6d;"><b>3.</b></span> Manager Layer               │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐  ← EXECUTION
-│ <span style="color:#ff4d6d;"><b>4.</b></span> Agent Layer                 │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐  ← <span style="color:#2dd4bf;"><b>PAUSE</b></span> POINTS
-│ <span style="color:#ff4d6d;"><b>5.</b></span> Human Approval Gates        │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐
-│ <span style="color:#ff4d6d;"><b>6.</b></span> Execution &amp; Tracking        │
-└───────────────────────────────┘
-               ↓
-┌───────────────────────────────┐
-│ <span style="color:#ff4d6d;"><b>7.</b></span> Analytics &amp; Learning        │
-└───────────────────────────────┘
-               ↺ (feedback)
-┌───────────────────────────────┐  ← STRATEGY UPDATE
-│ <span style="color:#ff4d6d;"><b>3.</b></span> Manager Layer               │
-└───────────────────────────────┘
+### High-Level Architecture
 
+The platform is structured around a layered workflow model spanning:
 
-<span style="color:#2dd4bf;"><b>Right-side (vertical overlay):</b></span>
-- <span style="color:#ff4d6d;"><b>8.</b></span> Memory &amp; Models
-- <span style="color:#ff4d6d;"><b>9.</b></span> Governance &amp; Ops
+1. **User and Entry Layer**
+   - profile intake
+   - resume upload
+   - role and constraint capture
 
+2. **Orchestration Core**
+   - workflow control
+   - sequencing
+   - runtime coordination
+   - state progression
 
-</pre>
+3. **Manager Layer**
+   - planning
+   - prioritization
+   - decision routing
+   - escalation logic
 
+4. **Agent Layer**
+   - parsing
+   - matching
+   - ranking
+   - drafting
+   - package generation
+   - apply execution
+   - analytics support
 
+5. **Human Approval Gates**
+   - shortlist approval
+   - resume and cover letter approval
+   - sensitive action review
+   - negotiation-sensitive decisions
 
+6. **Execution and Tracking**
+   - application records
+   - timestamps
+   - generated artifacts
+   - evidence logs
+   - workflow history
 
-## 4. Core Capabilities (MVP + Startup Path)
+7. **Analytics and Learning**
+   - outcome tracking
+   - feedback signals
+   - performance analysis
+   - future optimization loops
 
-### Automated
-- Daily job ingestion (USAJOBS via official API)
-- Job ranking & prioritization
-- Resume & application package generation
-- Tracking & evidence storage
-- Analytics and A/B testing
+8. **Memory and Models**
+   - structured profile memory
+   - semantic retrieval
+   - ranking logic
+   - LLM/model access
 
-### Assisted (Human Approval Required)
-- Final job application submission
-- Salary negotiation
-- Sensitive recruiter communication
+9. **Governance and Ops**
+   - policy controls
+   - auditability
+   - observability
+   - secure runtime handling
 
----
-
-## 5. Job Data Sources Strategy (Real & Compliant)
-
-### USAJOBS (Automated)
-- Official government API
-- Stable, legal, real data
-- Ideal for MVP and demos
-
-### LinkedIn / Indeed / MyVisaJobs (MVP-Safe)
-Because scraping or automation may violate terms:
-- CSV / JSON import of saved jobs
-- Email alert parsing
-- Assisted apply workflows
-
-> This still delivers real value while staying compliant.
-
-Future versions can explore official partner APIs or user-authorized integrations.
+Detailed supporting docs:
+- [docs/architecture.md](./docs/architecture.md)
+- [docs/10_layer_strategic_roadmap.md](./docs/10_layer_strategic_roadmap.md)
 
 ---
 
-## 6. End-to-End Operational Pipeline
+## 5. Core Capabilities
+
+### Current / Beta-Oriented Capabilities
+- Resume/profile intake and parsing
+- Role-aware job discovery and prioritization
+- Matching and ranking workflows
+- ATS-tailored resume generation
+- Cover letter and application package generation
+- Human approval gates
+- Tracking and evidence logging
+- Notification and workflow support
+- Streamlit-based mission control and dashboard views
+
+### Target Product Capabilities
+- Evaluator agent at every layer to validate outcomes before passing to the next stage
+- Retry and refinement loops when outputs fail quality thresholds
+- Multi-tool, multi-LLM, and multi-API strategy for stronger output quality and resilience
+- Explainable recommendations showing why jobs were chosen and what evidence supports the fit
+- Missing-skill detection with user approval, rejection, or correction options
+- ATS score comparison across resume versions
+- Interview-shortlist likelihood prediction
+- Auto-apply execution with form-filling, document upload, and evidence logs
+- Recruiter email drafting for follow-ups, interview replies, thank-you notes, feedback requests, and offer-stage communication
+- Approval-driven Google Calendar scheduling for interviews
+- Analytics dashboards for applications, company tracking, replies, interviews, offers, and workflow performance
+- Feedback-driven optimization and continuous improvement
+- Guided upskilling support with learning resources such as documentation and video tutorials when skill gaps are detected
+
+---
+
+## 6. Explainability, Trust, and Human Control
+
+CareerAgent-AI is designed to make recommendations visible and reviewable.
+
+For major actions, the user should be able to see:
+
+- why a role was recommended
+- what evidence supports the match
+- what changed in the resume or cover letter
+- which skills were emphasized or inferred
+- what confidence or fit logic influenced the recommendation
+- what evaluator checks passed or failed before progression
+
+This explainability layer is critical for reducing blind automation, hallucination risk, and hidden bias.
+
+The system is intentionally designed so that sensitive decisions remain human-approved even when the surrounding workflow becomes highly automated.
+
+---
+
+## 7. Job Data Strategy
+
+### Structured and Compliant Inputs
+
+The system is designed to support compliant ingestion patterns such as:
+
+- official APIs where available
+- structured imports
+- user-provided saved jobs
+- workflow-safe assisted application paths
+- approved connector-style integrations where policy allows
+
+### Product Direction
+
+The long-term design supports multi-source ingestion while respecting platform constraints, user consent, governance requirements, and safe automation boundaries.
+
+---
+
+## 8. End-to-End Operational Pipeline
 
 ### Step 1 — User Profile Setup
-User defines:
-- target country
-- roles
+The user provides:
+
+- resume or structured profile
+- role targets
 - domains
 - constraints
-- resume upload
+- location preferences
+- job search goals
 
-Stored as structured profile + semantic memory (RAG).
+This becomes the operating context for downstream workflow logic.
 
----
+### Step 2 — Intake Validation and Skill Understanding
+The system parses and validates the profile, identifies strengths, and checks for missing or implied skills.
 
-### Step 2 — Daily Planning (Planner Agent)
-Planner creates a daily execution plan:
-- number of jobs
+If a likely skill is inferred but not clearly present in the resume, the user can:
+
+- approve it
+- reject it
+- edit it
+
+If real skill gaps exist, the system can later recommend learning resources and upskilling paths.
+
+### Step 3 — Planning and Strategy
+A planner/director layer creates an execution strategy:
+
 - role priority
-- resume strategy
-- follow-ups
+- search focus
+- application plan
+- follow-up direction
+- document tailoring intent
 
----
+### Step 4 — Job Ingestion
+Jobs are brought in through supported sources and normalized into a common internal structure.
 
-### Step 3 — Job Ingestion
-- Automated: USAJOBS API
-- Assisted: imports from LinkedIn/Indeed/MyVisaJobs
+### Step 5 — Matching and Ranking
+The system evaluates jobs using:
 
-Jobs normalized into a unified schema.
+- deterministic filtering
+- hybrid and semantic matching
+- skill alignment
+- context-aware ranking
+- heuristic fit scoring
 
----
+It can also explain why a job is being recommended and what evidence supports the match.
 
-### Step 4 — Job Matching & Ranking
-- Deterministic scoring (keywords, constraints)
-- Semantic similarity (vector search)
-- Produces ranked shortlist
+### Step 6 — Evaluator Validation
+An evaluator layer checks whether the matching and recommendation output is strong enough.
 
----
+If it fails quality thresholds, the workflow loops back for refinement.
 
-### Step 5 — Application Package Generation
-For each shortlisted job:
-- tailored resume bullets
-- cover letter draft
+### Step 7 — Application Package Generation
+For shortlisted roles, the system prepares:
+
+- tailored resume content
+- cover letter drafts
 - application answers
+- supporting rationale
 
-Generated using templates + LLM + RAG (no hallucinated skills).
+The design supports ATS improvement, stronger targeting, and future shortlist/interview prediction scoring.
 
----
+### Step 8 — Human Approval Gate
+The user reviews:
 
-### Step 6 — Human Approval Gate
-Required when:
-- confidence is low
-- salary negotiation is involved
-- company is marked high-priority
-
-User sees:
 - what will be submitted
-- why it was chosen
-- what changed in documents
+- why it was selected
+- what changed
+- What evidence supports it
+- whether to approve, edit, or reject
 
----
+This is essential because job applications affect real careers and should not be blindly automated.
 
-### Step 7 — Application Execution
-MVP:
-- assisted apply (user clicks submit)
-Later:
-- limited autopilot for safe flows only
+### Step 9 — Application Execution
+The system supports assisted and progressively automated application execution, including:
 
----
+- form-filling
+- document upload
+- logging of actions
+- evidence capture
 
-### Step 8 — Tracking & Evidence Storage
-Each application stored with:
-- status
+### Step 10 — Tracking and Analytics
+Each action can be recorded with:
+
+- company
+- role
 - timestamps
-- documents
-- reasoning
+- submitted assets
+- workflow status
+- recruiter responses
+- interview updates
+- offer-stage progress
+
+### Step 11 — Communication Support
+The system can draft communications for:
+
+- follow-ups
+- recruiter replies
+- interview confirmations
+- thank-you emails
+- rejection responses
+- feedback requests
+- offer-stage interactions
+
+Critical or sensitive outbound communication remains approval-based.
+
+### Step 12 — Interview Scheduling Support
+If an interview email is detected, the system can assist with scheduling and propose calendar actions, while waiting for user approval or edits before finalizing times.
+
+### Step 13 — Learning and Improvement
+The platform uses workflow outcomes, recruiter responses, feedback, and user corrections to improve future recommendations, document generation, prioritization logic, and decision support.
+
+### Step 14 — Upskilling Support
+When skills are missing or weak for target roles, the platform can recommend learning resources such as documentation, tutorials, and guided improvement paths so the user can strengthen the profile and re-enter the workflow with a better application package.
+
+Detailed workflow reference:
+- [docs/pipeline.md](./docs/pipeline.md)
 
 ---
 
-### Step 9 — Communication Automation
-- Email triage (interview / rejection / follow-up)
-- Draft replies for user approval
+## 9. Technology Stack
 
----
-
-### Step 10 — Analytics & A/B Testing
-Tracks:
-- interview rate
-- resume version performance
-- job source effectiveness
-
----
-
-### Step 11 — Explainability & Audit
-Every decision logged with:
-- reasoning
-- confidence
-- evidence
-- approvals
-
----
-
-## 7. Technology Stack (Free & Open-Source First)
-
-### Core
+### Core Application Stack
 - Python 3.11+
-- FastAPI
-- Streamlit
-- Poetry
+- FastAPI-style backend services
+- Streamlit UI and mission-control views
 - Pytest
-- GitHub Actions
+- UV / modern Python dependency workflow
 - Docker
 
-### Agent Orchestration
-- CrewAI (primary)
-- MCP-style tool contracts (optional)
-- LangGraph (workflow alternative)
+### Agentic AI and Orchestration
+- **LangGraph** for stateful agentic workflow orchestration
+- manager/agent service architecture
+- evaluator and guardrail services at each major workflow layer
+- human-in-the-loop approval checkpoints
+- retry and refinement loops for failed evaluations
 
-### LLMs
-- Ollama (local, free)
-- Llama / Mistral
-- Optional APIs: OpenAI, Azure OpenAI, Anthropic, Groq
+### Tooling and Integration Layer
+- **MCP-style / MCP-compatible tool access patterns**
+- multi-tool routing for task-specific execution
+- external API and automation support
+- structured fallback paths when one tool or service is unavailable
 
-### Data
-- SQLite → PostgreSQL
-- Chroma / FAISS
+### LLM and Reasoning Layer
+- provider-flexible LLM integration
+- support for local, hosted, and API-based model execution
+- hybrid decision logic using rules, semantic retrieval, and LLM reasoning
+- explainable recommendation generation
 
-### MLOps (Optional but Impressive)
+### Retrieval, Matching, and Intelligence
+- RAG-oriented retrieval design
+- hybrid search using keyword, semantic, and contextual matching
+- skill-gap detection and role-fit analysis
+- shortlist and interview-likelihood scoring direction
+
+### Tracing, Observability, and Quality Control
+- **LangSmith** for workflow tracing, debugging, and execution visibility
+- evidence-linked step logging
+- evaluator feedback loops
+- explainability and audit support
+- future data quality and drift monitoring direction
+
+### Data and Storage
+- SQLite-based current path
+- PostgreSQL-ready direction
+- vector retrieval design
+- artifact and evidence storage
+- tracking and analytics records
+
+### Deployment and Platform Operations
+- Docker-based packaging
+- local container orchestration experiments with Minikube
+- GitHub Actions CI/CD direction
+- AWS deployment direction
+- Azure deployment direction
+- beta-hosting platform readiness
+- environment-driven runtime configuration
+- scalable deployment path for future public beta testing
+  
+### MLOps and Runtime Monitoring Direction
 - MLflow
 - DVC
-- Evidently AI
+- observability
+- evaluation loops
+- future-ready data drift and behavior drift monitoring direction
+- deployment monitoring
 
 ---
 
-## 8. Repository Structure
+## 10. Observability, Tracing, and Runtime Governance
 
-careeros/
-backend/
-app/
-api/
-core/
-agents/
-managers/
-services/
-rag/
-db/
-compliance/
-frontend/
-streamlit_app.py
-experiments/
-01_rag_basics.ipynb
-02_job_ingestion.ipynb
-03_job_matching.ipynb
-04_package_builder.ipynb
-tests/
-docs/
-.github/workflows/
-Dockerfile
-docker-compose.yml
-pyproject.toml
-.env.example
+CareerAgent-AI is designed to be observable, traceable, and reviewable at runtime.
 
+That includes:
+
+- **LangSmith tracing** for agents, workflow paths, tools, and model calls
+- evaluator results at each major layer
+- evidence-linked logs for recommendations and generated outputs
+- approval-gate checkpoints for sensitive actions
+- execution visibility across orchestration, generation, and apply flows
+- future-ready monitoring for data drift, model behavior drift, and workflow reliability
+
+This matters because agentic systems should not behave like black boxes.  
+They should be inspectable, debuggable, and governable in production-style environments.
+
+
+
+## 11. Repository Structure
+
+```text
+careeragent-ai/
+├── .ai_context/                     # Internal architecture maps, phase references, agent hierarchy
+├── .github/workflows/              # GitHub workflow scaffolding
+├── .streamlit/                     # Streamlit secrets and runtime config
+├── _patch_v5/                      # Patch workspace used during iterative fixes
+├── _rollback/                      # Rollback archives and pre-fix snapshots
+├── app/                            # App entry layer and UI-facing runtime
+│   ├── ui/
+│   │   ├── dashboard.py
+│   │   └── mission_control.py
+│   └── main.py
+├── docs/                           # Project docs, portfolio, roadmap, architecture, deployment notes
+│   ├── media/
+│   ├── 10_layer_strategic_roadmap.md
+│   ├── PATCH_NOTES.md
+│   ├── PORTFOLIO.md
+│   ├── README.md
+│   ├── REPO_DEEP_DIVE_AND_GAP_PLAN.md
+│   ├── SETUP_AND_VALIDATION.md
+│   ├── architecture.md
+│   ├── competitive-landscape.md
+│   ├── deployment.md
+│   ├── pipeline.md
+│   ├── roadmap.md
+│   └── vision.md
+├── newfolder/                      # Temporary experimental runtime node work
+├── notebooks/                      # Early notebooks and deployment/setup experiments
+├── notebooks_v2/                   # Iterative fixes, stabilization, and workflow debugging notebooks
+├── sqlitecloud:/                   # Local SQLiteCloud connection artifact
+├── src/                            # Main product source code
+│   ├── careeragent/
+│   │   ├── agents/                 # Agents, evaluators, schemas, workflow services
+│   │   ├── api/                    # API entrypoints, request models, run manager
+│   │   ├── core/                   # Config, settings, state, state stores
+│   │   ├── integrations/           # Integration layer
+│   │   ├── langgraph/              # Graphs, nodes, HITL flows, runtime nodes
+│   │   ├── managers/               # Planning and manager-layer logic
+│   │   ├── nlp/                    # NLP utilities and skills processing
+│   │   ├── orchestration/          # Planner, director, engine, orchestrator
+│   │   ├── services/               # Analytics, notifications, DB, exporter, XAI
+│   │   ├── tools/                  # LLM tools and web tools
+│   │   └── ops_check.py
+│   ├── pydantic/
+│   ├── pydantic_bridge_backup/
+│   ├── pydantic_fallback_backup/
+│   ├── pydantic_settings/
+│   └── httpx.py
+├── streamlit/                      # Streamlit shim/runtime package
+├── tests/                          # Unit and integration tests
+│   ├── integration/
+│   ├── unit/
+│   ├── conftest.py
+│   └── test_runtime_flow.py
+├── uploads/                        # Local uploaded resumes and run-time artifacts
+├── .dvcignore
+├── .env
+├── .env_example
+├── .gitignore
+├── .python-version
+├── LICENSE
+├── README.md
+├── README_PHASE2.md
+├── README_PHASE3.md
+├── REPO_MAP.md
+├── api_main.py
+├── check_env.py
+├── debug_checklist.py
+├── evaluator.py
+├── full_system_debug.txt
+├── get-pip.py
+├── ls
+├── main.py
+├── mission_control.py
+├── pyproject.toml
+├── requests.py
+├── run_app.py
+├── setup_folders.py
+├── setup_repo.py
+└── uv.lock
+
+
+Without that, the rest of your README can render badly.
 
 ---
 
-## 9. Build Roadmap (Startup-Grade)
 
-### Phase 1 — Foundation
-- Repo + CI/CD
-- Logging, config, error handling
-- API skeleton
+```md
+## 12. Code Organization Notes
+## 13. Main Runtime Areas
+## 14. Demo Videos
+## 15. Documentation
+## 16. Market Context
+## 17. Current State of the Repository
+## 18. Quick Start
 
-### Phase 2 — Experiments
-- RAG in notebooks
-- Job ingestion experiments
-- Resume package generation
 
-### Phase 3 — Core Automation
-- Daily pipeline endpoint
-- USAJOBS automation
-- Ranking & package builder
 
-### Phase 4 — UI & Tracking
-- Streamlit review UI
-- Evidence folders
-- Reports
+## 19. Deployment Direction
+CareerAgent-AI is being prepared for:
 
-### Phase 5 — Beta Test
-- 5–10 users
-- Real feedback
-- Iterate
+- Docker packaging
+- GitHub Actions CI/CD automation
+- local container orchestration experiments with **Minikube**
+- cloud deployment on **AWS**, **Azure**, or lightweight beta-hosting platforms
+- public beta testing
+- LangSmith-based runtime tracing and debugging
+- observability improvements across agents, tools, and workflows
+- MLflow / DVC alignment
+- future data-drift and model-behavior monitoring
+- stronger runtime traceability and governance controls
 
----
+The product is being designed not just to run locally, but to evolve into a deployment-ready agentic AI platform with production-oriented visibility and control.
 
-## 10. Ethics, Security & Trust
+See:
+- [docs/deployment.md](./docs/deployment.md)
 
-CareerOS enforces:
+
+## 20. Ethics, Security, and Trust
+CareerAgent-AI is designed around:
+
 - human approval gates
-- no fabricated skills
-- explainability logs
-- secure secrets handling
-- privacy-aware data storage
+- no fabricated skills or unsupported claims
+- explainability and evidence logging
+- secure handling of sensitive configuration
+- privacy-aware data handling
+- governed automation instead of blind execution
 
-This is essential when dealing with people’s careers.
-
----
-
-## 11. Why This Matters (Capstone + Startup)
-
-CareerOS demonstrates:
-- AI solution architecture
-- agent orchestration
-- ML + GenAI integration
-- responsible automation
-- product thinking
-
-It is:
-- a strong capstone
-- a portfolio flagship
-- a startup-ready foundation
-
----
-
-## 12. Next Execution Steps
-
-We have to build this **one step at a time**:
-
-1. Repo + Poetry + CI
-2. USAJOBS ingestion
-3. Ranking + package generation
-4. Streamlit review UI
-5. Tracking + analytics
-6. Multi-source imports
-7. Beta testing
-
----
-
-## Getting Started & Execution Plan
-
-CareerOS is developed incrementally using a structured, startup-grade execution plan.
-Each phase builds on the previous one, ensuring stability, testability, and real-world usability.
-
-### Recommended Build Order
-
-1. **Foundation**
-   - Repository setup
-   - Poetry-based dependency management
-   - FastAPI backend with logging, configuration, error handling
-   - CI/CD with GitHub Actions
-
-2. **Job Data Ingestion**
-   - Automated ingestion from USAJOBS (official API)
-   - Assisted ingestion via imports for LinkedIn, Indeed, and MyVisaJobs
-
-3. **Intelligent Matching & Preparation**
-   - Job ranking and prioritization
-   - Resume and application package generation using ML + GenAI
-
-4. **User Interface & Review**
-   - Streamlit-based review and approval UI
-   - Human-in-the-loop controls for critical decisions
-
-5. **Tracking, Analytics & Learning**
-   - Application tracking and evidence storage
-   - Analytics and A/B testing for continuous improvement
-
-6. **Beta Testing & Iteration**
-   - Small-group user testing
-   - Feedback-driven refinement
-   - Preparation for broader rollout
-
-### Detailed Documentation
-Step-by-step technical implementation guides are available in the `docs/` directory:
-
-- `docs/setup.md` — repository and backend foundation  
-- `docs/ingestion.md` — job data sources and ingestion pipelines  
-- `docs/pipeline.md` — orchestration, agents, and workflows  
-- `docs/ui.md` — frontend and approval flows  
-- `docs/deployment.md` — Docker, CI/CD, and deployment guidance  
-
----
-
-CareerOS is designed to evolve from a capstone MVP into a scalable, production-ready AI platform.  
-The architecture, tooling, and execution plan reflect real-world AI product development practices used in startups and enterprises.
+This is essential when dealing with people’s careers and application materials.
 
 ---
 
 
+## 21. Positioning
+CareerAgent-AI began as a capstone-driven system and is being developed into a deployable beta product for AI-assisted career workflow automation.
+
+It is intended to serve as:
+
+- a flagship portfolio project
+- a serious technical demo for recruiters and evaluators
+- a startup-ready foundation for future beta testing and commercialization
+
 ---
 
 
+## 22. License
+This repository is available for evaluation and educational review. See the LICENSE
+ file for usage terms.
+
+---
 
 
-## Copyright & Ownership
+## 23. Author
+Ganesh Prasad Bhandari
+AI Architect | GenAI Researcher | Founder – AIinovateHUB
 
-© 2026 **Ganesh Prasad Bhandari**  
 GitHub: @ganeshprasadbhandari
-
-All rights reserved.
-
-This project, **CareerOS**, including its architecture, design, documentation, and implementation, is an original work developed by Ganesh Prasad Bhandari as part of an academic capstone project and independent research initiative.
-
-Permission is granted to view, study, and reference this repository for educational and evaluation purposes only.  
-Commercial use, redistribution, or derivative works require explicit written permission from the author.
-
-CareerOS is intended to demonstrate responsible AI system design, agentic orchestration, and enterprise-level architecture practices. It is not affiliated with or endorsed by any job platform or third-party service referenced for research or integration purposes.
-
-
-
