@@ -145,37 +145,81 @@ Detailed architecture notes are documented in:
 
 ```text
 careeragent-ai/
-├── app/                         # App entrypoints and Streamlit-facing UI
+├── .ai_context/                     # Internal architecture maps, phase references, agent hierarchy
+├── .github/workflows/              # GitHub workflow scaffolding
+├── .streamlit/                     # Streamlit secrets and runtime config
+├── _patch_v5/                      # Patch workspace used during iterative fixes
+├── _rollback/                      # Rollback archives and pre-fix snapshots
+├── app/                            # App entry layer and UI-facing runtime
 │   ├── ui/
 │   │   ├── dashboard.py
 │   │   └── mission_control.py
 │   └── main.py
-├── src/careeragent/             # Main product source code
-│   ├── agents/                  # Domain agents, evaluators, schemas
-│   ├── api/                     # API entrypoints, request models, run manager
-│   ├── core/                    # Config, settings, state, state stores
-│   ├── langgraph/               # Graphs, nodes, HITL flows, runtime nodes
-│   ├── managers/                # Manager-layer logic and coordination
-│   ├── orchestration/           # Engine, planner, orchestrator
-│   ├── services/                # Notifications, analytics, DB, exporter, XAI
-│   ├── tools/                   # LLM tools and web tools
-│   ├── nlp/                     # Skills and language utilities
-│   └── integrations/            # External integration layer
-├── docs/                        # Product, setup, validation, and portfolio docs
-│   ├── PORTFOLIO.md
-│   ├── SETUP_AND_VALIDATION.md
-│   ├── REPO_DEEP_DIVE_AND_GAP_PLAN.md
-│   ├── PATCH_NOTES.md
+├── docs/                           # Project docs, portfolio, roadmap, architecture, deployment notes
+│   ├── media/
 │   ├── 10_layer_strategic_roadmap.md
-│   └── media/
-├── notebooks/                   # Early experiments and setup notebooks
-├── notebooks_v2/                # Iterative stabilization and workflow notebooks
-├── tests/                       # Unit and integration test coverage
-├── uploads/                     # Local uploaded artifacts for app runs
-├── .ai_context/                 # Internal architecture and phase mapping notes
-├── _patch_v5/                   # Patch workspace
-├── _rollback/                   # Rollback snapshots and safety backups
-├── pyproject.toml
+│   ├── PATCH_NOTES.md
+│   ├── PORTFOLIO.md
+│   ├── README.md
+│   ├── REPO_DEEP_DIVE_AND_GAP_PLAN.md
+│   ├── SETUP_AND_VALIDATION.md
+│   ├── architecture.md
+│   ├── competitive-landscape.md
+│   ├── deployment.md
+│   ├── pipeline.md
+│   ├── roadmap.md
+│   └── vision.md
+├── newfolder/                      # Temporary experimental runtime node work
+├── notebooks/                      # Early notebooks and deployment/setup experiments
+├── notebooks_v2/                   # Iterative fixes, stabilization, workflow debugging notebooks
+├── sqlitecloud:/                   # Local SQLiteCloud connection artifact
+├── src/                            # Main product source code
+│   ├── careeragent/
+│   │   ├── agents/                 # Agents, evaluators, schemas, workflow services
+│   │   ├── api/                    # API entrypoints, request models, run manager
+│   │   ├── core/                   # Config, settings, state, state stores
+│   │   ├── integrations/           # Integration layer
+│   │   ├── langgraph/              # Graphs, nodes, HITL flows, runtime nodes
+│   │   ├── managers/               # Planning and manager-layer logic
+│   │   ├── nlp/                    # NLP utilities and skills processing
+│   │   ├── orchestration/          # Planner, director, engine, orchestrator
+│   │   ├── services/               # Analytics, notifications, DB, exporter, XAI
+│   │   ├── tools/                  # LLM tools and web tools
+│   │   └── ops_check.py
+│   ├── pydantic/
+│   ├── pydantic_bridge_backup/
+│   ├── pydantic_fallback_backup/
+│   ├── pydantic_settings/
+│   └── httpx.py
+├── streamlit/                      # Streamlit shim/runtime package
+├── tests/                          # Unit and integration tests
+│   ├── integration/
+│   ├── unit/
+│   ├── conftest.py
+│   └── test_runtime_flow.py
+├── uploads/                        # Local uploaded resumes and run-time artifacts
+├── .dvcignore
+├── .env
 ├── .env_example
+├── .gitignore
+├── .python-version
+├── LICENSE
 ├── README.md
+├── README_PHASE2.md
+├── README_PHASE3.md
+├── REPO_MAP.md
+├── api_main.py
+├── check_env.py
+├── debug_checklist.py
+├── evaluator.py
+├── full_system_debug.txt
+├── get-pip.py
+├── ls
+├── main.py
+├── mission_control.py
+├── pyproject.toml
+├── requests.py
+├── run_app.py
+├── setup_folders.py
+├── setup_repo.py
 └── uv.lock
