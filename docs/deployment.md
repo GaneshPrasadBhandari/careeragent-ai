@@ -6,20 +6,20 @@ Package CareerAgent-AI as a containerized, deployment-ready beta product that ca
 
 ## Deployment Priorities
 
-### Phase 1
+### Phase 6
 - Dockerize backend and frontend
 - environment variable standardization
 - health checks
 - startup scripts
 - basic production logging
 
-### Phase 2
+### Phase 7
 - GitHub Actions for CI/CD
 - image build and registry push
 - preview / staging deployment
 - cloud secrets handling
 
-### Phase 3
+### Phase 8
 - public beta hosting
 - uptime monitoring
 - usage analytics
