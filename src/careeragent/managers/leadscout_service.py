@@ -57,7 +57,27 @@ def _normalize_result_url(url: str) -> str:
     if parsed.scheme not in {"http", "https"}:
         return ""
     path = parsed.path.rstrip("/")
-    return f"{parsed.scheme}://{parsed.netloc}{path}"
+    base = f"{parsed.scheme}://{parsed.netloc}{path}"
+
+    # Keep required job-identifying query params for job boards where the
+    # canonical listing link depends on them (e.g., Indeed/Glassdoor).
+    host = parsed.netloc.lower()
+    query_map = parse_qs(parsed.query, keep_blank_values=False)
+    keep_params: list[str] = []
+    if "indeed.com" in host:
+        keep_params = ["jk", "vjs"]
+    elif "glassdoor.com" in host:
+        keep_params = ["jl", "joblistingid"]
+
+    if keep_params:
+        compact = "&".join(
+            f"{key}={query_map[key][0]}"
+            for key in keep_params
+            if query_map.get(key) and str(query_map[key][0]).strip()
+        )
+        if compact:
+            return f"{base}?{compact}"
+    return base
 
 
 def _is_plausible_job_link(url: str) -> bool:

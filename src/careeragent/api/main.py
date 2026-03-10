@@ -220,7 +220,12 @@ def _sanitize_phone(phone: str) -> str:
 
 
 def _langsmith_status(run_id: str) -> dict:
-    tracing_flag = str(os.getenv("LANGSMITH_TRACING") or os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
+    tracing_flag = str(
+        os.getenv("LANGSMITH_TRACING")
+        or os.getenv("LANGCHAIN_TRACING_V2")
+        or os.getenv("LANGCHAIN_TRACING")
+        or ""
+    ).strip().lower()
     enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai-new").strip().strip('"')
@@ -235,6 +240,34 @@ def _langsmith_status(run_id: str) -> dict:
         "dashboard_url": f"{base}/projects?name={project_q}" if enabled else None,
         "run_filter": run_id,
     }
+
+
+def _notify_human_approval_needed(state: dict, run_id: str, action: str, note: str) -> None:
+    notif_cfg = dict((state.get("config") or {}).get("notifications") or {})
+    if not (notif_cfg.get("enable_email") or notif_cfg.get("enable_sms")):
+        return
+
+    profile = state.get("profile") or {}
+    candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
+    candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
+    if not candidate_email and not candidate_phone:
+        return
+
+    notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
+    result = notifier.send_alert(
+        message=f"Run {run_id} requires approval: {action}. {note}",
+        title=f"CareerAgent approval needed ({action})",
+        to_email=candidate_email,
+        to_phone=candidate_phone,
+        enable_email=bool(notif_cfg.get("enable_email")),
+        enable_sms=bool(notif_cfg.get("enable_sms")),
+    )
+    state.setdefault("notification_log", []).append({
+        "timestamp": _now(),
+        "event": "human_approval_required",
+        "action": action,
+        "result": result,
+    })
 
 
 def _langgraph_status(run_id: str) -> dict:
@@ -574,6 +607,7 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
         state["status"] = "pending_human_input"
         state["pending_action"] = "approve_ranking"
         _log_agent(state, 5, "Awaiting human approval for ranked jobs.", meta=state["layers"][5].get("meta"))
+        _notify_human_approval_needed(state, run_id, "approve_ranking", "Review recommended jobs and approve to continue drafting.")
     else:
         state["status"] = "running"
         await _continue_l6_to_l9(run_id, stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)))
@@ -683,6 +717,7 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
     if stop_after_l6_for_approval:
         state["status"] = "pending_human_input"
         state["pending_action"] = "approve_drafts"
+        _notify_human_approval_needed(state, run_id, "approve_drafts", "Draft resume and cover letters are ready for review.")
         _persist_state(run_id)
         return
 
@@ -803,6 +838,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
         state["status"] = "pending_human_input"
         state["pending_action"] = "approve_followups"
         _log_agent(state, 7, "Follow-up email drafts ready. Awaiting human approval before sending.")
+        _notify_human_approval_needed(state, run_id, "approve_followups", "Follow-up drafts are ready to send.")
         _persist_state(run_id)
         return
 
