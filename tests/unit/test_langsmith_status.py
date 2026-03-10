@@ -39,3 +39,15 @@ def test_langsmith_status_enabled_with_langsmith_tracing_flag(monkeypatch):
     status = langsmith_status('run_999')
 
     assert status['enabled'] is True
+
+
+def test_langsmith_status_enabled_with_langchain_tracing_legacy_flag(monkeypatch):
+    langsmith_status = _load_langsmith_status_func()
+    monkeypatch.delenv('LANGCHAIN_TRACING_V2', raising=False)
+    monkeypatch.delenv('LANGSMITH_TRACING', raising=False)
+    monkeypatch.setenv('LANGCHAIN_TRACING', 'true')
+    monkeypatch.setenv('LANGSMITH_API_KEY', 'key')
+
+    status = langsmith_status('run_legacy')
+
+    assert status['enabled'] is True
