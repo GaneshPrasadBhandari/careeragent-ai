@@ -1481,19 +1481,19 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
-            "company": "TechCorp Inc.", "url": "https://boards.greenhouse.io/techcorp/jobs/demo",
+            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/view/4123456789",
             "location": "Remote", "remote": True, "description": f"Looking for {' '.join(skills)} expert.",
             "source": "demo", "salary_min": 130000, "salary_max": 180000,
         },
         {
             "id": "demo_002", "title": "Backend Software Engineer",
-            "company": "StartupAI", "url": "https://jobs.lever.co/startupai/demo",
+            "company": "Indeed Sample", "url": "https://www.indeed.com/viewjob?jk=demo123456789",
             "location": "San Francisco, CA", "remote": True, "description": f"Need strong {skills[0] if skills else 'Python'} skills.",
             "source": "demo", "salary_min": 140000, "salary_max": 200000,
         },
         {
             "id": "demo_003", "title": "Staff Engineer — Platform",
-            "company": "ScaleUp Inc.", "url": "https://startupxyz.com/jobs/demo",
+            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/job-listing/software-engineer-demo-company-JV_IC1132348_KO0,17_KE18,30.htm?jl=1000000000000",
             "location": "New York, NY", "remote": False, "description": "Platform team, strong systems background.",
             "source": "demo", "salary_min": 160000, "salary_max": 220000,
         },
