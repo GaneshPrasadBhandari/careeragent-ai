@@ -2,7 +2,7 @@ services:
   - type: web
     name: careeragent-api
     runtime: python
-    plan: starter
+    plan: free
     rootDir: .
     buildCommand: uv sync --frozen
     startCommand: uv run uvicorn careeragent.api.main:app --host 0.0.0.0 --port $PORT --app-dir src
@@ -13,17 +13,15 @@ services:
         value: 3.11.8
       - key: LANGSMITH_TRACING
         value: "true"
-      - key: LANGCHAIN_TRACING_V2
-        value: "true"
       - key: LANGSMITH_PROJECT
-        value: careeragent-ai-new
+        value: careeragent-ai-phase6
       - key: LANGCHAIN_PROJECT
-        value: careeragent-ai-new
+        value: careeragent-ai-phase6
 
   - type: web
     name: careeragent-dashboard
     runtime: python
-    plan: starter
+    plan: free
     rootDir: .
     buildCommand: uv sync --frozen
     startCommand: uv run streamlit run app/ui/mission_control.py --server.port $PORT --server.address 0.0.0.0
