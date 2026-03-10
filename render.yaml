@@ -29,8 +29,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
-      - key: API_HOSTPORT
-        fromService:
-          type: web
-          name: careeragent-api
-          property: hostport
+      - key: API_BASE_URL
+        value: https://careeragent-api.onrender.com
