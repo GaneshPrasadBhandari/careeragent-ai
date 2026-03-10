@@ -33,4 +33,4 @@ services:
         fromService:
           type: web
           name: careeragent-api
-          property: url
+          property: hostport
