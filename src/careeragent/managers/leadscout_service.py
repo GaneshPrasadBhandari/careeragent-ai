@@ -12,6 +12,7 @@ import logging
 import os
 import re
 from dataclasses import asdict, dataclass
+from urllib.parse import parse_qs, urlparse
 from typing import Optional
 
 import httpx
@@ -24,9 +25,12 @@ REQUEST_TIMEOUT = 20.0
 
 JOB_BOARD_DOMAINS = [
     "linkedin.com/jobs",
+    "indeed.com",
+    "glassdoor.com",
+    "myvisajobs.com",
+    "ziprecruiter.com",
     "greenhouse.io",
     "lever.co",
-    "indeed.com",
     "workday.com",
     "myworkdayjobs.com",
     "icims.com",
@@ -37,6 +41,43 @@ JOB_BOARD_DOMAINS = [
 ]
 
 SKIP_PATHS = ["/blog/", "/news/", "/about", "/company", "/press", "/learn"]
+
+
+def _normalize_result_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+
+    if parsed.netloc.endswith("google.com") and parsed.path == "/url":
+        target = parse_qs(parsed.query).get("q", [""])[0].strip()
+        if target:
+            parsed = urlparse(target)
+
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+def _is_plausible_job_link(url: str) -> bool:
+    low = str(url or "").lower()
+    if not low:
+        return False
+    if any(token in low for token in ["/search", "/jobs/demo", "?q="]):
+        return False
+
+    parsed = urlparse(low)
+    host, path, query = parsed.netloc, parsed.path, parsed.query
+    if "linkedin.com" in host:
+        return "/jobs/view" in path
+    if "indeed.com" in host:
+        return "/viewjob" in path
+    if "glassdoor.com" in host:
+        return "joblistingid=" in query or "-job" in path
+    if any(d in host for d in ("greenhouse.io", "lever.co", "workday", "myworkdayjobs", "icims.com", "jobvite.com", "smartrecruiters.com", "ziprecruiter.com", "myvisajobs.com")):
+        return "/job" in path
+    return True
 
 
 @dataclass
@@ -220,7 +261,7 @@ class LeadScoutService:
             return []
         try:
             loc_str  = "remote" if remote else location
-            site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS[:6])
+            site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS)
             search_q = f"{query} {loc_str} ({site_str})"
             payload  = {"q": search_q, "gl": "us", "hl": "en", "num": self.max_per_source}
             headers  = {"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"}
@@ -237,13 +278,15 @@ class LeadScoutService:
 
             leads = []
             for r in data.get("organic", []):
-                url   = r.get("link", "")
+                url   = _normalize_result_url(r.get("link", ""))
                 title = r.get("title", "")
                 if not url or not title:
                     continue
                 if any(skip in url for skip in SKIP_PATHS):
                     continue
                 if not any(d in url for d in JOB_BOARD_DOMAINS):
+                    continue
+                if not _is_plausible_job_link(url):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
@@ -284,11 +327,15 @@ class LeadScoutService:
 
             leads = []
             for r in data.get("results", []):
-                url   = r.get("url", "")
+                url   = _normalize_result_url(r.get("url", ""))
                 title = r.get("title", "")
                 if not url or not title:
                     continue
                 if any(skip in url for skip in SKIP_PATHS):
+                    continue
+                if not any(d in url for d in JOB_BOARD_DOMAINS):
+                    continue
+                if not _is_plausible_job_link(url):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],

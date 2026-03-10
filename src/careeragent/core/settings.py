@@ -15,11 +15,11 @@ class Settings(BaseModel):
     SERPER_API_KEY: Optional[str] = None
 
     LANGSMITH_API_KEY: Optional[str] = None
-    LANGSMITH_PROJECT: str = "careeragent-ai-new"
+    LANGSMITH_PROJECT: str = "careeragent-ai-phase6"
     LANGSMITH_WORKSPACE_ID: Optional[str] = None
     LANGSMITH_ENDPOINT: str = "https://smith.langchain.com"
     LANGCHAIN_API_KEY: Optional[str] = None
-    LANGCHAIN_PROJECT: str = "careeragent-ai-new"
+    LANGCHAIN_PROJECT: str = "careeragent-ai-phase6"
     LANGCHAIN_TRACING_V2: str = "true"
     LANGSMITH_TRACING: str = "true"
 
@@ -100,7 +100,7 @@ def bootstrap_langsmith(s: Settings) -> None:
     os.environ["LANGSMITH_API_KEY"] = langsmith_key
     os.environ["LANGCHAIN_API_KEY"] = langchain_key or langsmith_key
     tracing = str(s.LANGSMITH_TRACING or s.LANGCHAIN_TRACING_V2 or "true")
-    project = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-new")
+    project = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-phase6")
     os.environ["LANGCHAIN_TRACING_V2"] = tracing
     os.environ["LANGSMITH_TRACING"] = tracing
     os.environ["LANGCHAIN_PROJECT"] = project

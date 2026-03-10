@@ -140,11 +140,11 @@ def _inject_css() -> None:
     .layer-status-badge {
         font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500;
     }
-    .badge-waiting  { background: #21262d; color: #8b949e; }
+    .badge-waiting  { background: #EEF2F7; color: #334155; }
     .badge-running  { background: #1c2d3f; color: #388bfd; }
     .badge-ok       { background: #E6F4EA; color: #2D6A4F; }
     .badge-error    { background: #2d1a1a; color: #f85149; }
-    .badge-skipped  { background: #21262d; color: #8b949e; }
+    .badge-skipped  { background: #EEF2F7; color: #475569; }
 
     .layer-meta { display: flex; gap: 24px; margin: 8px 0; }
     .meta-item  { font-size: 12px; color: #8b949e; }
@@ -175,15 +175,15 @@ def _inject_css() -> None:
 
     /* ── Section header ── */
     .section-header {
-        font-size: 11px; color: #6e7681; text-transform: uppercase;
+        font-size: 11px; color: #334155; text-transform: uppercase;
         letter-spacing: 0.1em; margin: 16px 0 8px; padding-bottom: 4px;
-        border-bottom: 1px solid #1e1e2e;
+        border-bottom: 1px solid #D9DEE5;
     }
 
     /* ── Status badge ── */
     .run-status {
         font-size: 12px; padding: 4px 12px; border-radius: 20px;
-        background: #21262d; color: #8b949e; font-weight: 500;
+        background: #EEF2F7; color: #334155; font-weight: 600;
     }
     .run-status.running { background: #1c2d3f; color: #388bfd; }
     .run-status.completed { background: #E6F4EA; color: #2D6A4F; }
