@@ -9,6 +9,40 @@ This repository reflects a **capstone-to-product build** evolving toward a deplo
 
 ---
 
+
+## Live Beta Demo (Phase 6)
+
+CareerAgent-AI Phase 6 is now deployed for live beta testing.
+
+### Public beta access
+- **Dashboard UI:** [https://careeragent-dashboard.onrender.com](https://careeragent-dashboard.onrender.com)
+- **API Docs:** [https://careeragent-api.onrender.com/docs](https://careeragent-api.onrender.com/docs)
+- **Health Check:** [https://careeragent-api.onrender.com/health](https://careeragent-api.onrender.com/health)
+
+### What can be tested in this beta
+- Mission Control dashboard
+- resume upload and job-hunt flow
+- L0→L9 pipeline visibility
+- live progress tracking
+- backend/API connectivity
+- deployed beta workflow validation
+
+### Beta notes
+- This is a **public beta deployment** for Phase 6 validation.
+- The app is currently hosted on free-tier infrastructure, so the first request after inactivity may take extra time.
+- Please avoid uploading highly sensitive personal or confidential data during beta testing.
+- If the dashboard does not connect automatically, refresh once and verify the backend URL inside the UI.
+
+### Suggested test flow
+1. Open the dashboard UI
+2. Upload a test resume
+3. Start a hunt
+4. Observe progress, layer updates, and generated outputs
+5. Report bugs or edge cases with screenshots and reproduction steps
+
+---
+
+
 ## Overview
 
 Modern job searching is still broken.
