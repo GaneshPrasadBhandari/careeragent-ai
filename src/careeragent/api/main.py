@@ -220,7 +220,7 @@ def _sanitize_phone(phone: str) -> str:
 
 
 def _langsmith_status(run_id: str) -> dict:
-    tracing_flag = str(os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
+    tracing_flag = str(os.getenv("LANGSMITH_TRACING") or os.getenv("LANGCHAIN_TRACING_V2", "")).strip().lower()
     enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai-new").strip().strip('"')

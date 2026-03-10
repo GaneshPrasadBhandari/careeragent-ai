@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: careeragent-api
+    runtime: python
+    plan: starter
+    rootDir: .
+    buildCommand: |
+      pip install --upgrade pip
+      pip install .
+    startCommand: uvicorn careeragent.api.main:app --host 0.0.0.0 --port $PORT --app-dir src
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: LANGSMITH_TRACING
+        value: true
+      - key: LANGCHAIN_TRACING_V2
+        value: true
+      - key: LANGSMITH_PROJECT
+        value: careeragent-ai-new
+      - key: LANGCHAIN_PROJECT
+        value: careeragent-ai-new
+
+  - type: web
+    name: careeragent-dashboard
+    runtime: python
+    plan: starter
+    rootDir: .
+    buildCommand: |
+      pip install --upgrade pip
+      pip install .
+    startCommand: streamlit run app/ui/mission_control.py --server.port $PORT --server.address 0.0.0.0
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: API_BASE_URL
+        fromService:
+          type: web
+          name: careeragent-api
+          property: url

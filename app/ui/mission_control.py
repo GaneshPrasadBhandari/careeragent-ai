@@ -14,6 +14,7 @@ Fixes applied:
 from __future__ import annotations
 
 import json
+import os
 import time
 from html import escape
 from pathlib import Path
@@ -375,7 +376,7 @@ def _init_session():
         "view_mode":      "Pilot View",
         "live_update":    True,
         "refresh_sec":    5,
-        "api_base":       "http://localhost:8000",
+        "api_base":       os.getenv("API_BASE_URL", "http://localhost:8000"),
         "last_poll":      0.0,
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
@@ -1326,6 +1327,25 @@ def main():
             st.markdown(f"[🧭 LangSmith dashboard]({link})")
 
     st.markdown("<hr style='border:none;border-top:1px solid #1e1e2e;margin:12px 0'>", unsafe_allow_html=True)
+
+    intro_left, intro_right = st.columns([7, 3])
+    with intro_left:
+        st.markdown(
+            """
+            ### What CareerAgent-AI does
+            - Finds high-fit roles aligned to your profile and preferences.
+            - Generates tailored resume/cover-letter drafts with human approval gates.
+            - Tracks outcomes and converts feedback into better future applications.
+
+            **Why use it:** reduce manual application effort, improve quality, and create a measurable interview funnel.
+            """
+        )
+    with intro_right:
+        st.markdown("### How to use")
+        st.markdown("1. Upload resume in sidebar")
+        st.markdown("2. Start Hunt and review approvals")
+        st.markdown("3. Monitor analytics + share feedback")
+        st.caption("Beta feedback helps the system learn from users and recruiter outcomes.")
 
     # ── Stat cards ────────────────────────────────────────────────────────────
     render_stat_cards(status)
