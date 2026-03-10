@@ -24,6 +24,20 @@ from urllib.parse import quote_plus
 import requests
 import streamlit as st
 
+
+def _default_api_base() -> str:
+    api_base = os.getenv("API_BASE_URL")
+    if api_base:
+        return api_base.rstrip("/")
+
+    api_hostport = os.getenv("API_HOSTPORT")
+    if api_hostport:
+        return f"http://{api_hostport}"
+
+    return "http://localhost:8000"
+
+
+
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
     page_title="CareerAgent-AI — Mission Control",
@@ -376,7 +390,7 @@ def _init_session():
         "view_mode":      "Pilot View",
         "live_update":    True,
         "refresh_sec":    5,
-        "api_base":       os.getenv("API_BASE_URL", "http://localhost:8000"),
+        "api_base":       _default_api_base(),
         "last_poll":      0.0,
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
