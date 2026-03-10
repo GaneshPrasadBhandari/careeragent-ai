@@ -28,3 +28,14 @@ def test_langsmith_status_uses_safe_project_link_without_invalid_workspace(monke
     assert status['enabled'] is True
     assert status['workspace'] is None
     assert status['dashboard_url'] == 'https://smith.langchain.com/projects?name=careeragent-ai'
+
+
+def test_langsmith_status_enabled_with_langsmith_tracing_flag(monkeypatch):
+    langsmith_status = _load_langsmith_status_func()
+    monkeypatch.delenv('LANGCHAIN_TRACING_V2', raising=False)
+    monkeypatch.setenv('LANGSMITH_TRACING', 'true')
+    monkeypatch.setenv('LANGSMITH_API_KEY', 'key')
+
+    status = langsmith_status('run_999')
+
+    assert status['enabled'] is True

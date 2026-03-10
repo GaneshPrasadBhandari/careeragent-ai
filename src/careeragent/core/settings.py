@@ -21,6 +21,7 @@ class Settings(BaseModel):
     LANGCHAIN_API_KEY: Optional[str] = None
     LANGCHAIN_PROJECT: str = "careeragent-ai-new"
     LANGCHAIN_TRACING_V2: str = "true"
+    LANGSMITH_TRACING: str = "true"
 
     DATABASE_URL: str = "sqlite:///outputs/careeragent.db"
 
@@ -64,6 +65,7 @@ class Settings(BaseModel):
                 "LANGCHAIN_API_KEY",
                 "LANGCHAIN_PROJECT",
                 "LANGCHAIN_TRACING_V2",
+                "LANGSMITH_TRACING",
                 "DATABASE_URL",
                 "QDRANT_URL",
                 "QDRANT_API_KEY",
@@ -97,7 +99,10 @@ def bootstrap_langsmith(s: Settings) -> None:
     langsmith_key = (s.LANGSMITH_API_KEY or "").strip() or langchain_key or "local-dev-langsmith-key"
     os.environ["LANGSMITH_API_KEY"] = langsmith_key
     os.environ["LANGCHAIN_API_KEY"] = langchain_key or langsmith_key
-    os.environ["LANGCHAIN_TRACING_V2"] = str(s.LANGCHAIN_TRACING_V2 or "true")
-    os.environ["LANGCHAIN_PROJECT"] = str(s.LANGCHAIN_PROJECT or "careeragent-ai-new")
-    os.environ["LANGSMITH_PROJECT"] = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-new")
+    tracing = str(s.LANGSMITH_TRACING or s.LANGCHAIN_TRACING_V2 or "true")
+    project = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-new")
+    os.environ["LANGCHAIN_TRACING_V2"] = tracing
+    os.environ["LANGSMITH_TRACING"] = tracing
+    os.environ["LANGCHAIN_PROJECT"] = project
+    os.environ["LANGSMITH_PROJECT"] = project
     os.environ["LANGSMITH_ENDPOINT"] = str(s.LANGSMITH_ENDPOINT or "https://smith.langchain.com")
