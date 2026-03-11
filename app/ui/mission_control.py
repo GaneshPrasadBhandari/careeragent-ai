@@ -168,10 +168,10 @@ def _inject_css() -> None:
     }
     .feed-title { font-size: 11px; color: #3fb950; text-transform: uppercase;
                   letter-spacing: 0.1em; margin-bottom: 8px; }
-    .feed-entry { font-size: 12px; color: #8b949e; padding: 2px 0; }
-    .feed-ts    { color: #3b4a5a; font-size: 11px; margin-right: 8px; }
-    .feed-msg   { color: #b1bac4; }
-    .feed-empty { color: #3b4a5a; font-size: 12px; font-style: italic; }
+    .feed-entry { font-size: 12px; color: #FDE68A; padding: 2px 0; }
+    .feed-ts    { color: #93C5FD; font-size: 11px; margin-right: 8px; }
+    .feed-msg   { color: #FEF9C3; }
+    .feed-empty { color: #FCD34D; font-size: 12px; font-style: italic; }
 
     /* ── Section header ── */
     .section-header {
@@ -600,7 +600,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         if ranked_jobs:
             options = {
                 f"{j.get('title','Role')} · {j.get('company','')} "
-                f"(match {j.get('score',0)*100:.0f}% | interview {j.get('interview_probability_percent',0):.0f}%)": j.get("id")
+                f"(match {j.get('score',0)*100:.0f}% | interview {j.get('interview_probability_percent',0):.0f}% | {j.get('id','no-id')})": j.get("id")
                 for j in ranked_jobs
             }
             selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys()))
@@ -880,7 +880,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
-                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 {job.get('url','')}</div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 <a href="{job.get('url','')}" target="_blank" rel="noopener noreferrer">Open posting</a></div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
@@ -1306,6 +1306,9 @@ def main():
             # Stop auto-refresh when done
             if fresh.get("status") in ("completed", "error"):
                 st.session_state["hunt_running"] = False
+
+    if run_id and not status:
+        st.warning("Run started, but live status is not available yet. This usually means backend polling failed temporarily — please verify API URL/health and keep Live Update enabled.")
 
     # ── Extract layer data ────────────────────────────────────────────────────
     layers_data = []
