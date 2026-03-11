@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 
 import importlib.machinery
@@ -591,6 +591,21 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
     return jobs
 
 
+def _dedupe_jobs(jobs: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for job in jobs:
+        url = str(job.get("url") or "").strip().rstrip("/").lower()
+        title = re.sub(r"\s+", " ", str(job.get("title") or "").strip().lower())
+        company = re.sub(r"\s+", " ", str(job.get("company") or "").strip().lower())
+        key = url or f"{title}|{company}"
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(job)
+    return out
+
+
 
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
@@ -1136,9 +1151,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             scored    = _stub_score(state["job_leads"])
             threshold = 0.45
 
+        scored = _dedupe_jobs(scored)
         scored = _apply_frontend_filters(scored, state["config"])
         scored = _apply_role_relevance_filter(scored, state["config"])
         scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
+        scored = _dedupe_jobs(scored)
         scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
         scored = _augment_scored_jobs(scored, state.get("profile") or {})
         state["scored_jobs"]     = scored
@@ -1176,10 +1193,18 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             reverse=True,
         )
         gap = _gap_analysis(state.get("profile") or {}, scored, threshold=float(threshold))
+        source_domains = {
+            (urlparse(str(j.get("url") or "")).netloc or "unknown").replace("www.", "")
+            for j in qualified
+        }
         state["layer_debug"]["L5"] = {
             "qualified_jobs": qualified,
             "threshold": threshold,
             "gap_analysis": gap,
+            "source_diversity": {
+                "unique_domains": sorted(source_domains),
+                "count": len(source_domains),
+            },
         }
         _record_eval(
             state,
@@ -1187,7 +1212,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             target_id="ranking_gate",
             score=(len(qualified) / max(1, len(scored))) if scored else 0.0,
             threshold=0.3,
-            feedback=[f"qualified={len(qualified)}", f"scored={len(scored)}"],
+            feedback=[
+                f"qualified={len(qualified)}",
+                f"scored={len(scored)}",
+                f"unique_domains={len(source_domains)}",
+            ],
         )
         await mark_ok(
             5,
@@ -1554,6 +1583,7 @@ def _build_intent(profile: dict, config: dict) -> dict:
         "geo_preferences":   config.get("geo_preferences", {"remote": True, "locations": ["United States"]}),
         "salary_min_usd":    config.get("salary_min", 90_000),
         "salary_max_usd":    config.get("salary_max", 200_000),
+        "recency_hours":     int(config.get("posted_within_hours", 168) or 168),
     }
 
 
@@ -1564,21 +1594,51 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
-            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/search/?keywords=Senior%20AI%20Engineer",
+            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/view/3929934201",
             "location": "Remote", "remote": True, "description": f"Looking for {' '.join(skills)} expert.",
             "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 180000,
         },
         {
             "id": "demo_002", "title": "Backend Software Engineer",
-            "company": "Indeed Sample", "url": "https://www.indeed.com/jobs?q=Backend+Software+Engineer+AI",
+            "company": "Indeed Sample", "url": "https://www.indeed.com/viewjob?jk=demo002ab1",
             "location": "San Francisco, CA", "remote": True, "description": f"Need strong {skills[0] if skills else 'Python'} skills.",
             "source": "demo", "is_demo": True, "salary_min": 140000, "salary_max": 200000,
         },
         {
             "id": "demo_003", "title": "Staff Engineer — Platform",
-            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/Job/software-engineer-jobs-SRCH_KO0,17.htm",
+            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/job-listing/software-engineer-demo-JV_IC1132348_KO0,17_KE18,22.htm?jl=100927384",
             "location": "New York, NY", "remote": False, "description": "Platform team, strong systems background.",
             "source": "demo", "is_demo": True, "salary_min": 160000, "salary_max": 220000,
+        },
+        {
+            "id": "demo_004", "title": "Senior AI Engineer",
+            "company": "MyVisaJobs Sample", "url": "https://www.myvisajobs.com/JobsInfo.aspx?j=demo004",
+            "location": "Austin, TX", "remote": True, "description": "H1B-friendly AI engineering role.",
+            "source": "demo", "is_demo": True, "salary_min": 125000, "salary_max": 175000,
+        },
+        {
+            "id": "demo_005", "title": "ML Platform Engineer",
+            "company": "ZipRecruiter Sample", "url": "https://www.ziprecruiter.com/jobs/example-company-ml-platform-engineer-demo",
+            "location": "Seattle, WA", "remote": False, "description": "MLOps and platform reliability.",
+            "source": "demo", "is_demo": True, "salary_min": 145000, "salary_max": 205000,
+        },
+        {
+            "id": "demo_006", "title": "Applied AI Engineer",
+            "company": "Greenhouse Sample", "url": "https://boards.greenhouse.io/example/jobs/1234567",
+            "location": "Remote", "remote": True, "description": "Production AI systems role.",
+            "source": "demo", "is_demo": True, "salary_min": 135000, "salary_max": 195000,
+        },
+        {
+            "id": "demo_007", "title": "AI Solutions Engineer",
+            "company": "Lever Sample", "url": "https://jobs.lever.co/example/abcd1234",
+            "location": "Remote", "remote": True, "description": "Enterprise AI delivery and architecture.",
+            "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 190000,
+        },
+        {
+            "id": "demo_008", "title": "AI Backend Engineer",
+            "company": "Workday Sample", "url": "https://example.myworkdayjobs.com/en-US/careers/job/San-Francisco/AI-Backend-Engineer_R12345",
+            "location": "San Francisco, CA", "remote": False, "description": "Backend + ML services for AI products.",
+            "source": "demo", "is_demo": True, "salary_min": 150000, "salary_max": 215000,
         },
     ]
     if max_jobs <= len(seed_jobs):

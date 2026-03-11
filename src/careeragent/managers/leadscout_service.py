@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
 from urllib.parse import parse_qs, urlparse
 from typing import Optional
@@ -22,6 +23,17 @@ log = logging.getLogger("leadscout")
 SERPER_KEY      = os.getenv("SERPER_API_KEY", "")
 TAVILY_KEY      = os.getenv("TAVILY_API_KEY", "")
 REQUEST_TIMEOUT = 20.0
+
+TOP_SOURCE_QUOTAS = {
+    "linkedin.com": 2,
+    "indeed.com": 2,
+    "glassdoor.com": 1,
+    "myvisajobs.com": 1,
+    "ziprecruiter.com": 1,
+    "greenhouse.io": 1,
+    "lever.co": 1,
+    "myworkdayjobs.com": 1,
+}
 
 JOB_BOARD_DOMAINS = [
     "linkedin.com/jobs",
@@ -160,7 +172,7 @@ class LeadScoutService:
             if isinstance(batch, list):
                 leads.extend(batch)
 
-        # Deduplicate by URL
+        # Deduplicate by canonical URL
         seen, unique = set(), []
         for lead in leads:
             key = lead.url.strip().rstrip("/")
@@ -168,8 +180,89 @@ class LeadScoutService:
                 seen.add(key)
                 unique.append(lead)
 
+        recency_hours = float(intent_plan.get("recency_hours") or 24.0)
+        unique = self._filter_by_recency(unique, recency_hours=recency_hours)
+        unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
+
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+
+    @staticmethod
+    def _parse_posted_datetime(value: str) -> Optional[datetime]:
+        txt = str(value or "").strip().lower()
+        if not txt:
+            return None
+
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y"):
+            try:
+                return datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        rel = re.search(r"(\d+)\s*(hour|hr|day|week|month)s?\s*ago", txt)
+        if rel:
+            qty = int(rel.group(1))
+            unit = rel.group(2)
+            if unit in {"hour", "hr"}:
+                return datetime.now(timezone.utc) - timedelta(hours=qty)
+            if unit == "day":
+                return datetime.now(timezone.utc) - timedelta(days=qty)
+            if unit == "week":
+                return datetime.now(timezone.utc) - timedelta(weeks=qty)
+            if unit == "month":
+                return datetime.now(timezone.utc) - timedelta(days=30 * qty)
+
+        if "today" in txt or "just posted" in txt:
+            return datetime.now(timezone.utc)
+        if "yesterday" in txt:
+            return datetime.now(timezone.utc) - timedelta(days=1)
+        return None
+
+    def _filter_by_recency(self, leads: list[JobLead], *, recency_hours: float) -> list[JobLead]:
+        if recency_hours <= 0:
+            return leads
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=recency_hours)
+        filtered: list[JobLead] = []
+        for lead in leads:
+            candidate = lead.posted_date or lead.description
+            parsed = self._parse_posted_datetime(candidate)
+            if parsed is None or parsed >= cutoff:
+                filtered.append(lead)
+        return filtered
+
+    @staticmethod
+    def _source_domain(lead: JobLead) -> str:
+        host = (urlparse(lead.url).netloc or "").lower()
+        return host[4:] if host.startswith("www.") else host
+
+    def _enforce_source_quotas(self, leads: list[JobLead], *, quota_targets: dict[str, int]) -> list[JobLead]:
+        by_source: dict[str, list[JobLead]] = {}
+        for lead in leads:
+            by_source.setdefault(self._source_domain(lead), []).append(lead)
+
+        selected: list[JobLead] = []
+        selected_urls: set[str] = set()
+
+        for source, target in quota_targets.items():
+            inventory: list[JobLead] = []
+            for key, items in by_source.items():
+                if source in key:
+                    inventory.extend(items)
+            for lead in inventory[: max(0, int(target))]:
+                if lead.url not in selected_urls:
+                    selected.append(lead)
+                    selected_urls.add(lead.url)
+
+        cap = self.max_per_source * 4
+        for lead in leads:
+            if len(selected) >= cap:
+                break
+            if lead.url in selected_urls:
+                continue
+            selected.append(lead)
+            selected_urls.add(lead.url)
+
+        return selected
 
     # Aliases
     find_jobs   = search_jobs
@@ -314,6 +407,7 @@ class LeadScoutService:
                     company     = r.get("displayLink", ""),
                     url         = url,
                     description = r.get("snippet", "")[:500],
+                    posted_date = r.get("date", ""),
                     source      = "serper_organic",
                     remote      = "remote" in (r.get("snippet", "") + url).lower(),
                 ))
@@ -363,6 +457,7 @@ class LeadScoutService:
                     company     = "",
                     url         = url,
                     description = r.get("content", "")[:500],
+                    posted_date = r.get("published_date", ""),
                     source      = "tavily",
                     remote      = "remote" in (r.get("content", "") + url).lower(),
                 ))
