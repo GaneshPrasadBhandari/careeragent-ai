@@ -1307,6 +1307,9 @@ def main():
             if fresh.get("status") in ("completed", "error"):
                 st.session_state["hunt_running"] = False
 
+    if run_id and not status:
+        st.warning("Run started, but live status is not available yet. This usually means backend polling failed temporarily — please verify API URL/health and keep Live Update enabled.")
+
     # ── Extract layer data ────────────────────────────────────────────────────
     layers_data = []
     if status and "layers" in status:

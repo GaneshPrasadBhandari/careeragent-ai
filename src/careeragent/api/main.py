@@ -596,7 +596,7 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     state["jobs_approved"] = len(qualified)
     gap = _gap_analysis(state.get("profile") or {}, scored, threshold=threshold)
     state.setdefault("layer_debug", {})["L5"] = {
-        "qualified_jobs": qualified[:10],
+        "qualified_jobs": qualified,
         "threshold": threshold,
         "gap_analysis": gap,
     }
@@ -1130,7 +1130,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         )
         gap = _gap_analysis(state.get("profile") or {}, scored, threshold=float(threshold))
         state["layer_debug"]["L5"] = {
-            "qualified_jobs": qualified[:10],
+            "qualified_jobs": qualified,
             "threshold": threshold,
             "gap_analysis": gap,
         }
@@ -1901,9 +1901,11 @@ async def start_hunt(
         save_path.write_bytes(content)
         log.info("Resume saved: %s (%d bytes)", save_path, len(content))
 
-        # Initialize state
+        # Initialize state and persist immediately so /status works even if
+        # the polling request is served by a different worker/process.
         _runs[run_id] = _build_initial_state(run_id, cfg)
         _runs[run_id]["resume_path"] = str(save_path)
+        _persist_state(run_id)
 
         # Launch pipeline in background
         background_tasks.add_task(run_pipeline, run_id, save_path)
