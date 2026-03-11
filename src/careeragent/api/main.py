@@ -55,10 +55,15 @@ def _repair_pydantic_shadowing() -> None:
 
     real_spec = importlib.machinery.PathFinder.find_spec("pydantic", candidate_paths)
     if real_spec and real_spec.loader:
-        module = importlib.util.module_from_spec(real_spec)
-        real_spec.loader.exec_module(module)
-        sys.modules["pydantic"] = module
-        return
+        try:
+            module = importlib.util.module_from_spec(real_spec)
+            real_spec.loader.exec_module(module)
+            sys.modules["pydantic"] = module
+            return
+        except Exception:
+            # If the environment has a partially broken pydantic install,
+            # gracefully fall back to the local shim instead of crashing import.
+            pass
 
     # Last-resort fallback: keep running with the local lightweight shim.
     # This keeps diagnostics tooling usable in constrained environments.
@@ -211,12 +216,48 @@ def _normalize_config(config: dict) -> dict:
     notifications.setdefault("enable_sms", False)
     notifications["phone"] = _sanitize_phone(notifications.get("phone", ""))
     cfg["notifications"] = notifications
+    cfg.setdefault(
+        "allowed_job_domains",
+        [
+            "linkedin.com",
+            "indeed.com",
+            "glassdoor.com",
+            "ziprecruiter.com",
+            "greenhouse.io",
+            "lever.co",
+            "workday.com",
+            "myworkdayjobs.com",
+        ],
+    )
+    if not isinstance(cfg.get("allowed_job_domains"), list):
+        cfg["allowed_job_domains"] = [str(cfg.get("allowed_job_domains") or "")]
+    cfg["allowed_job_domains"] = [str(d).strip().lower() for d in cfg.get("allowed_job_domains") if str(d).strip()]
+    cfg.setdefault("role_relevance_min", 0.2)
+    cfg["role_relevance_min"] = float(cfg.get("role_relevance_min") or 0.2)
     return cfg
 
 
 def _sanitize_phone(phone: str) -> str:
     compact = "".join(str(phone or "").strip().split())
     return compact
+
+
+def _is_duplicate_action(state: dict, token: str) -> bool:
+    if not token:
+        return False
+    seen = state.setdefault("processed_action_tokens", [])
+    return token in seen
+
+
+def _mark_action_processed(state: dict, token: str) -> None:
+    if not token:
+        return
+    seen = state.setdefault("processed_action_tokens", [])
+    if token in seen:
+        return
+    seen.append(token)
+    if len(seen) > 200:
+        del seen[:-200]
 
 
 def _langsmith_status(run_id: str) -> dict:
@@ -577,6 +618,7 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     _layer_running(state, 4, f"Re-scoring {state.get('jobs_discovered', 0)} jobs after profile update…", tools_used=["matcher", "scorer"], attempt_count=1)
     scored = state.get("job_leads", []) or []
     scored = _apply_frontend_filters(scored, state.get("config", {}))
+    scored = _apply_role_relevance_filter(scored, state.get("config", {}))
     scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
     scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
     scored = _augment_scored_jobs(scored, state.get("profile") or {})
@@ -1091,6 +1133,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             threshold = 0.45
 
         scored = _apply_frontend_filters(scored, state["config"])
+        scored = _apply_role_relevance_filter(scored, state["config"])
         scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
         scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
         scored = _augment_scored_jobs(scored, state.get("profile") or {})
@@ -1551,6 +1594,7 @@ def _apply_frontend_filters(jobs: list[dict], config: dict) -> list[dict]:
     salary_min = int(config.get("salary_min", 0) or 0)
     salary_max = int(config.get("salary_max", 10**9) or 10**9)
     posted_within = int(config.get("posted_within_hours", 9999) or 9999)
+    allowed_domains = [str(d).strip().lower() for d in (config.get("allowed_job_domains") or []) if str(d).strip()]
 
     filtered = []
     for job in jobs:
@@ -1572,7 +1616,39 @@ def _apply_frontend_filters(jobs: list[dict], config: dict) -> list[dict]:
         posted = int(job.get("posted_hours_ago") or 24)
         if posted > posted_within:
             continue
+        if allowed_domains:
+            low_url = str(job.get("url") or "").lower()
+            if low_url and not any(domain in low_url for domain in allowed_domains):
+                continue
         filtered.append(job)
+    return filtered
+
+
+def _role_relevance(job: dict, target_roles: list[str]) -> float:
+    if not target_roles:
+        return 1.0
+    text = " ".join(str(job.get(k) or "") for k in ("title", "description", "snippet", "company")).lower()
+    best = 0.0
+    for role in target_roles:
+        tokens = [tok for tok in re.split(r"\W+", str(role).lower()) if len(tok) >= 3]
+        if not tokens:
+            continue
+        overlap = sum(1 for tok in tokens if tok in text)
+        best = max(best, overlap / max(1, len(tokens)))
+    return round(best, 4)
+
+
+def _apply_role_relevance_filter(jobs: list[dict], config: dict) -> list[dict]:
+    target_roles = [str(r).strip() for r in (config.get("target_roles") or []) if str(r).strip()]
+    if not target_roles:
+        return jobs
+    minimum = float(config.get("role_relevance_min", 0.2) or 0.2)
+    filtered: list[dict] = []
+    for job in jobs:
+        role_rel = _role_relevance(job, target_roles)
+        job2 = {**job, "role_relevance": role_rel}
+        if role_rel >= minimum:
+            filtered.append(job2)
     return filtered
 
 
@@ -1970,15 +2046,16 @@ async def get_status(run_id: str):
 
 @app.get("/hunt/{run_id}/jobs")
 @traceable(name="api.get_jobs")
-async def get_jobs(run_id: str):
+async def get_jobs(run_id: str, limit: int = 200):
     if run_id not in _runs:
         raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     jobs  = state.get("scored_jobs", [])
+    safe_limit = max(1, min(500, int(limit or 200)))
     return {
         "run_id":    run_id,
         "total":     len(jobs),
-        "jobs":      jobs[:50],   # cap response size
+        "jobs":      jobs[:safe_limit],
     }
 
 
@@ -2022,7 +2099,10 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
     if run_id not in _runs:
         raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    action = (body or {}).get("action")
+    action = (body or {}).get("action") or (body or {}).get("action_type")
+    request_token = str((body or {}).get("request_token") or "").strip()
+    if _is_duplicate_action(state, request_token):
+        return {"ok": True, "message": f"duplicate action ignored: {action}", "duplicate": True}
 
     if action == "approve_ranking":
         selected_values = (
@@ -2042,6 +2122,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["jobs_approved"] = len(approved)
         state["pending_action"] = None
         state["status"] = "running"
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         background_tasks.add_task(
             _continue_l6_to_l9,
@@ -2053,6 +2134,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
     if action == "approve_drafts":
         state["pending_action"] = None
         state["status"] = "running"
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         background_tasks.add_task(_continue_l7_to_l9, run_id)
         return {"ok": True, "message": "drafts approved; resuming apply"}
@@ -2069,6 +2151,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["pending_action"] = None
         state["status"] = "running"
         _log_agent(state, 7, f"Human approved {len(followups)} follow-up drafts. Continuing tracking and analytics.")
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         background_tasks.add_task(_continue_l8_to_l9, run_id)
         return {"ok": True, "message": f"follow-up drafts approved ({len(followups)}); resuming"}
@@ -2077,6 +2160,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["pending_action"] = "approve_followups"
         state["status"] = "pending_human_input"
         _log_agent(state, 7, "Follow-up drafts rejected by reviewer. Edit feedback and re-approve.")
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         return {"ok": True, "message": "follow-up drafts rejected; awaiting revised approval"}
 
@@ -2085,6 +2169,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["status"] = "running"
         state["hitl_rejections"] = int(state.get("hitl_rejections", 0)) + 1
         _log_agent(state, 5, "Ranking rejected by human reviewer. Looping back to L2 intake and planning.")
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         resume_path = Path(state.get("resume_path") or "")
         if resume_path.exists():
@@ -2096,6 +2181,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["pending_action"] = "approve_ranking"
         state["status"] = "pending_human_input"
         _log_agent(state, 6, "Draft package rejected by reviewer. Returning to ranking gate.")
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         return {"ok": True, "message": "drafts rejected; returned to ranking approval"}
 
@@ -2110,6 +2196,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["pending_action"] = None
         state["status"] = "running"
         _log_agent(state, 5, f"Profile updated with {len(incoming)} user-confirmed skills. Re-running from L4.")
+        _mark_action_processed(state, request_token)
         _persist_state(run_id)
         background_tasks.add_task(_rerun_from_l4_l5, run_id)
         return {"ok": True, "message": f"profile updated with {len(incoming)} skills; rerunning from L4"}
