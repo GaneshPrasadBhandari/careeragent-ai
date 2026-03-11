@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import io
 import json
@@ -5,7 +6,17 @@ import sys
 import types
 
 import pytest
-from starlette.datastructures import UploadFile
+
+try:
+    from starlette.datastructures import UploadFile
+except Exception:  # pragma: no cover - fallback for minimal test environments
+    class UploadFile:  # type: ignore[override]
+        def __init__(self, filename: str, file):
+            self.filename = filename
+            self.file = file
+
+        async def read(self):
+            return self.file.read()
 
 
 def _import_api_main_with_stubs():
@@ -81,8 +92,7 @@ class _BackgroundTasksForTest:
         self.calls.append((fn, args, kwargs))
 
 
-@pytest.mark.asyncio
-async def test_start_hunt_persists_initial_state(tmp_path, monkeypatch):
+def test_start_hunt_persists_initial_state(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "UPLOADS_DIR", tmp_path / "uploads")
     monkeypatch.setattr(api, "LOGS_DIR", tmp_path / "logs")
     api.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -92,7 +102,9 @@ async def test_start_hunt_persists_initial_state(tmp_path, monkeypatch):
 
     background = _BackgroundTasksForTest()
     resume = UploadFile(filename="resume.txt", file=io.BytesIO(b"python\nml\n"))
-    resp = await api.start_hunt(background, resume=resume, hunt_config=json.dumps({"target_roles": ["AI Engineer"]}))
+    resp = asyncio.run(
+        api.start_hunt(background, resume=resume, hunt_config=json.dumps({"target_roles": ["AI Engineer"]}))
+    )
 
     run_id = resp["run_id"]
     state_file = api.LOGS_DIR / f"state_{run_id}.json"
