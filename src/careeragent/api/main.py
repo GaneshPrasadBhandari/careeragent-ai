@@ -274,12 +274,16 @@ def _langsmith_status(run_id: str) -> dict:
     workspace = workspace_raw if re.match(r"^[0-9a-fA-F-]{36}$", workspace_raw) else ""
     base = f"{endpoint}/o/{workspace}" if workspace else endpoint
     project_q = quote_plus(project)
+    note = None
+    if tracing_flag in {"1", "true", "yes", "on"} and not enabled:
+        note = "Tracing is enabled but LANGSMITH_API_KEY/LANGCHAIN_API_KEY is missing."
     return {
         "enabled": enabled,
         "project": project,
         "workspace": workspace or None,
         "dashboard_url": f"{base}/projects?name={project_q}" if enabled else None,
         "run_filter": run_id,
+        "note": note,
     }
 
 
@@ -1560,21 +1564,21 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
-            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/view/4123456789",
+            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/search/?keywords=Senior%20AI%20Engineer",
             "location": "Remote", "remote": True, "description": f"Looking for {' '.join(skills)} expert.",
-            "source": "demo", "salary_min": 130000, "salary_max": 180000,
+            "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 180000,
         },
         {
             "id": "demo_002", "title": "Backend Software Engineer",
-            "company": "Indeed Sample", "url": "https://www.indeed.com/viewjob?jk=demo123456789",
+            "company": "Indeed Sample", "url": "https://www.indeed.com/jobs?q=Backend+Software+Engineer+AI",
             "location": "San Francisco, CA", "remote": True, "description": f"Need strong {skills[0] if skills else 'Python'} skills.",
-            "source": "demo", "salary_min": 140000, "salary_max": 200000,
+            "source": "demo", "is_demo": True, "salary_min": 140000, "salary_max": 200000,
         },
         {
             "id": "demo_003", "title": "Staff Engineer — Platform",
-            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/job-listing/software-engineer-demo-company-JV_IC1132348_KO0,17_KE18,30.htm?jl=1000000000000",
+            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/Job/software-engineer-jobs-SRCH_KO0,17.htm",
             "location": "New York, NY", "remote": False, "description": "Platform team, strong systems background.",
-            "source": "demo", "salary_min": 160000, "salary_max": 220000,
+            "source": "demo", "is_demo": True, "salary_min": 160000, "salary_max": 220000,
         },
     ]
     if max_jobs <= len(seed_jobs):

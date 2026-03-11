@@ -329,23 +329,34 @@ def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests
 
 
 def _api_health(api_base: str) -> bool:
-    resp = _api_get(api_base, "/health", timeout=3)
-    return resp is not None and resp.get("status") == "ok"
+    for timeout in (3, 6):
+        resp = _api_get(api_base, "/health", timeout=timeout)
+        if resp is not None and resp.get("status") == "ok":
+            return True
+    return False
 
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
-        r = requests.post(
-            f"{api_base.rstrip('/')}/hunt/start",
-            files={"resume": (filename, resume_bytes, "application/octet-stream")},
-            data={"config": json.dumps(config)},
-            timeout=30,
-        )
-        if r.status_code == 200:
-            return r.json().get("run_id")
-        st.error(f"Backend error {r.status_code}: {r.text[:200]}")
+        endpoint = f"{api_base.rstrip('/')}/hunt/start"
+        last_err = None
+        for attempt in range(1, 5):
+            r = requests.post(
+                endpoint,
+                files={"resume": (filename, resume_bytes, "application/octet-stream")},
+                data={"config": json.dumps(config)},
+                timeout=60,
+            )
+            if r.status_code == 200:
+                return r.json().get("run_id")
+            last_err = f"Backend error {r.status_code}: {r.text[:200]}"
+            if r.status_code in {502, 503, 504} and attempt < 4:
+                time.sleep(1.2 * attempt)
+                continue
+            break
+        st.error(last_err or "Backend error: no response payload.")
     except requests.exceptions.ConnectionError:
-        st.error("🔴 Cannot connect to backend. Make sure `uvicorn careeragent.api.main:app` is running on port 8000.")
+        st.error("🔴 Cannot connect to backend. Start API with `python api_main.py` (or `uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload`).")
     except Exception as exc:
         st.error(f"Start hunt error: {exc}")
     return None
@@ -404,13 +415,13 @@ def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict]
             body.update(payload)
         endpoint = f"{api_base.rstrip('/')}/hunt/{run_id}/action"
         last_err = None
-        for attempt in range(1, 4):
-            r = requests.post(endpoint, json=body, timeout=45)
+        for attempt in range(1, 7):
+            r = requests.post(endpoint, json=body, timeout=75)
             if r.status_code == 200:
                 return True
             last_err = f"Action failed ({r.status_code}): {r.text[:200]}"
-            if r.status_code in {502, 503, 504} and attempt < 3:
-                time.sleep(1.2 * attempt)
+            if r.status_code in {502, 503, 504} and attempt < 6:
+                time.sleep(1.5 * attempt)
                 continue
             break
         st.error(last_err or "Action failed due to unknown backend response.")
@@ -635,6 +646,10 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
     st.markdown('<div class="section-header">Human-in-the-Loop Approval Required</div>', unsafe_allow_html=True)
 
     if pending == "approve_ranking":
+        preview = (status.get("approved_jobs_preview") or [])
+        ranked_preview = (((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or [])
+        if any(bool(job.get("is_demo")) for job in [*preview, *ranked_preview[:10]]):
+            st.info("Live providers returned no jobs, so fallback demo results are shown. Links open board search pages (not guaranteed direct postings).")
         st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
         ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", []) or status.get("approved_jobs_preview", [])
         if ranked_jobs:
@@ -1191,6 +1206,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         # ── Health indicator ──────────────────────────────────────────────────
         is_healthy = _api_health(api_base)
+        if (not is_healthy) and st.session_state.get("run_id"):
+            is_healthy = _api_get_status(api_base, st.session_state.get("run_id")) is not None
         color  = "#3fb950" if is_healthy else "#f85149"
         label  = "Backend Online" if is_healthy else "Backend Offline"
         dot    = "●"
@@ -1311,16 +1328,18 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                     st.code((resume_bytes.decode("utf-8", errors="ignore"))[:4000])
 
         # ── Start Hunt button ─────────────────────────────────────────────────
-        start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None or not is_healthy))
+        start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None))
 
         if not is_healthy:
             st.markdown(
                 """
                 <div style="margin-top:8px;padding:10px 12px;border-radius:8px;background:#3A1D20;border:1px solid #7F1D1D;color:#FECACA;font-size:13px;line-height:1.45;">
-                    <strong>⚠ Backend is offline.</strong><br/>
+                    <strong>⚠ Backend health check failed.</strong><br/>
                     Local run command:<br/>
+                    <code style="color:#FDE68A;">python api_main.py</code> (fallback-safe) <br/>
+                    Optional full FastAPI mode:<br/>
                     <code style="color:#FDE68A;">uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload</code><br/>
-                    On Render, verify the API service is <em>deployed</em> and this dashboard points to its URL.
+                    On Render, verify the API service is <em>deployed</em> and this dashboard points to its URL. Cold starts can take 30-90s; Start Hunt will still try with retries.
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1329,7 +1348,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             st.caption("Upload your resume to begin.")
 
         # ── Handle Start Hunt ─────────────────────────────────────────────────
-        if start_clicked and resume_bytes and is_healthy:
+        if start_clicked and resume_bytes:
             with st.spinner("Launching pipeline…"):
                 run_id = _api_start_hunt(api_base, resume_bytes, resume_filename or "resume.pdf", config)
             if run_id:

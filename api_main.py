@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -98,10 +99,15 @@ except ModuleNotFoundError as exc:
 
 
 if __name__ == "__main__":
-    host = "127.0.0.1"
-    port = 8000
+    host = str(os.getenv("HOST") or os.getenv("API_HOST") or "0.0.0.0")
+    port = int(str(os.getenv("PORT") or os.getenv("API_PORT") or "8000"))
     if _FALLBACK_ENABLED:
         _run_fallback_http(host=host, port=port)
     else:
-        uvicorn = importlib.import_module("uvicorn")
-        uvicorn.run("api_main:app", host=host, port=port, reload=False)
+        try:
+            uvicorn = importlib.import_module("uvicorn")
+            uvicorn.run("api_main:app", host=host, port=port, reload=False)
+        except ModuleNotFoundError:
+            # Keep the service reachable in constrained envs where uvicorn
+            # cannot be installed (e.g. blocked package index/proxy).
+            _run_fallback_http(host=host, port=port)
