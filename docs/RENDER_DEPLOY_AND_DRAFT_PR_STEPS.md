@@ -55,6 +55,7 @@ git pull --ff-only
 - Render reads `render.yaml` and creates:
   - `careeragent-api`
   - `careeragent-dashboard`
+- `buildFilter.paths` is configured so dashboard-only edits do not redeploy API and API-only edits do not redeploy dashboard.
 
 ### 2) Required secrets/env vars for `careeragent-api`
 Set these in Render (Environment tab):
@@ -62,6 +63,7 @@ Set these in Render (Environment tab):
 - `GEMINI_API_KEY` / other LLM keys you use
 - `SERPER_API_KEY` (if using Serper)
 - `TAVILY_API_KEY` (if using Tavily)
+- `LANGGRAPH_STUDIO_URL` (optional but recommended; enables direct LangGraph run-trace link in dashboard analytics)
 - `DATABASE_URL` (if not default sqlite path)
 - any notification keys you use (SendGrid/Resend/Twilio)
 

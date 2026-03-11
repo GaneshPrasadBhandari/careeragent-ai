@@ -180,6 +180,7 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "langsmith":        _langsmith_status(run_id),
         "langgraph":        _langgraph_status(run_id),
         "llm_stack":        _llm_stack_snapshot(),
+        "discovery_diagnostics": {},
     }
 
 
@@ -1119,6 +1120,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         try:
             from careeragent.managers.leadscout_service import LeadScoutService
             scout = LeadScoutService(enable_playwright_scrape=False)
+            state.setdefault("discovery_diagnostics", {})
         except ImportError:
             scout = None
 
@@ -1128,24 +1130,31 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 leads  = await asyncio.wait_for(
                     scout.search_jobs(intent), timeout=90
                 )
+                state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
             else:
                 leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                state["discovery_diagnostics"] = {"providers": {}, "counts": {}, "fallback_reason": "LeadScout service unavailable"}
 
             # Recovery guard: when external providers are unavailable (or return
             # zero leads), keep the L3->L9 pipeline operational with demo leads.
             if not leads:
+                reason = (state.get("discovery_diagnostics", {}) or {}).get("fallback_reason") or "No matching jobs returned from live providers."
                 _log_agent(
                     state,
                     3,
-                    "No live jobs returned from providers; switching to resilient demo lead fallback.",
+                    f"{reason} Switching to resilient demo lead fallback.",
                 )
                 leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                state.setdefault("discovery_diagnostics", {})["used_demo_fallback"] = True
+            else:
+                state.setdefault("discovery_diagnostics", {})["used_demo_fallback"] = False
 
             state["job_leads"]       = leads[: int(state["config"].get("max_jobs", 100))]
             state["jobs_discovered"] = len(state["job_leads"])
             state["layer_debug"]["L3"] = {
                 "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
                 "sample_jobs": leads[:5],
+                "diagnostics": state.get("discovery_diagnostics", {}),
             }
             _record_eval(
                 state,
@@ -1160,6 +1169,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 f"{len(leads)} raw jobs fetched ✓",
                 raw_jobs=len(leads),
                 fallback_mode=("demo" if any(j.get("source") == "demo" for j in leads) else "live"),
+                diagnostics=state.get("discovery_diagnostics", {}),
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
@@ -2133,6 +2143,7 @@ async def get_status(run_id: str):
         "layer_debug":      state.get("layer_debug", {}),
         "evaluations":      state.get("evaluations", [])[-50:],
         "raw_job_leads_preview": state.get("job_leads", [])[:25],
+        "discovery_diagnostics": state.get("discovery_diagnostics", {}),
         "scored_jobs_preview": state.get("scored_jobs", [])[:25],
         "approved_jobs_preview": state.get("approved_jobs", [])[:25],
         "resume_scores":    state.get("resume_scores", {}),

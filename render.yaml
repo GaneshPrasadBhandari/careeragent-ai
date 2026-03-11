@@ -8,6 +8,14 @@ services:
     startCommand: uv run --no-sync uvicorn careeragent.api.main:app --host 0.0.0.0 --port $PORT --app-dir src
     healthCheckPath: /health
     autoDeployTrigger: commit
+    buildFilter:
+      paths:
+        - src/careeragent/api/**
+        - src/careeragent/managers/**
+        - src/careeragent/services/**
+        - src/careeragent/langgraph/**
+        - pyproject.toml
+        - uv.lock
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
@@ -26,6 +34,13 @@ services:
     buildCommand: uv sync --frozen
     startCommand: uv run --no-sync python -m streamlit run app/ui/mission_control.py --server.port $PORT --server.address 0.0.0.0
     autoDeployTrigger: commit
+    buildFilter:
+      paths:
+        - app/ui/**
+        - streamlit/**
+        - pyproject.toml
+        - uv.lock
+        - render.yaml
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8

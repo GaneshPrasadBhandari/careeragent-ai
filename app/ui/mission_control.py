@@ -649,7 +649,12 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         preview = (status.get("approved_jobs_preview") or [])
         ranked_preview = (((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or [])
         if any(bool(job.get("is_demo")) for job in [*preview, *ranked_preview[:10]]):
-            st.info("Live providers returned no jobs, so fallback demo results are shown. Links open board search pages (not guaranteed direct postings).")
+            diagnostics = status.get("discovery_diagnostics") or {}
+            fallback_reason = diagnostics.get("fallback_reason")
+            if fallback_reason:
+                st.info(f"Live providers fell back to demo jobs: {fallback_reason}")
+            else:
+                st.info("Live providers returned no jobs, so fallback demo results are shown. Demo links may open search pages when direct postings are unavailable.")
         st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
         ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", []) or status.get("approved_jobs_preview", [])
         if ranked_jobs:
@@ -1100,6 +1105,7 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
             st.markdown(f"[Open LangGraph run trace]({langgraph.get('dashboard_url')})")
         else:
             st.caption(langgraph.get("note") or "LangGraph trace URL is not configured.")
+            st.code("Set LANGGRAPH_STUDIO_URL=https://smith.langchain.com/o/<workspace>/projects/<project>")
 
     applications = status.get("apply_results") or []
     st.markdown("#### 📌 Application tracking")
