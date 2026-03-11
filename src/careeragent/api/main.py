@@ -277,14 +277,28 @@ def _langsmith_status(run_id: str) -> dict:
     note = None
     if tracing_flag in {"1", "true", "yes", "on"} and not enabled:
         note = "Tracing is enabled but LANGSMITH_API_KEY/LANGCHAIN_API_KEY is missing."
+    dashboard_url = f"{base}/projects?name={project_q}"
+    run_url = f"{base}/o/{workspace}/projects/p/{project_q}/r" if workspace else None
     return {
         "enabled": enabled,
         "project": project,
         "workspace": workspace or None,
-        "dashboard_url": f"{base}/projects?name={project_q}" if enabled else None,
+        "dashboard_url": dashboard_url,
+        "run_url": run_url,
         "run_filter": run_id,
         "note": note,
     }
+
+
+def _select_qualified_jobs(scored: list[dict], threshold: float, *, min_floor: int = 12) -> list[dict]:
+    qualified = [j for j in scored if float(j.get("score") or 0.0) >= float(threshold)]
+    if len(qualified) >= min_floor:
+        return qualified
+
+    # Adaptive fallback for sparse scoring runs: keep top candidates even when
+    # strict thresholding is too aggressive for scraped snippets.
+    top_needed = min(len(scored), max(min_floor, int(len(scored) * 0.25)))
+    return list(scored[:top_needed])
 
 
 def _notify_human_approval_needed(state: dict, run_id: str, action: str, note: str) -> None:
@@ -652,7 +666,7 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     _layer_ok(state, 4, f"{len(scored)} jobs re-scored, top match {state['top_match_score']}% ✓", scored=len(scored), top_score=state["top_match_score"], tools_used=["matcher", "scorer"], attempt_count=1)
 
     _layer_running(state, 5, "Re-ranking jobs after profile update…", tools_used=["ranking_evaluator", "gap_analysis"], attempt_count=1)
-    qualified = [j for j in scored if float(j.get("score") or 0.0) >= threshold]
+    qualified = _select_qualified_jobs(scored, float(threshold))
     qualified = sorted(qualified, key=lambda j: float(j.get("interview_probability_percent") or 0.0), reverse=True)
     state["jobs_approved"] = len(qualified)
     gap = _gap_analysis(state.get("profile") or {}, scored, threshold=threshold)
@@ -894,6 +908,27 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     )
     _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), interviews_predicted=len(state["interviews"]), tools_used=["playwright"], attempt_count=1)
     state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
+
+    if (notif_cfg.get("enable_email") or notif_cfg.get("enable_sms")) and apply_results:
+        notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
+        l7_message = f"Run {run_id}: {len(apply_results)} applications queued at L7."
+        l7_alert = notifier.send_alert(
+            message=l7_message,
+            title="CareerAgent apply queued",
+            to_email=candidate_email,
+            to_phone=candidate_phone,
+            enable_email=bool(notif_cfg.get("enable_email")),
+            enable_sms=bool(notif_cfg.get("enable_sms")),
+        )
+        state.setdefault("notification_log", []).append({
+            "timestamp": _now(),
+            "event": "l7_apply_queued",
+            "result": l7_alert,
+            "recipients": {
+                "email": candidate_email,
+                "phone": candidate_phone,
+            },
+        })
 
     if (not skip_followup_gate) and state.get("config", {}).get("require_followup_approval", True) and apply_results:
         state["status"] = "pending_human_input"
@@ -1185,7 +1220,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         # ── L5: Evaluator + Ranking + HITL ───────────────────────────────────
         await mark_running(5, "Ranking jobs by interview probability…", tools_used=["ranking_evaluator"], attempt_count=1)
         await asyncio.sleep(0.4)
-        qualified  = [j for j in scored if j.get("score", 0) >= threshold]
+        qualified  = _select_qualified_jobs(scored, float(threshold))
         state["jobs_approved"] = len(qualified)
         qualified = sorted(
             qualified,
@@ -1594,49 +1629,49 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
-            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/view/3929934201",
+            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/search/?keywords=AI%20Engineer",
             "location": "Remote", "remote": True, "description": f"Looking for {' '.join(skills)} expert.",
             "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 180000,
         },
         {
             "id": "demo_002", "title": "Backend Software Engineer",
-            "company": "Indeed Sample", "url": "https://www.indeed.com/viewjob?jk=demo002ab1",
+            "company": "Indeed Sample", "url": "https://www.indeed.com/jobs?q=backend+software+engineer",
             "location": "San Francisco, CA", "remote": True, "description": f"Need strong {skills[0] if skills else 'Python'} skills.",
             "source": "demo", "is_demo": True, "salary_min": 140000, "salary_max": 200000,
         },
         {
             "id": "demo_003", "title": "Staff Engineer — Platform",
-            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/job-listing/software-engineer-demo-JV_IC1132348_KO0,17_KE18,22.htm?jl=100927384",
+            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/Job/software-engineer-jobs-SRCH_KO0,17.htm",
             "location": "New York, NY", "remote": False, "description": "Platform team, strong systems background.",
             "source": "demo", "is_demo": True, "salary_min": 160000, "salary_max": 220000,
         },
         {
             "id": "demo_004", "title": "Senior AI Engineer",
-            "company": "MyVisaJobs Sample", "url": "https://www.myvisajobs.com/JobsInfo.aspx?j=demo004",
+            "company": "MyVisaJobs Sample", "url": "https://www.myvisajobs.com/Search_Visa_Sponsor_Job.aspx?j=AI+Engineer",
             "location": "Austin, TX", "remote": True, "description": "H1B-friendly AI engineering role.",
             "source": "demo", "is_demo": True, "salary_min": 125000, "salary_max": 175000,
         },
         {
             "id": "demo_005", "title": "ML Platform Engineer",
-            "company": "ZipRecruiter Sample", "url": "https://www.ziprecruiter.com/jobs/example-company-ml-platform-engineer-demo",
+            "company": "ZipRecruiter Sample", "url": "https://www.ziprecruiter.com/Jobs/ML-Platform-Engineer",
             "location": "Seattle, WA", "remote": False, "description": "MLOps and platform reliability.",
             "source": "demo", "is_demo": True, "salary_min": 145000, "salary_max": 205000,
         },
         {
             "id": "demo_006", "title": "Applied AI Engineer",
-            "company": "Greenhouse Sample", "url": "https://boards.greenhouse.io/example/jobs/1234567",
+            "company": "Greenhouse Sample", "url": "https://boards.greenhouse.io/",
             "location": "Remote", "remote": True, "description": "Production AI systems role.",
             "source": "demo", "is_demo": True, "salary_min": 135000, "salary_max": 195000,
         },
         {
             "id": "demo_007", "title": "AI Solutions Engineer",
-            "company": "Lever Sample", "url": "https://jobs.lever.co/example/abcd1234",
+            "company": "Lever Sample", "url": "https://jobs.lever.co/",
             "location": "Remote", "remote": True, "description": "Enterprise AI delivery and architecture.",
             "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 190000,
         },
         {
             "id": "demo_008", "title": "AI Backend Engineer",
-            "company": "Workday Sample", "url": "https://example.myworkdayjobs.com/en-US/careers/job/San-Francisco/AI-Backend-Engineer_R12345",
+            "company": "Workday Sample", "url": "https://www.myworkdayjobs.com/en-US/recruiting",
             "location": "San Francisco, CA", "remote": False, "description": "Backend + ML services for AI products.",
             "source": "demo", "is_demo": True, "salary_min": 150000, "salary_max": 215000,
         },

@@ -150,8 +150,8 @@ def test_stub_leads_cover_top_sources_with_openable_urls_and_demo_flag():
     assert len(leads) == 8
     assert all(x.get("is_demo") is True for x in leads)
     urls = [str(x.get("url")) for x in leads]
-    assert any("linkedin.com/jobs/view" in u for u in urls)
-    assert any("indeed.com/viewjob" in u for u in urls)
+    assert any("linkedin.com/jobs/search" in u for u in urls)
+    assert any("indeed.com/jobs" in u for u in urls)
     assert any("glassdoor.com" in u for u in urls)
     assert any("myvisajobs.com" in u for u in urls)
 

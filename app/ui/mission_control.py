@@ -1083,11 +1083,16 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
     with lcol1:
         langsmith = status.get("langsmith", {}) or {}
         st.markdown("**LangSmith tracing**")
-        if langsmith.get("enabled") and langsmith.get("dashboard_url"):
+        if langsmith.get("enabled"):
             st.success("Active")
-            st.markdown(f"[Open LangSmith run trace]({langsmith.get('dashboard_url')})")
         else:
-            st.caption("LangSmith disabled. Set LANGCHAIN_TRACING_V2 and LANGSMITH_API_KEY.")
+            st.warning("Tracing currently not active (missing key or tracing env flag).")
+        if langsmith.get("dashboard_url"):
+            st.markdown(f"[Open LangSmith project]({langsmith.get('dashboard_url')})")
+        if langsmith.get("run_url"):
+            st.markdown(f"[Open LangSmith runs]({langsmith.get('run_url')})")
+        if langsmith.get("note"):
+            st.caption(langsmith.get("note"))
     with lcol2:
         langgraph = status.get("langgraph", {}) or {}
         st.markdown("**LangGraph tracing**")
@@ -1112,6 +1117,11 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
             }
             for row in applications
         ], use_container_width=True, hide_index=True)
+        with st.expander("Open application links"):
+            for row in applications:
+                job_url = _normalize_clickable_url(row.get("url", ""))
+                if job_url:
+                    st.markdown(f"- **{row.get('title','Role')}** @ {row.get('company','')} — [Open job page]({job_url})")
     else:
         st.caption("No application data yet.")
 
