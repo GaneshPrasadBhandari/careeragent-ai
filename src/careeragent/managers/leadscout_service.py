@@ -20,8 +20,6 @@ import httpx
 
 log = logging.getLogger("leadscout")
 
-SERPER_KEY      = os.getenv("SERPER_API_KEY", "")
-TAVILY_KEY      = os.getenv("TAVILY_API_KEY", "")
 REQUEST_TIMEOUT = 20.0
 
 TOP_SOURCE_QUOTAS = {
@@ -144,13 +142,29 @@ class LeadScoutService:
     ):
         self.max_per_source = max_results_per_source
         self.enable_playwright = enable_playwright_scrape
+        self.last_search_diagnostics: dict = {
+            "providers": {},
+            "counts": {},
+            "fallback_reason": None,
+        }
 
     # ── Entry point ─────────────────────────────────────────────────────────
 
     async def search_jobs(self, intent_plan: dict) -> list[dict]:
+        serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
+        tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
         queries  = self._build_queries(intent_plan)
         location = self._resolve_location(intent_plan)
         remote   = intent_plan.get("geo_preferences", {}).get("remote", True)
+        diagnostics: dict = {
+            "providers": {
+                "serper": bool(serper_key),
+                "tavily": bool(tavily_key),
+                "remotive": True,
+            },
+            "counts": {"serper_organic": 0, "tavily": 0, "remotive": 0},
+            "fallback_reason": None,
+        }
 
         log.info("LeadScout starting: %d queries, location='%s'", len(queries), location)
         for i, q in enumerate(queries):
@@ -159,8 +173,9 @@ class LeadScoutService:
         # Run all queries concurrently
         tasks = []
         for query in queries:
-            tasks.append(self._search_serper_organic(query, location, remote))
-            tasks.append(self._search_tavily(query, location, remote))
+            tasks.append(self._search_serper_organic(query, location, remote, serper_key=serper_key))
+            tasks.append(self._search_tavily(query, location, remote, tavily_key=tavily_key))
+            tasks.append(self._search_remotive(query, location, remote))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -170,6 +185,8 @@ class LeadScoutService:
                 log.warning("LeadScout source error: %s", batch)
                 continue
             if isinstance(batch, list):
+                for lead in batch:
+                    diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
                 leads.extend(batch)
 
         # Deduplicate by canonical URL
@@ -183,6 +200,13 @@ class LeadScoutService:
         recency_hours = float(intent_plan.get("recency_hours") or 24.0)
         unique = self._filter_by_recency(unique, recency_hours=recency_hours)
         unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
+        if not unique:
+            provider_flags = diagnostics["providers"]
+            if not provider_flags.get("serper") and not provider_flags.get("tavily"):
+                diagnostics["fallback_reason"] = "SERPER_API_KEY/TAVILY_API_KEY missing; using demo fallback when remotive has no matching jobs."
+            else:
+                diagnostics["fallback_reason"] = "Providers responded but returned no matching jobs after quality filters."
+        self.last_search_diagnostics = diagnostics
 
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
@@ -368,8 +392,8 @@ class LeadScoutService:
 
     # ── Source: Serper /search (organic) ────────────────────────────────────
 
-    async def _search_serper_organic(self, query: str, location: str, remote: bool) -> list[JobLead]:
-        if not SERPER_KEY:
+    async def _search_serper_organic(self, query: str, location: str, remote: bool, *, serper_key: str) -> list[JobLead]:
+        if not serper_key:
             log.debug("Serper skipped — SERPER_API_KEY not set")
             return []
         try:
@@ -377,7 +401,7 @@ class LeadScoutService:
             site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS)
             search_q = f"{query} {loc_str} ({site_str})"
             payload  = {"q": search_q, "gl": "us", "hl": "en", "num": self.max_per_source}
-            headers  = {"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"}
+            headers  = {"X-API-KEY": serper_key, "Content-Type": "application/json"}
 
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
                 resp = await client.post(
@@ -419,14 +443,14 @@ class LeadScoutService:
 
     # ── Source: Tavily ───────────────────────────────────────────────────────
 
-    async def _search_tavily(self, query: str, location: str, remote: bool) -> list[JobLead]:
-        if not TAVILY_KEY:
+    async def _search_tavily(self, query: str, location: str, remote: bool, *, tavily_key: str) -> list[JobLead]:
+        if not tavily_key:
             log.debug("Tavily skipped — TAVILY_API_KEY not set")
             return []
         try:
             loc_str = "remote" if remote else location
             payload = {
-                "api_key":         TAVILY_KEY,
+                "api_key":         tavily_key,
                 "query":           f"{query} {loc_str} job opening apply now",
                 "search_depth":    "basic",
                 "max_results":     self.max_per_source,
@@ -465,4 +489,42 @@ class LeadScoutService:
             return leads
         except Exception as exc:
             log.error("Tavily error for '%s': %s", query, exc)
+            return []
+
+    async def _search_remotive(self, query: str, location: str, remote: bool) -> list[JobLead]:
+        try:
+            search_term = " ".join(str(query or "").split()[:6]).strip() or "software engineer"
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                resp = await client.get("https://remotive.com/api/remote-jobs", params={"search": search_term})
+                if resp.status_code != 200:
+                    log.warning("Remotive HTTP %d for: %s", resp.status_code, query)
+                    return []
+                data = resp.json()
+
+            leads: list[JobLead] = []
+            for row in data.get("jobs", [])[: self.max_per_source]:
+                url = _normalize_result_url(row.get("url", ""))
+                title = str(row.get("title", "")).strip()
+                if not url or not title:
+                    continue
+                lead_location = str(row.get("candidate_required_location") or "Remote")
+                if not remote and location and location.lower() not in lead_location.lower():
+                    continue
+                posted = str(row.get("publication_date") or "")
+                company = str(row.get("company_name") or "")
+                leads.append(JobLead(
+                    id=re.sub(r"\W+", "_", f"{company}_{title}")[:40],
+                    title=title,
+                    company=company,
+                    url=url,
+                    location=lead_location,
+                    description=str(row.get("description", ""))[:500],
+                    posted_date=posted,
+                    source="remotive",
+                    remote=True,
+                ))
+            log.info("Remotive: %d leads for: %s", len(leads), query)
+            return leads
+        except Exception as exc:
+            log.error("Remotive error for '%s': %s", query, exc)
             return []
