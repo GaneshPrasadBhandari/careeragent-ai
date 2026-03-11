@@ -31,11 +31,16 @@ def _load_real() -> bool:
         return False
     if Path(spec.origin).resolve() == Path(__file__).resolve():
         return False
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[__name__] = module
-    spec.loader.exec_module(module)
-    globals().update(module.__dict__)
-    return True
+    try:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[__name__] = module
+        spec.loader.exec_module(module)
+        globals().update(module.__dict__)
+        return True
+    except Exception:
+        # Environment may contain an incomplete pydantic install.
+        # Fall back to the lightweight local compatibility shim.
+        return False
 
 
 if not _load_real():

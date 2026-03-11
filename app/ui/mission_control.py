@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from html import escape
 from pathlib import Path
 from typing import Optional
@@ -367,7 +368,7 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
 
 
 def _api_get_jobs(api_base: str, run_id: str) -> list[dict]:
-    resp = _api_get(api_base, f"/hunt/{run_id}/jobs", timeout=5)
+    resp = _api_get(api_base, f"/hunt/{run_id}/jobs?limit=200", timeout=8)
     return resp.get("jobs", []) if resp else []
 
 def _api_get_artifacts(api_base: str, run_id: str) -> dict:
@@ -377,13 +378,22 @@ def _api_get_artifacts(api_base: str, run_id: str) -> dict:
 
 def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict] = None) -> bool:
     try:
-        body = {"action": action, "action_type": action}
+        request_token = uuid.uuid4().hex
+        body = {"action": action, "action_type": action, "request_token": request_token}
         if payload:
             body.update(payload)
-        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
-        if r.status_code == 200:
-            return True
-        st.error(f"Action failed ({r.status_code}): {r.text[:200]}")
+        endpoint = f"{api_base.rstrip('/')}/hunt/{run_id}/action"
+        last_err = None
+        for attempt in range(1, 4):
+            r = requests.post(endpoint, json=body, timeout=45)
+            if r.status_code == 200:
+                return True
+            last_err = f"Action failed ({r.status_code}): {r.text[:200]}"
+            if r.status_code in {502, 503, 504} and attempt < 3:
+                time.sleep(1.2 * attempt)
+                continue
+            break
+        st.error(last_err or "Action failed due to unknown backend response.")
     except Exception as exc:
         st.error(f"Action request failed: {exc}")
     return False
@@ -622,12 +632,14 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
             ]
             st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers.")
             with st.expander("Why these jobs are recommended"):
-                for j in ranked_jobs[:8]:
+                st.caption(f"Showing {len(ranked_jobs)} ranked jobs with explanation and direct links.")
+                for j in ranked_jobs:
+                    job_url = j.get('url') or ''
                     st.markdown(
                         f"- **{j.get('title','')} @ {j.get('company','')}** — "
                         f"match `{j.get('score',0)*100:.1f}%`, interview `{j.get('interview_probability_percent',0):.1f}%`  \n"
                         f"  reasoning: {j.get('llm_reasoning') or 'Skill overlap + ATS alignment'}  \n"
-                        f"  link: {j.get('url') or 'N/A'}"
+                        f"  link: {'[Open job posting](' + job_url + ')' if job_url else 'N/A'}"
                     )
         else:
             selected_ids = []
@@ -1209,6 +1221,16 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         )
         max_jobs = st.slider("How many jobs to scrape today", 20, 150, 80, 5)
         salary_min, salary_max = st.slider("Salary range (USD)", 0, 400000, (80000, 220000), step=10000)
+        top_sources = [
+            "linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
+            "greenhouse.io", "lever.co", "workday.com", "myworkdayjobs.com",
+        ]
+        source_domains = st.multiselect(
+            "Preferred job sites",
+            options=top_sources,
+            default=top_sources,
+            help="Discovery/matching keeps only jobs from selected job boards/career sites.",
+        )
 
         require_ranking_approval = st.checkbox("Require ranking approval (HITL)", value=True)
         require_draft_approval = st.checkbox("Require draft approval before apply", value=True)
@@ -1235,6 +1257,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             "salary_min":               salary_min,
             "salary_max":               salary_max,
             "work_modes":               ["remote"] if remote_only else ["remote", "hybrid", "onsite"],
+            "allowed_job_domains":      source_domains,
             "notifications": {
                 "email": notif_email,
                 "phone": " ".join(notif_phone.split()),

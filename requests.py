@@ -47,6 +47,16 @@ def _load_real_requests() -> object | None:
         else:
             sys.modules.pop("requests", None)
         raise
+
+    # Guard against partially initialized/broken installs that load without
+    # hard failure but miss expected API attributes.
+    if not (hasattr(module, "exceptions") or hasattr(module, "Session")):
+        if existing is not None:
+            sys.modules["requests"] = existing
+        else:
+            sys.modules.pop("requests", None)
+        return None
+
     return module
 
 
