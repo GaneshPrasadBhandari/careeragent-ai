@@ -72,6 +72,7 @@ _build_cover_letter_text = api_main._build_cover_letter_text
 _langsmith_status = api_main._langsmith_status
 _normalize_config = api_main._normalize_config
 _stub_leads = api_main._stub_leads
+_dedupe_jobs = api_main._dedupe_jobs
 _record_feedback_event = api_main._record_feedback_event
 _is_duplicate_action = api_main._is_duplicate_action
 _mark_action_processed = api_main._mark_action_processed
@@ -144,9 +145,22 @@ def test_action_token_idempotency_helpers():
     assert _is_duplicate_action(state, token) is True
 
 
-def test_stub_leads_use_openable_search_urls_and_demo_flag():
-    leads = _stub_leads({"skills": ["AI"]}, max_jobs=3)
-    assert len(leads) == 3
+def test_stub_leads_cover_top_sources_with_openable_urls_and_demo_flag():
+    leads = _stub_leads({"skills": ["AI"]}, max_jobs=8)
+    assert len(leads) == 8
     assert all(x.get("is_demo") is True for x in leads)
-    assert any("/jobs/search" in str(x.get("url")) for x in leads)
-    assert any("indeed.com/jobs" in str(x.get("url")) for x in leads)
+    urls = [str(x.get("url")) for x in leads]
+    assert any("linkedin.com/jobs/view" in u for u in urls)
+    assert any("indeed.com/viewjob" in u for u in urls)
+    assert any("glassdoor.com" in u for u in urls)
+    assert any("myvisajobs.com" in u for u in urls)
+
+
+def test_dedupe_jobs_removes_exact_url_duplicates():
+    jobs = [
+        {"title": "AI Engineer", "company": "Acme", "url": "https://example.com/jobs/1"},
+        {"title": "AI Engineer", "company": "Acme", "url": "https://example.com/jobs/1/"},
+        {"title": "ML Engineer", "company": "Beta", "url": "https://example.com/jobs/2"},
+    ]
+    out = _dedupe_jobs(jobs)
+    assert len(out) == 2

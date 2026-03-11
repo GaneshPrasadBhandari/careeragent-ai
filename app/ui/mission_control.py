@@ -329,9 +329,9 @@ def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests
 
 
 def _api_health(api_base: str) -> bool:
-    for timeout in (3, 6):
+    for timeout in (3, 6, 10):
         resp = _api_get(api_base, "/health", timeout=timeout)
-        if resp is not None and resp.get("status") == "ok":
+        if resp is not None and resp.get("status") in {"ok", "healthy"}:
             return True
     return False
 
