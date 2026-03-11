@@ -31,6 +31,10 @@ def _default_api_base() -> str:
     if api_base:
         return api_base.rstrip("/")
 
+    api_url = os.getenv("API_URL") or os.getenv("BACKEND_URL")
+    if api_url:
+        return api_url.rstrip("/")
+
     api_hostport = os.getenv("API_HOSTPORT")
     if api_hostport:
         return f"http://{api_hostport}"
@@ -46,6 +50,22 @@ def _default_api_base() -> str:
         return render_external_url.replace("-dashboard.onrender.com", "-api.onrender.com").rstrip("/")
 
     return "http://localhost:8000"
+
+
+def _normalize_clickable_url(url: str) -> str:
+    clean = str(url or "").strip()
+    if not clean:
+        return ""
+    if clean.startswith(("http://", "https://")):
+        return clean
+    return f"https://{clean.lstrip('/')}"
+
+
+def _safe_url_text(url: str, limit: int = 120) -> str:
+    text = str(url or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}…"
 
 
 
@@ -626,20 +646,22 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
             selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys()))
             selected_ids = [options[x] for x in selected_labels]
             selected_urls = [
-                j.get("url")
+                _normalize_clickable_url(j.get("url", ""))
                 for j in ranked_jobs
-                if j.get("id") in selected_ids and j.get("url")
+                if j.get("id") in selected_ids and _normalize_clickable_url(j.get("url", ""))
             ]
             st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers.")
             with st.expander("Why these jobs are recommended"):
                 st.caption(f"Showing {len(ranked_jobs)} ranked jobs with explanation and direct links.")
                 for j in ranked_jobs:
-                    job_url = j.get('url') or ''
+                    job_url = _normalize_clickable_url(j.get('url') or '')
+                    display_url = _safe_url_text(job_url)
                     st.markdown(
                         f"- **{j.get('title','')} @ {j.get('company','')}** — "
                         f"match `{j.get('score',0)*100:.1f}%`, interview `{j.get('interview_probability_percent',0):.1f}%`  \n"
                         f"  reasoning: {j.get('llm_reasoning') or 'Skill overlap + ATS alignment'}  \n"
-                        f"  link: {'[Open job posting](' + job_url + ')' if job_url else 'N/A'}"
+                        f"  link: {'[Open job posting](' + job_url + ')' if job_url else 'N/A'}  \n"
+                        f"  url: `{display_url}`"
                     )
         else:
             selected_ids = []
@@ -902,7 +924,8 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
-                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 <a href="{job.get('url','')}" target="_blank" rel="noopener noreferrer">Open posting</a></div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 <a href="{_normalize_clickable_url(job.get('url',''))}" target="_blank" rel="noopener noreferrer">Open posting</a></div>
+                <div style="font-size:10px;color:#5C677D;word-break:break-all">{escape(_safe_url_text(_normalize_clickable_url(job.get('url',''))))}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
@@ -1393,9 +1416,11 @@ def main():
         st.markdown(
             """
             ### What CareerAgent-AI does
-            - Finds high-fit roles aligned to your profile and preferences.
-            - Generates tailored resume/cover-letter drafts with human approval gates.
-            - Tracks outcomes and converts feedback into better future applications.
+            - Finds high-fit, relevant roles aligned to your profile and preferences.
+            - Generates **custom ATS resume + cover letter** drafts per approved job.
+            - Runs human approvals, then can **auto-fill/apply** for approved jobs.
+            - Sends employer notifications/follow-up emails and tracks outcomes.
+            - Recommends tutorials and learning paths when skills are missing.
 
             **Why use it:** reduce manual application effort, improve quality, and create a measurable interview funnel.
             """
@@ -1403,9 +1428,10 @@ def main():
     with intro_right:
         st.markdown("### How to use")
         st.markdown("1. Upload resume in sidebar")
-        st.markdown("2. Start Hunt and review approvals")
-        st.markdown("3. Monitor analytics + share feedback")
-        st.caption("Beta feedback helps the system learn from users and recruiter outcomes.")
+        st.markdown("2. Start Hunt → approve ranked jobs")
+        st.markdown("3. Review custom resume/cover drafts → approve apply/follow-ups")
+        st.markdown("4. Track analytics and use Learning Center for missing skills")
+        st.caption("Beta users should use a deployed API URL so the backend stays online for everyone.")
 
     # ── Stat cards ────────────────────────────────────────────────────────────
     render_stat_cards(status)
