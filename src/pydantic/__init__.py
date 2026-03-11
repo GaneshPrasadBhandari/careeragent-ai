@@ -1,5 +1,5 @@
 """Lightweight fallback shim for environments without pydantic installed.
-This implements only the minimal subset used in unit tests.
+This implements only the subset used by this repository and test tooling.
 """
 from __future__ import annotations
 
@@ -14,13 +14,50 @@ class _FieldSpec:
     default_factory: Callable[[], Any] | None = None
 
 
+@dataclass
+class _PrivateAttrSpec:
+    default: Any = None
+    default_factory: Callable[[], Any] | None = None
+
+
 def Field(default: Any = None, default_factory: Callable[[], Any] | None = None, **_: Any) -> Any:
     return _FieldSpec(default=default, default_factory=default_factory)
+
+
+def PrivateAttr(default: Any = None, default_factory: Callable[[], Any] | None = None) -> Any:
+    return _PrivateAttrSpec(default=default, default_factory=default_factory)
 
 
 def ConfigDict(**kwargs: Any) -> dict[str, Any]:
     """Compatibility shim for pydantic v2 ConfigDict."""
     return dict(kwargs)
+
+
+StrictBool = bool
+StrictInt = int
+StrictFloat = float
+
+
+class ValidationError(ValueError):
+    """Compatibility shim for pydantic.ValidationError."""
+
+
+class TypeAdapter:
+    def __init__(self, tp: Any) -> None:
+        self.tp = tp
+
+    def validate_python(self, value: Any) -> Any:
+        model_validate = getattr(self.tp, "model_validate", None)
+        if callable(model_validate):
+            return model_validate(value)
+        return value
+
+
+def model_validator(*_args: Any, **_kwargs: Any):
+    """Decorator shim used by third-party libs (no-op)."""
+    def _decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        return fn
+    return _decorator
 
 
 class BaseModel:
@@ -38,6 +75,18 @@ class BaseModel:
                     setattr(self, key, deepcopy(raw.default))
             else:
                 setattr(self, key, deepcopy(raw))
+
+        for key, raw in self.__class__.__dict__.items():
+            if isinstance(raw, _PrivateAttrSpec):
+                if raw.default_factory is not None:
+                    setattr(self, key, raw.default_factory())
+                else:
+                    setattr(self, key, deepcopy(raw.default))
+
+
+    @classmethod
+    def model_rebuild(cls, *_args: Any, **_kwargs: Any) -> bool:
+        return True
 
     @classmethod
     def model_validate(cls, value: Any):

@@ -34,6 +34,16 @@ def _default_api_base() -> str:
     if api_hostport:
         return f"http://{api_hostport}"
 
+    render_external_url = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+    render_service_name = (os.getenv("RENDER_SERVICE_NAME") or "").strip()
+
+    if render_service_name.endswith("-dashboard"):
+        inferred = render_service_name.replace("-dashboard", "-api")
+        return f"https://{inferred}.onrender.com"
+
+    if render_external_url and "-dashboard.onrender.com" in render_external_url:
+        return render_external_url.replace("-dashboard.onrender.com", "-api.onrender.com").rstrip("/")
+
     return "http://localhost:8000"
 
 
@@ -1258,7 +1268,17 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None or not is_healthy))
 
         if not is_healthy:
-            st.caption("⚠ Start backend first:\n`uv run uvicorn careeragent.api.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload`")
+            st.markdown(
+                """
+                <div style="margin-top:8px;padding:10px 12px;border-radius:8px;background:#3A1D20;border:1px solid #7F1D1D;color:#FECACA;font-size:13px;line-height:1.45;">
+                    <strong>⚠ Backend is offline.</strong><br/>
+                    Local run command:<br/>
+                    <code style="color:#FDE68A;">uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload</code><br/>
+                    On Render, verify the API service is <em>deployed</em> and this dashboard points to its URL.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         elif resume_bytes is None:
             st.caption("Upload your resume to begin.")
 

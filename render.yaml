@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: .
     buildCommand: uv sync --frozen
-    startCommand: uv run uvicorn careeragent.api.main:app --host 0.0.0.0 --port $PORT --app-dir src
+    startCommand: uv run --no-sync uvicorn careeragent.api.main:app --host 0.0.0.0 --port $PORT --app-dir src
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
@@ -24,8 +24,7 @@ services:
     plan: free
     rootDir: .
     buildCommand: uv sync --frozen
-    #startCommand: uv run streamlit run app/ui/mission_control.py --server.port $PORT --server.address 0.0.0.0
-    startCommand: uv run streamlit run app/ui/mission_control.py
+    startCommand: uv run --no-sync streamlit run app/ui/mission_control.py --server.port $PORT --server.address 0.0.0.0
     autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
