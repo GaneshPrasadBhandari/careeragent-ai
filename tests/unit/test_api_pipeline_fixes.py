@@ -71,6 +71,7 @@ _augment_scored_jobs = api_main._augment_scored_jobs
 _build_cover_letter_text = api_main._build_cover_letter_text
 _langsmith_status = api_main._langsmith_status
 _normalize_config = api_main._normalize_config
+_stub_leads = api_main._stub_leads
 _record_feedback_event = api_main._record_feedback_event
 _is_duplicate_action = api_main._is_duplicate_action
 _mark_action_processed = api_main._mark_action_processed
@@ -141,3 +142,11 @@ def test_action_token_idempotency_helpers():
     assert _is_duplicate_action(state, token) is False
     _mark_action_processed(state, token)
     assert _is_duplicate_action(state, token) is True
+
+
+def test_stub_leads_use_openable_search_urls_and_demo_flag():
+    leads = _stub_leads({"skills": ["AI"]}, max_jobs=3)
+    assert len(leads) == 3
+    assert all(x.get("is_demo") is True for x in leads)
+    assert any("/jobs/search" in str(x.get("url")) for x in leads)
+    assert any("indeed.com/jobs" in str(x.get("url")) for x in leads)

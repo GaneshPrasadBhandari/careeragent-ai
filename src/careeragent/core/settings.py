@@ -96,8 +96,11 @@ class Settings(BaseModel):
 
 def bootstrap_langsmith(s: Settings) -> None:
     langchain_key = (s.LANGCHAIN_API_KEY or "").strip()
-    langsmith_key = (s.LANGSMITH_API_KEY or "").strip() or langchain_key or "local-dev-langsmith-key"
-    os.environ["LANGSMITH_API_KEY"] = langsmith_key
+    langsmith_key = (s.LANGSMITH_API_KEY or "").strip() or langchain_key
+    if langsmith_key:
+        os.environ["LANGSMITH_API_KEY"] = langsmith_key
+    else:
+        os.environ.pop("LANGSMITH_API_KEY", None)
     os.environ["LANGCHAIN_API_KEY"] = langchain_key or langsmith_key
     tracing = str(s.LANGSMITH_TRACING or s.LANGCHAIN_TRACING_V2 or "true")
     project = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-phase6")

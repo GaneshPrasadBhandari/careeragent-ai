@@ -15,3 +15,13 @@ def test_bootstrap_langsmith_sets_both_tracing_flags(monkeypatch):
     assert os.environ["LANGCHAIN_TRACING_V2"] == "true"
     assert os.environ["LANGSMITH_PROJECT"] == "careeragent-ai"
     assert os.environ["LANGCHAIN_PROJECT"] == "careeragent-ai"
+
+
+def test_bootstrap_langsmith_does_not_inject_fake_api_key(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    s = Settings(LANGSMITH_TRACING="true")
+
+    bootstrap_langsmith(s)
+
+    assert "LANGSMITH_API_KEY" not in os.environ
