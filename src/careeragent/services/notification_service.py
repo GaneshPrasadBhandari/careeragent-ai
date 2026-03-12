@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import smtplib
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -66,6 +68,38 @@ class NotificationService:
             return {"sent": r.status_code < 300, "status_code": r.status_code, "channel": "resend"}
         except Exception as e:
             return {"sent": False, "channel": "resend", "error": str(e)}
+
+    def _send_smtp(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
+        host = str(getattr(self._settings, "SMTP_HOST", "") or "").strip()
+        username = str(getattr(self._settings, "SMTP_USERNAME", "") or "").strip()
+        password = str(getattr(self._settings, "SMTP_PASSWORD", "") or "").strip()
+        from_addr = str((getattr(self._settings, "SMTP_FROM_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
+        to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or "")).strip()
+        port_raw = getattr(self._settings, "SMTP_PORT", 587)
+        use_tls = str(getattr(self._settings, "SMTP_USE_TLS", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            port = int(port_raw)
+        except Exception:
+            port = 587
+        if not (host and from_addr and to_addr):
+            return {"sent": False, "skipped": True, "reason": "smtp_not_configured", "to": to_addr}
+        if self._dry_run:
+            return {"sent": False, "dry_run": True, "to": to_addr, "channel": "smtp"}
+        try:
+            message = MIMEText(body)
+            message["Subject"] = subject
+            message["From"] = formataddr(("CareerAgent", from_addr))
+            message["To"] = to_addr
+
+            with smtplib.SMTP(host=host, port=port, timeout=15) as server:
+                if use_tls:
+                    server.starttls()
+                if username and password:
+                    server.login(username, password)
+                server.sendmail(from_addr, [to_addr], message.as_string())
+            return {"sent": True, "channel": "smtp", "to": to_addr}
+        except Exception as e:
+            return {"sent": False, "channel": "smtp", "error": str(e), "to": to_addr}
 
     def _send_sendgrid(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         api_key = str(getattr(self._settings, "SENDGRID_API_KEY", "") or "").strip()
@@ -133,7 +167,10 @@ class NotificationService:
                 resend_res = self._send_resend(subject=title, body=message, to_addr=to_email)
                 email_results.append(resend_res)
                 if not resend_res.get("sent"):
-                    email_results.append(self._send_sendgrid(subject=title, body=message, to_addr=to_email))
+                    sendgrid_res = self._send_sendgrid(subject=title, body=message, to_addr=to_email)
+                    email_results.append(sendgrid_res)
+                    if not sendgrid_res.get("sent"):
+                        email_results.append(self._send_smtp(subject=title, body=message, to_addr=to_email))
         else:
             email_results.append({"sent": False, "skipped": True, "reason": "email_disabled"})
 

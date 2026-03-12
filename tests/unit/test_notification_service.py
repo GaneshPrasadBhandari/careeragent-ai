@@ -43,3 +43,13 @@ def test_twilio_client_secret_alias_is_used_for_sms() -> None:
     out = svc.send_alert(message="hello", title="status", to_phone="+14155550100", enable_email=False, enable_sms=True)
     assert out["sms"].get("dry_run") is True
     assert out["sms"].get("to") == "+14155550100"
+
+
+def test_send_alert_attempts_smtp_as_final_email_fallback() -> None:
+    svc = NotificationService(settings=_FakeSettings(), dry_run=True)
+    out = svc.send_alert(message="hello", title="status", to_email="user@example.com", enable_sms=False, enable_email=True)
+    channels = [x.get("channel") for x in out.get("email", [])]
+    reasons = [x.get("reason") for x in out.get("email", [])]
+    assert "resend" in channels
+    assert "sendgrid_not_configured" in reasons
+    assert "smtp_not_configured" in reasons

@@ -177,7 +177,7 @@ def test_role_relevance_filter_returns_best_aligned_subset_when_sparse():
 
     out = _apply_role_relevance_filter(jobs, cfg)
 
-    assert len(out) == 16
+    assert len(out) == 28
     assert all("role_relevance" in j for j in out)
 
 

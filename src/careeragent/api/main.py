@@ -239,8 +239,12 @@ def _normalize_config(config: dict) -> dict:
 
 
 def _sanitize_phone(phone: str) -> str:
-    compact = "".join(str(phone or "").strip().split())
-    return compact
+    raw = str(phone or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return "+" + "".join(ch for ch in raw[1:] if ch.isdigit())
+    return "".join(ch for ch in raw if ch.isdigit())
 
 
 def _is_duplicate_action(state: dict, token: str) -> bool:
@@ -268,7 +272,9 @@ def _langsmith_status(run_id: str) -> dict:
         or os.getenv("LANGCHAIN_TRACING")
         or ""
     ).strip().lower()
-    enabled = tracing_flag in {"1", "true", "yes", "on"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
+    tracing_enabled = tracing_flag in {"1", "true", "yes", "on"}
+    api_key = str(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY") or "").strip()
+    enabled = tracing_enabled and bool(api_key)
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai-new").strip().strip('"')
     workspace_raw = str(os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
@@ -276,10 +282,12 @@ def _langsmith_status(run_id: str) -> dict:
     base = f"{endpoint}/o/{workspace}" if workspace else endpoint
     project_q = quote_plus(project)
     note = None
-    if tracing_flag in {"1", "true", "yes", "on"} and not enabled:
+    if tracing_enabled and not api_key:
         note = "Tracing is enabled but LANGSMITH_API_KEY/LANGCHAIN_API_KEY is missing."
+    elif api_key and not tracing_enabled:
+        note = "LangSmith API key found but tracing is off. Set LANGSMITH_TRACING=true."
     dashboard_url = f"{base}/projects?name={project_q}"
-    run_url = f"{base}/o/{workspace}/projects/p/{project_q}/r" if workspace else None
+    run_url = f"{base}/projects/p/{project_q}/r" if workspace else None
     return {
         "enabled": enabled,
         "project": project,
@@ -288,6 +296,8 @@ def _langsmith_status(run_id: str) -> dict:
         "run_url": run_url,
         "run_filter": run_id,
         "note": note,
+        "tracing_flag": tracing_flag or None,
+        "has_api_key": bool(api_key),
     }
 
 
@@ -298,7 +308,7 @@ def _select_qualified_jobs(scored: list[dict], threshold: float, *, min_floor: i
 
     # Adaptive fallback for sparse scoring runs: keep top candidates even when
     # strict thresholding is too aggressive for scraped snippets.
-    top_needed = min(len(scored), max(min_floor, int(len(scored) * 0.30)))
+    top_needed = min(len(scored), max(min_floor, 20, int(len(scored) * 0.50)))
     return list(scored[:top_needed])
 
 
@@ -1144,7 +1154,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
         try:
             from careeragent.managers.leadscout_service import LeadScoutService
-            scout = LeadScoutService(enable_playwright_scrape=False)
+            scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
             state.setdefault("discovery_diagnostics", {})
         except ImportError:
             scout = None
@@ -1658,6 +1668,8 @@ def _build_intent(profile: dict, config: dict) -> dict:
         "salary_min_usd":    config.get("salary_min", 90_000),
         "salary_max_usd":    config.get("salary_max", 200_000),
         "recency_hours":     int(config.get("posted_within_hours", 168) or 168),
+        "max_jobs":          int(config.get("max_jobs", 80) or 80),
+        "allowed_domains":   list(config.get("allowed_job_domains") or []),
     }
 
 
@@ -1809,12 +1821,12 @@ def _apply_role_relevance_filter(jobs: list[dict], config: dict) -> list[dict]:
             filtered.append(job2)
 
     total = len(with_relevance)
-    minimum_expected = max(12, int(total * 0.20))
+    minimum_expected = max(20, int(total * 0.35))
     if len(filtered) >= minimum_expected or total < 20:
         return filtered
 
     # Adaptive relaxation: slightly lower threshold once, but never disable role filtering.
-    relaxed_minimum = min(0.35, minimum)
+    relaxed_minimum = max(0.05, minimum - 0.15)
     relaxed = [j for j in with_relevance if float(j.get("role_relevance") or 0.0) >= relaxed_minimum]
     if len(relaxed) >= minimum_expected:
         return relaxed

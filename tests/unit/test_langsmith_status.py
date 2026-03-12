@@ -51,3 +51,27 @@ def test_langsmith_status_enabled_with_langchain_tracing_legacy_flag(monkeypatch
     status = langsmith_status('run_legacy')
 
     assert status['enabled'] is True
+
+
+def test_langsmith_status_workspace_run_url_not_duplicated(monkeypatch):
+    langsmith_status = _load_langsmith_status_func()
+    monkeypatch.setenv('LANGSMITH_TRACING', 'true')
+    monkeypatch.setenv('LANGSMITH_API_KEY', 'key')
+    monkeypatch.setenv('LANGSMITH_PROJECT', 'careeragent-ai')
+    monkeypatch.setenv('LANGSMITH_WORKSPACE_ID', '11111111-2222-3333-4444-555555555555')
+
+    status = langsmith_status('run_abc')
+
+    assert status['run_url'] == 'https://smith.langchain.com/o/11111111-2222-3333-4444-555555555555/projects/p/careeragent-ai/r'
+    assert '/o/11111111-2222-3333-4444-555555555555/o/' not in status['run_url']
+
+
+def test_langsmith_status_note_when_key_exists_but_tracing_disabled(monkeypatch):
+    langsmith_status = _load_langsmith_status_func()
+    monkeypatch.setenv('LANGSMITH_TRACING', 'false')
+    monkeypatch.setenv('LANGSMITH_API_KEY', 'key')
+
+    status = langsmith_status('run_disabled')
+
+    assert status['enabled'] is False
+    assert 'tracing is off' in (status.get('note') or '').lower()
