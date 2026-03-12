@@ -25,6 +25,9 @@ from careeragent.tools.llm_tools import GeminiClient
 log = logging.getLogger("leadscout")
 
 REQUEST_TIMEOUT = 20.0
+LLM_QUERY_TIMEOUT_SECONDS = 8.0
+SEARCH_TASK_TIMEOUT_SECONDS = 25.0
+RANKING_TIMEOUT_SECONDS = 8.0
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -165,7 +168,14 @@ class LeadScoutService:
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
         queries  = self._build_queries(intent_plan)
-        llm_queries = await asyncio.to_thread(self._llm_expand_queries, intent_plan, queries)
+        try:
+            llm_queries = await asyncio.wait_for(
+                asyncio.to_thread(self._llm_expand_queries, intent_plan, queries),
+                timeout=LLM_QUERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            llm_queries = []
+            log.warning("LeadScout query expansion timed out after %.1fs; using baseline queries.", LLM_QUERY_TIMEOUT_SECONDS)
         if llm_queries:
             for q in llm_queries:
                 if q not in queries:
@@ -190,19 +200,36 @@ class LeadScoutService:
             log.info("  Query[%d]: %s", i, q)
 
         # Run all queries concurrently
-        tasks = []
+        tasks: list[asyncio.Task[list[JobLead]]] = []
         for query in queries:
-            tasks.append(self._search_serper_organic(query, location, remote, serper_key=serper_key))
-            tasks.append(self._search_tavily(query, location, remote, tavily_key=tavily_key))
-            tasks.append(self._search_remotive(query, location, remote))
+            tasks.append(asyncio.create_task(self._search_serper_organic(query, location, remote, serper_key=serper_key)))
+            tasks.append(asyncio.create_task(self._search_tavily(query, location, remote, tavily_key=tavily_key)))
+            tasks.append(asyncio.create_task(self._search_remotive(query, location, remote)))
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        done, pending = await asyncio.wait(tasks, timeout=SEARCH_TASK_TIMEOUT_SECONDS)
+        if pending:
+            log.warning(
+                "LeadScout timed out waiting for %d source tasks after %.1fs; continuing with partial results.",
+                len(pending),
+                SEARCH_TASK_TIMEOUT_SECONDS,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        results: list[list[JobLead]] = []
+        for task in done:
+            if task.cancelled():
+                continue
+            try:
+                batch = task.result()
+            except Exception as exc:
+                log.warning("LeadScout source error: %s", exc)
+                continue
+            results.append(batch)
 
         leads: list[JobLead] = []
         for batch in results:
-            if isinstance(batch, Exception):
-                log.warning("LeadScout source error: %s", batch)
-                continue
             if isinstance(batch, list):
                 for lead in batch:
                     diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
@@ -226,7 +253,13 @@ class LeadScoutService:
         if len(unique) < target_count:
             unique = self._backfill_curated_search_urls(unique, intent_plan=intent_plan, target_count=target_count)
 
-        unique = await asyncio.to_thread(self._rank_leads_hybrid, unique, intent_plan)
+        try:
+            unique = await asyncio.wait_for(
+                asyncio.to_thread(self._rank_leads_hybrid, unique, intent_plan),
+                timeout=RANKING_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log.warning("LeadScout ranking timed out after %.1fs; using unrated ordering.", RANKING_TIMEOUT_SECONDS)
         if not unique:
             provider_flags = diagnostics["providers"]
             if not provider_flags.get("serper") and not provider_flags.get("tavily"):
