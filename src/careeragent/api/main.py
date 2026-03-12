@@ -1767,12 +1767,30 @@ def _role_relevance(job: dict, target_roles: list[str]) -> float:
         return 1.0
     text = " ".join(str(job.get(k) or "") for k in ("title", "description", "snippet", "company")).lower()
     best = 0.0
+
+    alias_map: dict[str, list[str]] = {
+        "ai engineer": ["ai engineer", "artificial intelligence engineer", "applied ai engineer"],
+        "ai solution architect": ["ai solution architect", "ai solutions architect", "solutions architect ai", "ai architect"],
+        "genai sol architect": ["genai architect", "generative ai architect", "llm architect", "genai solution architect"],
+        "principal data scientist": ["principal data scientist", "lead data scientist", "staff data scientist"],
+    }
+    generic_tokens = {"engineer", "scientist", "architect", "developer", "principal", "senior", "staff", "lead", "solution", "solutions", "data"}
+
     for role in target_roles:
-        tokens = [tok for tok in re.split(r"\W+", str(role).lower()) if len(tok) >= 3]
-        if not tokens:
-            continue
-        overlap = sum(1 for tok in tokens if tok in text)
-        best = max(best, overlap / max(1, len(tokens)))
+        role_low = str(role).lower()
+        candidates = alias_map.get(role_low, [role_low])
+        for cand in candidates:
+            tokens = [tok for tok in re.split(r"\W+", cand) if len(tok) >= 3]
+            if not tokens:
+                continue
+            overlap_tokens = [tok for tok in tokens if tok in text]
+            overlap = len(overlap_tokens)
+            score = overlap / max(1, len(tokens))
+            if cand in text:
+                score = min(1.0, score + 0.35)
+            elif overlap_tokens and not any(tok not in generic_tokens for tok in overlap_tokens):
+                score = min(score, 0.34)
+            best = max(best, score)
     return round(best, 4)
 
 
@@ -1790,25 +1808,20 @@ def _apply_role_relevance_filter(jobs: list[dict], config: dict) -> list[dict]:
         if role_rel >= minimum:
             filtered.append(job2)
 
-    # Prevent aggressive role token filtering from collapsing viable ranking volume.
-    # This commonly happens when users enter broad strategy text instead of titles.
     total = len(with_relevance)
-    if total < 20:
-        return filtered
-
     minimum_expected = max(12, int(total * 0.20))
-    if len(filtered) >= minimum_expected:
+    if len(filtered) >= minimum_expected or total < 20:
         return filtered
 
-    # Adaptive relaxation: if strict minimum is too sparse, lower it once.
-    relaxed_minimum = min(0.10, minimum)
+    # Adaptive relaxation: slightly lower threshold once, but never disable role filtering.
+    relaxed_minimum = min(0.35, minimum)
     relaxed = [j for j in with_relevance if float(j.get("role_relevance") or 0.0) >= relaxed_minimum]
     if len(relaxed) >= minimum_expected:
         return relaxed
 
-    # Last-resort fallback: preserve discovery volume and rely on scoring/ranking
-    # instead of hard-dropping jobs at this stage.
-    return with_relevance
+    # Last-resort fallback: keep only best role-aligned subset instead of all jobs.
+    ranked = sorted(with_relevance, key=lambda j: float(j.get("role_relevance") or 0.0), reverse=True)
+    return ranked[:minimum_expected]
 
 
 @traceable(name="api.stub_score")
