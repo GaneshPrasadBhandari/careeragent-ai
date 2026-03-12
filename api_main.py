@@ -29,6 +29,11 @@ _FALLBACK_ENABLED = False
 _FALLBACK_ERROR: ModuleNotFoundError | None = None
 
 
+def _is_health_path(path: str) -> bool:
+    normalized = (path or "/").split("?", 1)[0].rstrip("/") or "/"
+    return normalized in {"/", "/health", "/healthz", "/ready", "/readyz"}
+
+
 def _fallback_payload(status_code: int) -> bytes:
     error_name = _FALLBACK_ERROR.name if _FALLBACK_ERROR else "unknown"
     return json.dumps(
@@ -49,7 +54,7 @@ def _dependency_missing_app(error: ModuleNotFoundError):
             return
 
         path = str(scope.get("path") or "/")
-        status = 200 if path == "/health" else 503
+        status = 200 if _is_health_path(path) else 503
         body = _fallback_payload(status)
         await send(
             {
@@ -69,7 +74,7 @@ def _dependency_missing_app(error: ModuleNotFoundError):
 def _run_fallback_http(host: str = "127.0.0.1", port: int = 8000) -> None:
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
-            status = 200 if self.path == "/health" else 503
+            status = 200 if _is_health_path(self.path) else 503
             body = _fallback_payload(status)
             self.send_response(status)
             self.send_header("Content-Type", "application/json")

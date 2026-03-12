@@ -44,7 +44,13 @@ def test_dependency_fallback_health_returns_200_json() -> None:
     assert payload["backend_dependency_missing"] is True
 
 
-def test_dependency_fallback_non_health_returns_503_json() -> None:
+def test_dependency_fallback_root_returns_200_json() -> None:
     status, payload = _call_asgi("/")
+    assert status == 200
+    assert payload["status"] == "ok"
+
+
+def test_dependency_fallback_non_health_returns_503_json() -> None:
+    status, payload = _call_asgi("/not-a-health-endpoint")
     assert status == 503
     assert payload["error"] == "backend_dependency_missing"
