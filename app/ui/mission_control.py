@@ -60,7 +60,10 @@ def _resolve_api_base(raw_value: str) -> str:
         return "http://localhost:8000"
 
     if not clean.startswith(("http://", "https://")):
-        clean = f"https://{clean.lstrip('/')}"
+        host_hint = clean.split("/", 1)[0].split(":", 1)[0].strip().lower()
+        local_hosts = {"localhost", "127.0.0.1", "0.0.0.0"}
+        scheme = "http" if host_hint in local_hosts else "https"
+        clean = f"{scheme}://{clean.lstrip('/')}"
 
     parsed = urlparse(clean)
     host = (parsed.netloc or "").strip().lower()
