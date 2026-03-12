@@ -41,6 +41,12 @@ class Settings(BaseModel):
     RESEND_API_KEY: Optional[str] = None
     SENDER_EMAIL: Optional[str] = None
     SENDGRID_API_KEY: Optional[str] = None
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_USE_TLS: str = "true"
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_CLIENT_ID: Optional[str] = None
     TWILIO_CLIENT_SECRET: Optional[str] = None
@@ -80,6 +86,12 @@ class Settings(BaseModel):
                 "RESEND_API_KEY",
                 "SENDER_EMAIL",
                 "SENDGRID_API_KEY",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_USERNAME",
+                "SMTP_PASSWORD",
+                "SMTP_FROM_EMAIL",
+                "SMTP_USE_TLS",
                 "TWILIO_ACCOUNT_SID",
                 "TWILIO_AUTH_TOKEN",
                 "TWILIO_CLIENT_ID",

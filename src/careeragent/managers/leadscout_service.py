@@ -8,15 +8,19 @@ Uses Serper /search organic + Tavily as primary sources.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 from typing import Optional
 
 import httpx
+
+from careeragent.core.settings import Settings
+from careeragent.tools.llm_tools import GeminiClient
 
 log = logging.getLogger("leadscout")
 
@@ -143,6 +147,12 @@ class LeadScoutService:
     ):
         self.max_per_source = max_results_per_source
         self.enable_playwright = enable_playwright_scrape
+        self._settings = Settings()
+        self._llm_clients: list[GeminiClient] = [
+            GeminiClient(self._settings, model="gemini-1.5-flash"),
+            GeminiClient(self._settings, model="gemini-1.5-pro"),
+            GeminiClient(self._settings, model="gemini-2.0-flash-exp"),
+        ]
         self.last_search_diagnostics: dict = {
             "providers": {},
             "counts": {},
@@ -155,6 +165,12 @@ class LeadScoutService:
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
         queries  = self._build_queries(intent_plan)
+        llm_queries = await asyncio.to_thread(self._llm_expand_queries, intent_plan, queries)
+        if llm_queries:
+            for q in llm_queries:
+                if q not in queries:
+                    queries.append(q)
+            queries = queries[:18]
         location = self._resolve_location(intent_plan)
         remote   = intent_plan.get("geo_preferences", {}).get("remote", True)
         diagnostics: dict = {
@@ -162,6 +178,8 @@ class LeadScoutService:
                 "serper": bool(serper_key),
                 "tavily": bool(tavily_key),
                 "remotive": True,
+                "llm_query_planner": bool(self._settings.GEMINI_API_KEY),
+                "llm_ranker": bool(self._settings.GEMINI_API_KEY),
             },
             "counts": {"serper_organic": 0, "tavily": 0, "remotive": 0},
             "fallback_reason": None,
@@ -203,6 +221,12 @@ class LeadScoutService:
         unique = self._filter_by_role_relevance(unique, intent_plan=intent_plan)
         unique = self._filter_by_recency(unique, recency_hours=recency_hours)
         unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
+
+        target_count = int(intent_plan.get("max_jobs") or 80)
+        if len(unique) < target_count:
+            unique = self._backfill_curated_search_urls(unique, intent_plan=intent_plan, target_count=target_count)
+
+        unique = await asyncio.to_thread(self._rank_leads_hybrid, unique, intent_plan)
         if not unique:
             provider_flags = diagnostics["providers"]
             if not provider_flags.get("serper") and not provider_flags.get("tavily"):
@@ -358,6 +382,145 @@ class LeadScoutService:
             selected_urls.add(lead.url)
 
         return selected
+
+    def _llm_expand_queries(self, intent_plan: dict, base_queries: list[str]) -> list[str]:
+        if not self._settings.GEMINI_API_KEY:
+            return []
+        roles = [str(r).strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
+        skills = [str(k).strip() for k in (intent_plan.get("keywords") or []) if str(k).strip()][:20]
+        profile = intent_plan.get("extracted_profile") or {}
+        summary = str(profile.get("summary") or "")[:700]
+        prompt = (
+            "Generate up to 10 job-search queries for high-precision discovery. Return JSON only: "
+            "{\"queries\":[...]}\n"
+            f"Target roles: {roles}\n"
+            f"Skills: {skills}\n"
+            f"Profile summary: {summary}\n"
+            f"Existing queries: {base_queries[:8]}\n"
+            "Need a mix of exact-title, adjacent-title, and keyword-context queries for US/remote hiring."
+        )
+        for client in self._llm_clients:
+            out = client.generate_json(prompt, temperature=0.2, max_tokens=600)
+            if not isinstance(out, dict):
+                continue
+            queries = [str(q).strip() for q in (out.get("queries") or []) if str(q).strip()]
+            if queries:
+                return queries[:10]
+        return []
+
+    def _hybrid_relevance_score(self, lead: JobLead, intent_plan: dict) -> tuple[float, str]:
+        roles = [str(r).lower().strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
+        keywords = [str(k).lower().strip() for k in (intent_plan.get("keywords") or []) if str(k).strip()]
+        text = " ".join([lead.title, lead.company, lead.description]).lower()
+
+        role_hits = sum(1 for r in roles if r and r in text)
+        kw_hits = sum(1 for k in keywords[:30] if k and k in text)
+        semantic_proxy = 0.0
+        if roles:
+            semantic_proxy += min(1.0, role_hits / max(1, len(roles)))
+        if keywords:
+            semantic_proxy += min(1.0, kw_hits / max(3, min(len(keywords), 12)))
+        semantic_proxy = semantic_proxy / 2.0
+
+        context_bonus = 0.12 if lead.remote else 0.0
+        if lead.posted_hours_ago is not None and int(lead.posted_hours_ago) <= 72:
+            context_bonus += 0.12
+        score = max(0.0, min(1.0, 0.75 * semantic_proxy + context_bonus))
+        reason = f"role_hits={role_hits}, keyword_hits={kw_hits}, remote={lead.remote}, recency_h={lead.posted_hours_ago}"
+        return score, reason
+
+    def _llm_rank_boosts(self, leads: list[JobLead], intent_plan: dict) -> dict[str, float]:
+        if not self._settings.GEMINI_API_KEY or not leads:
+            return {}
+        roles = [str(r).strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
+        skills = [str(k).strip() for k in (intent_plan.get("keywords") or []) if str(k).strip()][:20]
+        payload = [
+            {"id": lead.id, "title": lead.title, "company": lead.company, "desc": lead.description[:220]}
+            for lead in leads[:40]
+        ]
+        prompt = (
+            "Rank these jobs for candidate fit from 0..1 using role alignment, skill overlap, and responsibility context. "
+            "Return JSON only as {\"scores\":[{\"id\":...,\"score\":0.0,\"reason\":...}]}.\n"
+            f"Target roles: {roles}\nSkills: {skills}\nJobs: {json.dumps(payload)}"
+        )
+        for client in self._llm_clients:
+            out = client.generate_json(prompt, temperature=0.1, max_tokens=1200)
+            if not isinstance(out, dict):
+                continue
+            scores = {}
+            for row in (out.get("scores") or []):
+                jid = str((row or {}).get("id") or "").strip()
+                if not jid:
+                    continue
+                try:
+                    val = float((row or {}).get("score") or 0.0)
+                except Exception:
+                    val = 0.0
+                scores[jid] = max(0.0, min(1.0, val))
+            if scores:
+                return scores
+        return {}
+
+    def _rank_leads_hybrid(self, leads: list[JobLead], intent_plan: dict) -> list[JobLead]:
+        if not leads:
+            return leads
+        llm_boost = self._llm_rank_boosts(leads, intent_plan)
+        scored: list[tuple[float, JobLead]] = []
+        for lead in leads:
+            base, reason = self._hybrid_relevance_score(lead, intent_plan)
+            boost = float(llm_boost.get(lead.id, 0.0))
+            final = (0.72 * base) + (0.28 * boost if boost > 0 else 0.0)
+            lead.description = (lead.description or "")[:430] + (" | rank_reason: " + reason)
+            scored.append((final, lead))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [lead for _, lead in scored]
+
+    def _backfill_curated_search_urls(self, leads: list[JobLead], *, intent_plan: dict, target_count: int) -> list[JobLead]:
+        existing = list(leads)
+        seen = {x.url for x in existing if x.url}
+        roles = [str(r).strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()] or ["Software Engineer"]
+        keywords = [str(k).strip() for k in (intent_plan.get("keywords") or []) if str(k).strip()][:8]
+        domains = [
+            "linkedin.com/jobs/search",
+            "indeed.com/jobs",
+            "glassdoor.com/Job/jobs.htm",
+            "ziprecruiter.com/Jobs",
+            "boards.greenhouse.io",
+            "jobs.lever.co",
+            "myworkdayjobs.com",
+        ]
+        idx = 0
+        while len(existing) < target_count:
+            role = roles[idx % len(roles)]
+            kw = keywords[idx % len(keywords)] if keywords else ""
+            dom = domains[idx % len(domains)]
+            q = quote_plus((f"{role} {kw}").strip())
+            if "linkedin" in dom:
+                url = f"https://www.{dom}/?keywords={q}"
+            elif "indeed" in dom:
+                url = f"https://www.{dom}?q={q}"
+            elif "glassdoor" in dom:
+                url = f"https://www.{dom}?sc.keyword={q}"
+            else:
+                url = f"https://www.{dom}?q={q}"
+            idx += 1
+            if url in seen:
+                continue
+            seen.add(url)
+            existing.append(JobLead(
+                id=f"backfill_{idx:03d}",
+                title=role,
+                company=dom.split('/')[0],
+                url=url,
+                location="Remote" if intent_plan.get("geo_preferences", {}).get("remote", True) else self._resolve_location(intent_plan),
+                remote=bool(intent_plan.get("geo_preferences", {}).get("remote", True)),
+                description=f"Backfilled discovery query for {role}. Skills context: {', '.join(keywords[:4])}",
+                source="query_backfill",
+                posted_hours_ago=(idx % 72) + 1,
+            ))
+            if idx > target_count * 3:
+                break
+        return existing
 
     # Aliases
     find_jobs   = search_jobs

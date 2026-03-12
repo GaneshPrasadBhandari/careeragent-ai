@@ -50,3 +50,36 @@ def test_role_filter_keeps_target_titles_only() -> None:
     assert "1" in ids
     assert "3" in ids
     assert "2" not in ids
+
+
+def test_backfill_curated_search_urls_reaches_target_count() -> None:
+    svc = LeadScoutService(max_results_per_source=3)
+    leads = [
+        JobLead(id="1", title="AI Engineer", company="Acme", url="https://www.linkedin.com/jobs/view/1", description="ai ml")
+    ]
+    out = svc._backfill_curated_search_urls(
+        leads,
+        intent_plan={"target_roles": ["AI Engineer"], "keywords": ["python", "llm"], "geo_preferences": {"remote": True}},
+        target_count=12,
+    )
+    assert len(out) >= 12
+    assert any(x.source == "query_backfill" for x in out)
+
+
+def test_hybrid_relevance_score_rewards_role_keyword_overlap() -> None:
+    svc = LeadScoutService(max_results_per_source=3)
+    lead = JobLead(
+        id="x",
+        title="Senior AI Engineer",
+        company="Acme",
+        url="https://example.com/job/x",
+        description="python llm rag production systems",
+        remote=True,
+        posted_hours_ago=12,
+    )
+    score, reason = svc._hybrid_relevance_score(
+        lead,
+        {"target_roles": ["AI Engineer"], "keywords": ["python", "llm", "rag"]},
+    )
+    assert score > 0.45
+    assert "role_hits" in reason
