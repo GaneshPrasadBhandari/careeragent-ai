@@ -44,6 +44,25 @@ def test_resolve_api_base_uses_http_for_localhost_without_scheme():
     resolve = scope['_resolve_api_base']
     assert resolve('localhost:8000') == 'http://localhost:8000'
 
+
+
+def test_api_health_tries_raw_input_when_normalized_base_fails():
+    scope = _load_functions()
+
+    calls = []
+
+    def fake_get(api_base, path, timeout=0):
+        calls.append(api_base)
+        if api_base == 'https://careeragent-api.onrender.com':
+            return None
+        if api_base == 'https://careeragent-dashboard.onrender.com':
+            return {'status': 'ok'}
+        return None
+
+    scope['_api_get'] = fake_get
+    assert scope['_api_health']('https://careeragent-dashboard.onrender.com') is True
+    assert 'https://careeragent-api.onrender.com' in calls
+    assert 'https://careeragent-dashboard.onrender.com' in calls
 def test_api_health_retries_before_false(monkeypatch):
     scope = _load_functions()
     calls = {'n': 0}

@@ -358,15 +358,24 @@ def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests
 
 def _api_health(api_base: str) -> bool:
     base = _resolve_api_base(api_base)
-    for timeout in (3, 6, 10):
-        resp = _api_get(base, "/health", timeout=timeout)
-        if resp is not None and resp.get("status") in {"ok", "healthy"}:
-            return True
-        try:
-            if requests.get(f"{base}/health", timeout=timeout).status_code == 200:
+    candidates = [base]
+    raw = str(api_base or "").strip().rstrip("/")
+    if raw and raw not in candidates:
+        candidates.append(raw)
+
+    # Render cold starts can take 30-90s; keep health probes resilient without
+    # blocking too long on a single request.
+    for timeout, wait_s in ((3, 0.25), (5, 0.5), (8, 1.0), (12, 2.0)):
+        for candidate in candidates:
+            resp = _api_get(candidate, "/health", timeout=timeout)
+            if resp is not None and resp.get("status") in {"ok", "healthy"}:
                 return True
-        except Exception:
-            pass
+            try:
+                if requests.get(f"{candidate}/health", timeout=timeout).status_code == 200:
+                    return True
+            except Exception:
+                pass
+        time.sleep(wait_s)
     return False
 
 
