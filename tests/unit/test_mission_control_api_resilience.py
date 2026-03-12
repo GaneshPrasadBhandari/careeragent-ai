@@ -37,6 +37,13 @@ def test_resolve_api_base_rewrites_dashboard_hostname_and_paths():
     assert resolve('careeragent-dashboard.onrender.com/health') == 'https://careeragent-api.onrender.com'
 
 
+
+
+def test_resolve_api_base_uses_http_for_localhost_without_scheme():
+    scope = _load_functions()
+    resolve = scope['_resolve_api_base']
+    assert resolve('localhost:8000') == 'http://localhost:8000'
+
 def test_api_health_retries_before_false(monkeypatch):
     scope = _load_functions()
     calls = {'n': 0}
