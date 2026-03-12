@@ -21,6 +21,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
+from urllib.parse import urlparse, urlunparse
 
 import requests
 import streamlit as st
@@ -49,7 +50,31 @@ def _default_api_base() -> str:
     if render_external_url and "-dashboard.onrender.com" in render_external_url:
         return render_external_url.replace("-dashboard.onrender.com", "-api.onrender.com").rstrip("/")
 
-    return "http://localhost:8000"
+    return _resolve_api_base("http://localhost:8000")
+
+
+def _resolve_api_base(raw_value: str) -> str:
+    """Normalize backend URL and recover common Render dashboard/API mixups."""
+    clean = str(raw_value or "").strip()
+    if not clean:
+        return "http://localhost:8000"
+
+    if not clean.startswith(("http://", "https://")):
+        clean = f"https://{clean.lstrip('/')}"
+
+    parsed = urlparse(clean)
+    host = (parsed.netloc or "").strip().lower()
+    path = (parsed.path or "").strip()
+
+    if host.endswith("-dashboard.onrender.com"):
+        host = host.replace("-dashboard.onrender.com", "-api.onrender.com")
+
+    known_endpoint_prefixes = ("/health", "/docs", "/openapi", "/hunt")
+    if any(path.startswith(prefix) for prefix in known_endpoint_prefixes):
+        path = ""
+
+    normalized = urlunparse((parsed.scheme, host, path.rstrip("/"), "", "", "")).rstrip("/")
+    return normalized or "http://localhost:8000"
 
 
 def _normalize_clickable_url(url: str) -> str:
@@ -329,16 +354,22 @@ def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests
 
 
 def _api_health(api_base: str) -> bool:
+    base = _resolve_api_base(api_base)
     for timeout in (3, 6, 10):
-        resp = _api_get(api_base, "/health", timeout=timeout)
+        resp = _api_get(base, "/health", timeout=timeout)
         if resp is not None and resp.get("status") in {"ok", "healthy"}:
             return True
+        try:
+            if requests.get(f"{base}/health", timeout=timeout).status_code == 200:
+                return True
+        except Exception:
+            pass
     return False
 
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
-        endpoint = f"{api_base.rstrip('/')}/hunt/start"
+        endpoint = f"{_resolve_api_base(api_base).rstrip('/')}/hunt/start"
         last_err = None
         for attempt in range(1, 5):
             r = requests.post(
@@ -363,7 +394,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
-    raw = _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
+    raw = _api_get(_resolve_api_base(api_base), f"/hunt/{run_id}/status", timeout=5)
     if not raw:
         return None
 
@@ -1219,7 +1250,9 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         # ── API Base URL ──────────────────────────────────────────────────────
         api_base = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
-        st.session_state["api_base"] = api_base
+        resolved_api_base = _resolve_api_base(api_base)
+        st.session_state["api_base"] = resolved_api_base
+        api_base = resolved_api_base
 
         # ── Health indicator ──────────────────────────────────────────────────
         is_healthy = _api_health(api_base)

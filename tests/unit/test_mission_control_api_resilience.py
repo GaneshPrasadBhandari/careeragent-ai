@@ -6,7 +6,7 @@ from pathlib import Path
 def _load_functions():
     src = Path('app/ui/mission_control.py').read_text(encoding='utf-8')
     mod = ast.parse(src)
-    wanted = {'_api_health', '_api_start_hunt'}
+    wanted = {'_resolve_api_base', '_api_health', '_api_start_hunt'}
     nodes = [n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     fn_mod = ast.Module(body=nodes, type_ignores=[])
     code = compile(fn_mod, filename='mission_control_extract', mode='exec')
@@ -18,9 +18,23 @@ def _load_functions():
         def error(self, message):
             self.errors.append(str(message))
 
-    scope = {'json': json, 'time': __import__('time'), 'st': _St(), 'Optional': __import__('typing').Optional}
+    parse = __import__('urllib.parse', fromlist=['urlparse', 'urlunparse'])
+    scope = {
+        'json': json,
+        'time': __import__('time'),
+        'st': _St(),
+        'Optional': __import__('typing').Optional,
+        'urlparse': parse.urlparse,
+        'urlunparse': parse.urlunparse,
+    }
     exec(code, scope)
     return scope
+
+
+def test_resolve_api_base_rewrites_dashboard_hostname_and_paths():
+    scope = _load_functions()
+    resolve = scope['_resolve_api_base']
+    assert resolve('careeragent-dashboard.onrender.com/health') == 'https://careeragent-api.onrender.com'
 
 
 def test_api_health_retries_before_false(monkeypatch):
