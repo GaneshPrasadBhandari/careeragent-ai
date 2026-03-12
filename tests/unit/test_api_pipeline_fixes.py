@@ -168,7 +168,7 @@ def test_dedupe_jobs_removes_exact_url_duplicates():
     assert len(out) == 2
 
 
-def test_role_relevance_filter_relaxes_when_strict_filter_is_too_sparse():
+def test_role_relevance_filter_returns_best_aligned_subset_when_sparse():
     jobs = [
         {"title": f"Software Engineer {i}", "description": "backend distributed systems"}
         for i in range(80)
@@ -177,7 +177,7 @@ def test_role_relevance_filter_relaxes_when_strict_filter_is_too_sparse():
 
     out = _apply_role_relevance_filter(jobs, cfg)
 
-    assert len(out) == len(jobs)
+    assert len(out) == 16
     assert all("role_relevance" in j for j in out)
 
 

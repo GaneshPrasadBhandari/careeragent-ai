@@ -123,6 +123,7 @@ class JobLead:
     description: str = ""
     source:      str = ""
     posted_date: str = ""
+    posted_hours_ago: Optional[int] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -198,6 +199,8 @@ class LeadScoutService:
                 unique.append(lead)
 
         recency_hours = float(intent_plan.get("recency_hours") or 24.0)
+        unique = self._annotate_posting_age(unique)
+        unique = self._filter_by_role_relevance(unique, intent_plan=intent_plan)
         unique = self._filter_by_recency(unique, recency_hours=recency_hours)
         unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
         if not unique:
@@ -217,11 +220,20 @@ class LeadScoutService:
         if not txt:
             return None
 
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y"):
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y", "%Y-%m-%d %H:%M:%S"):
             try:
                 return datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
+
+        iso = txt.replace("z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(iso)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            pass
 
         rel = re.search(r"(\d+)\s*(hour|hr|day|week|month)s?\s*ago", txt)
         if rel:
@@ -248,11 +260,70 @@ class LeadScoutService:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=recency_hours)
         filtered: list[JobLead] = []
         for lead in leads:
-            candidate = lead.posted_date or lead.description
-            parsed = self._parse_posted_datetime(candidate)
+            if lead.posted_hours_ago is not None:
+                parsed = datetime.now(timezone.utc) - timedelta(hours=max(0, int(lead.posted_hours_ago)))
+            else:
+                candidate = lead.posted_date or lead.description
+                parsed = self._parse_posted_datetime(candidate)
             if parsed is None or parsed >= cutoff:
                 filtered.append(lead)
         return filtered
+
+    def _annotate_posting_age(self, leads: list[JobLead]) -> list[JobLead]:
+        now = datetime.now(timezone.utc)
+        for lead in leads:
+            candidate = lead.posted_date or lead.description
+            parsed = self._parse_posted_datetime(candidate)
+            if parsed is None:
+                continue
+            age_hours = int(max(0, (now - parsed).total_seconds() // 3600))
+            lead.posted_hours_ago = age_hours
+        return leads
+
+    def _filter_by_role_relevance(self, leads: list[JobLead], *, intent_plan: dict) -> list[JobLead]:
+        raw_roles = [str(r).strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
+        if not raw_roles:
+            return leads
+
+        role_aliases: dict[str, list[str]] = {
+            "ai engineer": ["ai engineer", "artificial intelligence engineer", "applied ai engineer"],
+            "ai solution architect": ["ai solution architect", "ai solutions architect", "solutions architect ai", "ai architect"],
+            "genai sol architect": ["genai architect", "generative ai architect", "llm architect", "genai solution architect"],
+            "principal data scientist": ["principal data scientist", "lead data scientist", "staff data scientist"],
+        }
+
+        phrase_bank: list[str] = []
+        for role in raw_roles:
+            low = role.lower()
+            phrase_bank.extend(role_aliases.get(low, [low]))
+
+        phrase_bank = list(dict.fromkeys(p for p in phrase_bank if p))
+        generic_tokens = {"engineer", "scientist", "architect", "developer", "principal", "senior", "staff", "lead", "solution", "solutions", "data"}
+        scored: list[tuple[float, JobLead]] = []
+        for lead in leads:
+            text = " ".join([lead.title, lead.description, lead.company]).lower()
+            best = 0.0
+            for phrase in phrase_bank:
+                tokens = [t for t in re.split(r"\W+", phrase) if len(t) >= 3]
+                if not tokens:
+                    continue
+                overlap_tokens = [tok for tok in tokens if tok in text]
+                overlap = len(overlap_tokens)
+                phrase_score = overlap / len(tokens)
+                if phrase in text:
+                    phrase_score = min(1.0, phrase_score + 0.35)
+                elif overlap_tokens and not any(tok not in generic_tokens for tok in overlap_tokens):
+                    phrase_score = min(phrase_score, 0.34)
+                best = max(best, phrase_score)
+            scored.append((best, lead))
+
+        strong = [lead for score, lead in scored if score >= 0.5]
+        if strong:
+            return strong
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        floor = max(12, int(len(leads) * 0.25))
+        return [lead for _, lead in scored[:floor]]
 
     @staticmethod
     def _source_domain(lead: JobLead) -> str:
@@ -322,24 +393,25 @@ class LeadScoutService:
 
         if roles:
             ai_str = " ".join(ai_ml[:4]) if ai_ml else " ".join(all_keywords[:4])
-            queries.append(f"{roles[0]} {ai_str}")
+            for role in roles[:4]:
+                queries.append(f"{role} {ai_str}".strip())
 
         seniority = self._detect_seniority(profile, roles)
         if seniority and roles:
-            queries.append(f"{seniority} {roles[0]}")
+            for role in roles[:3]:
+                queries.append(f"{seniority} {role}".strip())
 
         for alt in self._alt_roles(roles)[:2]:
             ai_str = " ".join(ai_ml[:3]) if ai_ml else ""
             queries.append(f"{alt} {ai_str}".strip())
 
         if cloud and roles:
-            queries.append(f"{roles[0]} {' '.join(cloud[:3])}")
+            for role in roles[:2]:
+                queries.append(f"{role} {' '.join(cloud[:3])}".strip())
 
-        if any("gen" in k.lower() or "llm" in k.lower() for k in all_keywords):
-            base = roles[0] if roles else "AI Engineer"
-            queries.append(f"Generative AI {base} LLM")
-
-        queries.append("Machine Learning Engineer GenAI LLM remote")
+        if any("gen" in k.lower() or "llm" in k.lower() for k in all_keywords) and roles:
+            for role in roles[:2]:
+                queries.append(f"Generative AI {role} LLM")
 
         seen_q: set[str] = set()
         final: list[str] = []
@@ -348,10 +420,10 @@ class LeadScoutService:
             if q and q not in seen_q:
                 seen_q.add(q)
                 final.append(q)
-                if len(final) >= 6:
+                if len(final) >= 12:
                     break
 
-        return final or ["AI Engineer Python remote", "Machine Learning Engineer remote"]
+        return final or ["AI Engineer Python remote", "AI Solution Architect remote"]
 
     def _detect_seniority(self, profile: dict, roles: list[str]) -> str:
         combined = " ".join([
