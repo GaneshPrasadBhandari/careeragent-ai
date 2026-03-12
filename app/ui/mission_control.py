@@ -197,12 +197,12 @@ def _inject_css() -> None:
         overflow-y: auto;
         margin-top: 12px;
     }
-    .feed-title { font-size: 11px; color: #3fb950; text-transform: uppercase;
-                  letter-spacing: 0.1em; margin-bottom: 8px; }
-    .feed-entry { font-size: 12px; color: #FDE68A; padding: 2px 0; }
-    .feed-ts    { color: #93C5FD; font-size: 11px; margin-right: 8px; }
-    .feed-msg   { color: #FEF9C3; }
-    .feed-empty { color: #FCD34D; font-size: 12px; font-style: italic; }
+    .feed-title { font-size: 11px; color: #4ADE80 !important; text-transform: uppercase;
+                  letter-spacing: 0.1em; margin-bottom: 8px; font-weight: 700; }
+    .feed-entry { font-size: 12px; color: #FDE68A !important; padding: 3px 0; line-height: 1.45; }
+    .feed-ts    { color: #93C5FD !important; font-size: 11px; margin-right: 8px; }
+    .feed-msg   { color: #FEF9C3 !important; }
+    .feed-empty { color: #FCD34D !important; font-size: 12px; font-style: italic; }
 
     /* ── Section header ── */
     .section-header {
@@ -214,12 +214,12 @@ def _inject_css() -> None:
     /* ── Status badge ── */
     .run-status {
         font-size: 12px; padding: 4px 12px; border-radius: 20px;
-        background: #EEF2F7; color: #334155; font-weight: 600;
+        background: #EEF2F7; color: #0F172A !important; font-weight: 700; border: 1px solid #CBD5E1;
     }
-    .run-status.running { background: #1c2d3f; color: #388bfd; }
-    .run-status.completed { background: #E6F4EA; color: #2D6A4F; }
-    .run-status.error { background: #FDECEC; color: #C92A2A; }
-    .run-status.pending_human_input { background:#FFF4E5; color:#B26A00; }
+    .run-status.running { background: #DBEAFE; color: #1D4ED8 !important; border-color: #93C5FD; }
+    .run-status.completed { background: #DCFCE7; color: #166534 !important; border-color: #86EFAC; }
+    .run-status.error { background: #FEE2E2; color: #B91C1C !important; border-color: #FCA5A5; }
+    .run-status.pending_human_input { background:#FEF3C7; color:#92400E !important; border-color:#FCD34D; }
 
     /* ── Job table ── */
     .job-row {
@@ -653,6 +653,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
             fallback_reason = diagnostics.get("fallback_reason")
             if fallback_reason:
                 st.info(f"Live providers fell back to demo jobs: {fallback_reason}")
+                st.caption("To get live jobs, set SERPER_API_KEY and/or TAVILY_API_KEY in the API environment and redeploy/restart.")
             else:
                 st.info("Live providers returned no jobs, so fallback demo results are shown. Demo links may open search pages when direct postings are unavailable.")
         st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
@@ -670,7 +671,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
                 for j in ranked_jobs
                 if j.get("id") in selected_ids and _normalize_clickable_url(j.get("url", ""))
             ]
-            st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers.")
+            st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers out of {len(ranked_jobs)} ranked jobs.")
             with st.expander("Why these jobs are recommended"):
                 st.caption(f"Showing {len(ranked_jobs)} ranked jobs with explanation and direct links.")
                 for j in ranked_jobs:

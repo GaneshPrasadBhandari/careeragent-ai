@@ -298,8 +298,30 @@ def _select_qualified_jobs(scored: list[dict], threshold: float, *, min_floor: i
 
     # Adaptive fallback for sparse scoring runs: keep top candidates even when
     # strict thresholding is too aggressive for scraped snippets.
-    top_needed = min(len(scored), max(min_floor, int(len(scored) * 0.25)))
+    top_needed = min(len(scored), max(min_floor, int(len(scored) * 0.30)))
     return list(scored[:top_needed])
+
+
+def _maybe_relax_frontend_filters(jobs: list[dict], config: dict) -> tuple[list[dict], Optional[str]]:
+    """Prevent overly strict UI filters from collapsing result volume."""
+    strict = _apply_frontend_filters(jobs, config)
+    if len(jobs) < 20:
+        return strict, None
+
+    minimum_expected = max(10, int(len(jobs) * 0.15))
+    if len(strict) >= minimum_expected:
+        return strict, None
+
+    relaxed_cfg = dict(config or {})
+    relaxed_cfg["allowed_job_domains"] = []
+    relaxed_cfg["posted_within_hours"] = max(168, int(config.get("posted_within_hours", 168) or 168))
+    relaxed = _apply_frontend_filters(jobs, relaxed_cfg)
+    if len(relaxed) > len(strict):
+        return relaxed, (
+            "Strict board/date filters reduced results too aggressively; auto-relaxed source/posting filters "
+            f"to recover broader ranking set ({len(strict)} → {len(relaxed)} jobs)."
+        )
+    return strict, None
 
 
 def _notify_human_approval_needed(state: dict, run_id: str, action: str, note: str) -> None:
@@ -651,8 +673,11 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
 
     _layer_running(state, 4, f"Re-scoring {state.get('jobs_discovered', 0)} jobs after profile update…", tools_used=["matcher", "scorer"], attempt_count=1)
     scored = state.get("job_leads", []) or []
-    scored = _apply_frontend_filters(scored, state.get("config", {}))
+    scored, relax_note = _maybe_relax_frontend_filters(scored, state.get("config", {}))
     scored = _apply_role_relevance_filter(scored, state.get("config", {}))
+    if relax_note:
+        _log_agent(state, 4, relax_note)
+        state.setdefault("layer_debug", {}).setdefault("L4", {})["filter_relaxation"] = relax_note
     scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
     scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
     scored = _augment_scored_jobs(scored, state.get("profile") or {})
@@ -1197,8 +1222,10 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             threshold = 0.45
 
         scored = _dedupe_jobs(scored)
-        scored = _apply_frontend_filters(scored, state["config"])
+        scored, relax_note = _maybe_relax_frontend_filters(scored, state["config"])
         scored = _apply_role_relevance_filter(scored, state["config"])
+        if relax_note:
+            _log_agent(state, 4, relax_note)
         scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
         scored = _dedupe_jobs(scored)
         scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
@@ -1483,14 +1510,16 @@ def _build_cover_letter_text(profile: dict, job: dict) -> str:
     projects = [str(x).strip() for x in (profile.get("projects") or []) if str(x).strip()]
     impact_anchor = projects[0] if projects else (experience_items[0] if experience_items else "enterprise platform modernization")
 
+    company_line = f"{company}\n" if company and "demo board" not in company.lower() else ""
+
     return (
         f"{candidate}\n"
         f"{email} | {phone}\n"
         f"{_now()[:10]}\n\n"
-        "Hiring Manager\n"
-        f"{company}\n\n"
+        "Hiring Team\n"
+        f"{company_line}\n"
         f"Subject: Application for {role}\n\n"
-        "Dear Hiring Manager,\n\n"
+        f"Dear {company if company and 'demo board' not in company.lower() else 'Hiring Team'},\n\n"
         f"I am writing to express interest in the {role} position at {company}. {summary}\n\n"
         f"My background aligns strongly with your requirements, especially in {top_skills}. "
         f"A representative example is {impact_anchor}, where I partnered cross-functionally to improve reliability, delivery velocity, and measurable business outcomes.\n\n"
@@ -1639,49 +1668,49 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
-            "company": "LinkedIn Sample", "url": "https://www.linkedin.com/jobs/search/?keywords=AI%20Engineer",
+            "company": "LinkedIn Demo Board", "url": "https://www.linkedin.com/jobs/search/?keywords=AI%20Engineer",
             "location": "Remote", "remote": True, "description": f"Looking for {' '.join(skills)} expert.",
             "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 180000,
         },
         {
             "id": "demo_002", "title": "Backend Software Engineer",
-            "company": "Indeed Sample", "url": "https://www.indeed.com/jobs?q=backend+software+engineer",
+            "company": "Indeed Demo Board", "url": "https://www.indeed.com/jobs?q=backend+software+engineer",
             "location": "San Francisco, CA", "remote": True, "description": f"Need strong {skills[0] if skills else 'Python'} skills.",
             "source": "demo", "is_demo": True, "salary_min": 140000, "salary_max": 200000,
         },
         {
             "id": "demo_003", "title": "Staff Engineer — Platform",
-            "company": "Glassdoor Sample", "url": "https://www.glassdoor.com/Job/software-engineer-jobs-SRCH_KO0,17.htm",
+            "company": "Glassdoor Demo Board", "url": "https://www.glassdoor.com/Job/software-engineer-jobs-SRCH_KO0,17.htm",
             "location": "New York, NY", "remote": False, "description": "Platform team, strong systems background.",
             "source": "demo", "is_demo": True, "salary_min": 160000, "salary_max": 220000,
         },
         {
             "id": "demo_004", "title": "Senior AI Engineer",
-            "company": "MyVisaJobs Sample", "url": "https://www.myvisajobs.com/Search_Visa_Sponsor_Job.aspx?j=AI+Engineer",
+            "company": "MyVisaJobs Demo Board", "url": "https://www.myvisajobs.com/Search_Visa_Sponsor_Job.aspx?j=AI+Engineer",
             "location": "Austin, TX", "remote": True, "description": "H1B-friendly AI engineering role.",
             "source": "demo", "is_demo": True, "salary_min": 125000, "salary_max": 175000,
         },
         {
             "id": "demo_005", "title": "ML Platform Engineer",
-            "company": "ZipRecruiter Sample", "url": "https://www.ziprecruiter.com/Jobs/ML-Platform-Engineer",
+            "company": "ZipRecruiter Demo Board", "url": "https://www.ziprecruiter.com/Jobs/ML-Platform-Engineer",
             "location": "Seattle, WA", "remote": False, "description": "MLOps and platform reliability.",
             "source": "demo", "is_demo": True, "salary_min": 145000, "salary_max": 205000,
         },
         {
             "id": "demo_006", "title": "Applied AI Engineer",
-            "company": "Greenhouse Sample", "url": "https://boards.greenhouse.io/",
+            "company": "Greenhouse Demo Board", "url": "https://boards.greenhouse.io/",
             "location": "Remote", "remote": True, "description": "Production AI systems role.",
             "source": "demo", "is_demo": True, "salary_min": 135000, "salary_max": 195000,
         },
         {
             "id": "demo_007", "title": "AI Solutions Engineer",
-            "company": "Lever Sample", "url": "https://jobs.lever.co/",
+            "company": "Lever Demo Board", "url": "https://jobs.lever.co/",
             "location": "Remote", "remote": True, "description": "Enterprise AI delivery and architecture.",
             "source": "demo", "is_demo": True, "salary_min": 130000, "salary_max": 190000,
         },
         {
             "id": "demo_008", "title": "AI Backend Engineer",
-            "company": "Workday Sample", "url": "https://www.myworkdayjobs.com/en-US/recruiting",
+            "company": "Workday Demo Board", "url": "https://www.myworkdayjobs.com/en-US/recruiting",
             "location": "San Francisco, CA", "remote": False, "description": "Backend + ML services for AI products.",
             "source": "demo", "is_demo": True, "salary_min": 150000, "salary_max": 215000,
         },
