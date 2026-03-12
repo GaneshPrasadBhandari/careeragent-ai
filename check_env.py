@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -109,6 +110,73 @@ def _env(*keys: str) -> str:
     return ""
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _key_state(value: str, *, strict: bool) -> str:
+    if value:
+        return "active"
+    return "failed" if strict else "warning"
+
+
+def _normalize_qdrant_url(raw_url: str) -> str:
+    """Return a Qdrant URL that is safe to probe.
+
+    - Adds https:// for host-only inputs.
+    - Removes known dashboard-only paths.
+    - Keeps custom API base paths when they are likely intentional.
+    """
+    value = raw_url.strip().rstrip("/")
+    if not value:
+        return value
+
+    if not value.startswith(("http://", "https://")):
+        value = f"https://{value}"
+
+    parsed = urlparse(value)
+    path = (parsed.path or "").rstrip("/")
+    first_segment = path.lstrip("/").split("/")[0] if path else ""
+    dashboard_segments = {"dashboard", "ui", "console", "cluster"}
+
+    clean_path = "" if first_segment in dashboard_segments else path
+    rebuilt = f"{parsed.scheme}://{parsed.netloc}{clean_path}"
+    return rebuilt.rstrip("/")
+
+
+def _join_url(base: str, tail: str) -> str:
+    return f"{base.rstrip('/')}/{tail.lstrip('/')}"
+
+
+def _probe_qdrant_http(qdrant_url: str, qdrant_key: str) -> tuple[str, str]:
+    """Probe Qdrant with known collection endpoints."""
+    base = _normalize_qdrant_url(qdrant_url)
+    headers = {"api-key": qdrant_key}
+
+    parsed = urlparse(base)
+    base_path = (parsed.path or "").rstrip("/")
+    candidates = ["collections"] if base_path.endswith("/v1") else ["collections", "v1/collections"]
+
+    last_code: Optional[int] = None
+    last_err = ""
+    for path in candidates:
+        url = _join_url(base, path)
+        code, err = _http_get(url, headers=headers)
+        last_code, last_err = code, err
+        state, detail = _state_from_http(code, ok={200}, warn={401, 403, 429, 500, 502, 503, 504}, err=err)
+        if state == "active":
+            return state, f"{detail} ({urlparse(url).path})"
+        if code in {401, 403, 429}:
+            return "warning", f"{detail} ({urlparse(url).path})"
+
+    if last_code == 404:
+        return "failed", "HTTP 404 (QDRANT_URL points to a non-API endpoint; use your cluster API URL)"
+    return _state_from_http(last_code, ok={200}, warn={401, 403, 429, 500, 502, 503, 504}, err=last_err)
+
+
 def run() -> dict[str, Any]:
     print("\n--- CareerAgent-AI: Full Environment Diagnostic ---")
     results: list[CheckResult] = []
@@ -119,7 +187,10 @@ def run() -> dict[str, Any]:
     gemini_key = _env("GEMINI_API_KEY", "GOOGLE_API_KEY")
     hf_token = _env("HF_TOKEN", "HUGGINGFACE_API_KEY", "HUGGINGFACEHUB_API_TOKEN")
 
-    results.append(CheckResult("OpenAI Key", "active" if openai_key else "failed"))
+    render_runtime = bool(_env("RENDER_SERVICE_NAME") or _env("RENDER_INSTANCE_ID"))
+    strict_required_keys = _bool_env("CHECK_ENV_STRICT", default=render_runtime)
+
+    results.append(CheckResult("OpenAI Key", _key_state(openai_key, strict=strict_required_keys)))
     results.append(CheckResult("Anthropic Key", "active" if anthropic_key else "warning"))
     results.append(CheckResult("Gemini/Google Key", "active" if gemini_key else "warning"))
     results.append(CheckResult("Hugging Face Token", "active" if hf_token else "warning"))
@@ -130,8 +201,8 @@ def run() -> dict[str, Any]:
     resend_key = _env("RESEND_API_KEY")
     sendgrid_key = _env("SENDGRID_API_KEY")
 
-    results.append(CheckResult("Tavily Key", "active" if tavily_key else "failed"))
-    results.append(CheckResult("Serper Key", "active" if serper_key else "failed"))
+    results.append(CheckResult("Tavily Key", _key_state(tavily_key, strict=strict_required_keys)))
+    results.append(CheckResult("Serper Key", _key_state(serper_key, strict=strict_required_keys)))
     results.append(CheckResult("Resend Key", "active" if resend_key else "warning"))
     results.append(CheckResult("SendGrid Key", "active" if sendgrid_key else "warning"))
 
@@ -152,21 +223,22 @@ def run() -> dict[str, Any]:
     qdrant_url = _env("QDRANT_URL")
     qdrant_key = _env("QDRANT_API_KEY")
     qdrant_state = "warning"
-    qdrant_detail = "qdrant_client missing"
+    qdrant_detail = "not configured"
     if qdrant_url and qdrant_key and QdrantClient:
         try:
-            client = QdrantClient(url=qdrant_url, api_key=qdrant_key, timeout=8)
+            normalized_qdrant_url = _normalize_qdrant_url(qdrant_url)
+            client = QdrantClient(url=normalized_qdrant_url, api_key=qdrant_key, timeout=8)
             col = client.get_collections()
             qdrant_state = "active"
             count = len(getattr(col, "collections", []) or [])
             qdrant_detail = f"collections={count}"
         except Exception as exc:
-            # try plain health endpoint to separate network from auth
-            code, err = _http_get(f"{qdrant_url.rstrip('/')}/collections", headers={"api-key": qdrant_key})
-            qdrant_state, qdrant_detail = _state_from_http(code, ok={200}, warn={401, 403, 429, 500, 502, 503, 504}, err=err or str(exc))
+            # fallback probe to separate network from auth/config issues
+            qdrant_state, qdrant_detail = _probe_qdrant_http(qdrant_url, qdrant_key)
+            if qdrant_state == "failed":
+                qdrant_detail = qdrant_detail or str(exc)
     elif qdrant_url and qdrant_key:
-        code, err = _http_get(f"{qdrant_url.rstrip('/')}/collections", headers={"api-key": qdrant_key})
-        qdrant_state, qdrant_detail = _state_from_http(code, ok={200}, warn={401, 403, 429, 500, 502, 503, 504}, err=err)
+        qdrant_state, qdrant_detail = _probe_qdrant_http(qdrant_url, qdrant_key)
     elif qdrant_url or qdrant_key:
         qdrant_state, qdrant_detail = "warning", "QDRANT_URL/QDRANT_API_KEY partially set"
     results.append(CheckResult("Qdrant Cloud", qdrant_state, qdrant_detail))
