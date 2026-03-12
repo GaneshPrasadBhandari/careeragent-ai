@@ -77,6 +77,8 @@ _record_feedback_event = api_main._record_feedback_event
 _is_duplicate_action = api_main._is_duplicate_action
 _mark_action_processed = api_main._mark_action_processed
 
+_apply_role_relevance_filter = api_main._apply_role_relevance_filter
+
 
 def test_langsmith_status_uses_boolean_env(monkeypatch):
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
@@ -164,3 +166,29 @@ def test_dedupe_jobs_removes_exact_url_duplicates():
     ]
     out = _dedupe_jobs(jobs)
     assert len(out) == 2
+
+
+def test_role_relevance_filter_relaxes_when_strict_filter_is_too_sparse():
+    jobs = [
+        {"title": f"Software Engineer {i}", "description": "backend distributed systems"}
+        for i in range(80)
+    ]
+    cfg = {"target_roles": ["L0→L9 Planner-Director Pipeline"], "role_relevance_min": 0.2}
+
+    out = _apply_role_relevance_filter(jobs, cfg)
+
+    assert len(out) == len(jobs)
+    assert all("role_relevance" in j for j in out)
+
+
+def test_role_relevance_filter_stays_strict_when_coverage_is_healthy():
+    jobs = [
+        {"title": f"AI Engineer {i}", "description": "ai engineer role"} if i < 30 else {"title": f"Other Role {i}", "description": "non matching"}
+        for i in range(80)
+    ]
+    cfg = {"target_roles": ["AI Engineer"], "role_relevance_min": 0.5}
+
+    out = _apply_role_relevance_filter(jobs, cfg)
+
+    assert 20 <= len(out) < len(jobs)
+    assert all(float(j.get("role_relevance") or 0.0) >= 0.5 for j in out)

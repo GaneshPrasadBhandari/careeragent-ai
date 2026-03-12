@@ -1781,13 +1781,34 @@ def _apply_role_relevance_filter(jobs: list[dict], config: dict) -> list[dict]:
     if not target_roles:
         return jobs
     minimum = float(config.get("role_relevance_min", 0.2) or 0.2)
+    with_relevance: list[dict] = []
     filtered: list[dict] = []
     for job in jobs:
         role_rel = _role_relevance(job, target_roles)
         job2 = {**job, "role_relevance": role_rel}
+        with_relevance.append(job2)
         if role_rel >= minimum:
             filtered.append(job2)
-    return filtered
+
+    # Prevent aggressive role token filtering from collapsing viable ranking volume.
+    # This commonly happens when users enter broad strategy text instead of titles.
+    total = len(with_relevance)
+    if total < 20:
+        return filtered
+
+    minimum_expected = max(12, int(total * 0.20))
+    if len(filtered) >= minimum_expected:
+        return filtered
+
+    # Adaptive relaxation: if strict minimum is too sparse, lower it once.
+    relaxed_minimum = min(0.10, minimum)
+    relaxed = [j for j in with_relevance if float(j.get("role_relevance") or 0.0) >= relaxed_minimum]
+    if len(relaxed) >= minimum_expected:
+        return relaxed
+
+    # Last-resort fallback: preserve discovery volume and rely on scoring/ranking
+    # instead of hard-dropping jobs at this stage.
+    return with_relevance
 
 
 @traceable(name="api.stub_score")
