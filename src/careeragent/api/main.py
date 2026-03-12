@@ -2102,9 +2102,17 @@ app.add_middleware(
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@app.get("/")
+async def root_health():
+    return {"status": "ok", "service": "careeragent-api", "runs_active": len(_runs)}
+
+
 @app.get("/health")
+@app.get("/healthz")
+@app.get("/ready")
+@app.get("/readyz")
 async def health():
-    return {"status": "ok", "runs_active": len(_runs)}
+    return {"status": "ok", "service": "careeragent-api", "runs_active": len(_runs)}
 
 
 @app.post("/mcp/invoke")
