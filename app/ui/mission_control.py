@@ -84,7 +84,10 @@ def _normalize_clickable_url(url: str) -> str:
     clean = str(url or "").strip()
     if not clean:
         return ""
-    if clean.startswith(("http://", "https://")):
+    if clean.startswith("http://"):
+        # Many job boards block plain-http pages with certificate/privacy warnings.
+        return "https://" + clean[len("http://"):]
+    if clean.startswith("https://"):
         return clean
     return f"https://{clean.lstrip('/')}"
 
@@ -231,6 +234,9 @@ def _inject_css() -> None:
     .feed-ts    { color: #93C5FD !important; font-size: 11px; margin-right: 8px; }
     .feed-msg   { color: #FEF9C3 !important; }
     .feed-empty { color: #FCD34D !important; font-size: 12px; font-style: italic; }
+    .feed-wrap, .feed-wrap *, .feed-wrap [data-testid="stMarkdownContainer"], .feed-wrap p, .feed-wrap span {
+        color: #FDE68A !important;
+    }
 
     /* ── Section header ── */
     .section-header {
@@ -723,8 +729,12 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
                     st.markdown(
                         f"- **{j.get('title','')} @ {j.get('company','')}** — "
                         f"match `{j.get('score',0)*100:.1f}%`, interview `{j.get('interview_probability_percent',0):.1f}%`  \n"
-                        f"  reasoning: {j.get('llm_reasoning') or 'Skill overlap + ATS alignment'}  \n"
-                        f"  link: {'[Open job posting](' + job_url + ')' if job_url else 'N/A'}  \n"
+                        f"  reasoning: {j.get('llm_reasoning') or 'Skill overlap + ATS alignment'}  \
+"
+                        f"  rationale: {' '.join((j.get('recommendation_rationale') or [])[:3]) or 'Model found strong profile-to-role evidence across skills, recency, and delivery signals.'}  \
+"
+                        f"  link: {'[Open job posting](' + job_url + ')' if job_url else 'N/A'}  \
+"
                         f"  url: `{display_url}`"
                     )
         else:
@@ -986,7 +996,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div class="job-title">{job.get('title','')}</div>
                 <div class="job-company">{job.get('company','')}  ·  {remote_b}</div>
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
-                    LLM reasoning: {job.get('llm_reasoning') or why}
+                    LLM reasoning: {job.get('llm_reasoning') or why}<br/>Rationale: {' '.join((job.get('recommendation_rationale') or [])[:2]) or 'Role fit inferred from project/experience signals + skill match.'}
                 </div>
                 <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 <a href="{_normalize_clickable_url(job.get('url',''))}" target="_blank" rel="noopener noreferrer">Open posting</a></div>
                 <div style="font-size:10px;color:#5C677D;word-break:break-all">{escape(_safe_url_text(_normalize_clickable_url(job.get('url',''))))}</div>
@@ -1344,8 +1354,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         profile_links = st.text_input("Profile links (LinkedIn/GitHub)", value="", help="Comma-separated URLs used by auto-apply forms")
         additional_skills_raw = st.text_area("Skills you already have (comma/newline separated)", value="", height=70)
         additional_skills = [x.strip() for x in additional_skills_raw.replace("\n", ",").split(",") if x.strip()]
-        enable_email = st.checkbox("Enable email notifications", value=False)
-        enable_sms = st.checkbox("Enable SMS notifications", value=False)
+        enable_email = st.checkbox("Enable email notifications", value=True)
+        enable_sms = st.checkbox("Enable SMS notifications", value=True)
 
         config = {
             "target_roles":             target_roles,

@@ -242,9 +242,15 @@ def _sanitize_phone(phone: str) -> str:
     raw = str(phone or "").strip()
     if not raw:
         return ""
+    digits = "".join(ch for ch in raw if ch.isdigit())
     if raw.startswith("+"):
-        return "+" + "".join(ch for ch in raw[1:] if ch.isdigit())
-    return "".join(ch for ch in raw if ch.isdigit())
+        return "+" + digits
+    # Auto-normalize common US 10-digit entry to E.164 for Twilio delivery.
+    if len(digits) == 10:
+        return "+1" + digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    return digits
 
 
 def _is_duplicate_action(state: dict, token: str) -> bool:
@@ -343,6 +349,12 @@ def _notify_human_approval_needed(state: dict, run_id: str, action: str, note: s
     candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
     candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
     if not candidate_email and not candidate_phone:
+        state.setdefault("notification_log", []).append({
+            "timestamp": _now(),
+            "event": "human_approval_required",
+            "action": action,
+            "result": {"sent": False, "skipped": True, "reason": "missing_recipient_contact"},
+        })
         return
 
     notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})

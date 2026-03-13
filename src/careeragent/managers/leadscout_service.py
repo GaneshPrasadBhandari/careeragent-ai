@@ -74,7 +74,8 @@ def _normalize_result_url(url: str) -> str:
     if parsed.scheme not in {"http", "https"}:
         return ""
     path = parsed.path.rstrip("/")
-    base = f"{parsed.scheme}://{parsed.netloc}{path}"
+    # Normalize to https to avoid browser "connection is not private" for legacy http links.
+    base = f"https://{parsed.netloc}{path}"
 
     # Keep required job-identifying query params for job boards where the
     # canonical listing link depends on them (e.g., Indeed/Glassdoor).
@@ -112,7 +113,11 @@ def _is_plausible_job_link(url: str) -> bool:
         return "/viewjob" in path
     if "glassdoor.com" in host:
         return "joblistingid=" in query or "-job" in path
-    if any(d in host for d in ("greenhouse.io", "lever.co", "workday", "myworkdayjobs", "icims.com", "jobvite.com", "smartrecruiters.com", "ziprecruiter.com", "myvisajobs.com")):
+    if "greenhouse.io" in host:
+        return "/jobs/" in path
+    if "lever.co" in host:
+        return "/jobs/" in path
+    if any(d in host for d in ("workday", "myworkdayjobs", "icims.com", "jobvite.com", "smartrecruiters.com", "ziprecruiter.com", "myvisajobs.com")):
         return "/job" in path
     return True
 
