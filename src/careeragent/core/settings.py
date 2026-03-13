@@ -18,6 +18,7 @@ class Settings(BaseModel):
     LANGSMITH_PROJECT: str = "careeragent-ai-phase6"
     LANGSMITH_WORKSPACE_ID: Optional[str] = None
     LANGSMITH_ENDPOINT: str = "https://smith.langchain.com"
+    LANGCHAIN_ENDPOINT: Optional[str] = None
     LANGCHAIN_API_KEY: Optional[str] = None
     LANGCHAIN_PROJECT: str = "careeragent-ai-phase6"
     LANGCHAIN_TRACING_V2: str = "true"
@@ -68,6 +69,7 @@ class Settings(BaseModel):
                 "LANGSMITH_PROJECT",
                 "LANGSMITH_WORKSPACE_ID",
                 "LANGSMITH_ENDPOINT",
+                "LANGCHAIN_ENDPOINT",
                 "LANGCHAIN_API_KEY",
                 "LANGCHAIN_PROJECT",
                 "LANGCHAIN_TRACING_V2",
@@ -120,4 +122,6 @@ def bootstrap_langsmith(s: Settings) -> None:
     os.environ["LANGSMITH_TRACING"] = tracing
     os.environ["LANGCHAIN_PROJECT"] = project
     os.environ["LANGSMITH_PROJECT"] = project
-    os.environ["LANGSMITH_ENDPOINT"] = str(s.LANGSMITH_ENDPOINT or "https://smith.langchain.com")
+    endpoint = str(s.LANGSMITH_ENDPOINT or s.LANGCHAIN_ENDPOINT or "https://smith.langchain.com")
+    os.environ["LANGSMITH_ENDPOINT"] = endpoint
+    os.environ["LANGCHAIN_ENDPOINT"] = endpoint
