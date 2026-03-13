@@ -2267,8 +2267,18 @@ async def start_hunt(
         _runs[run_id]["resume_path"] = str(save_path)
         _persist_state(run_id)
 
-        # Launch pipeline in background
-        background_tasks.add_task(run_pipeline, run_id, save_path)
+        # Launch pipeline in background.
+        #
+        # Prefer `asyncio.create_task` so the runner starts immediately even on
+        # hosts where FastAPI BackgroundTasks can be delayed/dropped under
+        # worker churn. Keep BackgroundTasks as a defensive fallback.
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(run_pipeline(run_id, save_path))
+            log.info("Run %s scheduled via asyncio.create_task", run_id)
+        except RuntimeError:
+            background_tasks.add_task(run_pipeline, run_id, save_path)
+            log.info("Run %s scheduled via FastAPI BackgroundTasks fallback", run_id)
         return {"run_id": run_id, "status": "started", "message": "Pipeline launched"}
     except HTTPException:
         raise

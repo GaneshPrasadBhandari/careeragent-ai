@@ -100,6 +100,11 @@ def test_start_hunt_persists_initial_state(tmp_path, monkeypatch):
 
     api._runs.clear()
 
+    def _no_loop():
+        raise RuntimeError("no running event loop")
+
+    monkeypatch.setattr(api.asyncio, "get_running_loop", _no_loop)
+
     background = _BackgroundTasksForTest()
     resume = UploadFile(filename="resume.txt", file=io.BytesIO(b"python\nml\n"))
     resp = asyncio.run(
