@@ -21,6 +21,8 @@ services:
         value: 3.11.8
       - key: LANGSMITH_TRACING
         value: "true"
+      - key: LANGSMITH_ENDPOINT
+        value: https://api.smith.langchain.com
       - key: LANGSMITH_PROJECT
         value: careeragent-ai-phase6
       - key: LANGCHAIN_PROJECT

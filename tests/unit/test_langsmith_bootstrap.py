@@ -25,3 +25,14 @@ def test_bootstrap_langsmith_does_not_inject_fake_api_key(monkeypatch):
     bootstrap_langsmith(s)
 
     assert "LANGSMITH_API_KEY" not in os.environ
+
+
+def test_bootstrap_langsmith_defaults_to_api_endpoint(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_ENDPOINT", raising=False)
+    monkeypatch.delenv("LANGCHAIN_ENDPOINT", raising=False)
+    s = Settings(LANGSMITH_TRACING="true")
+
+    bootstrap_langsmith(s)
+
+    assert os.environ["LANGSMITH_ENDPOINT"] == "https://api.smith.langchain.com"
+    assert os.environ["LANGCHAIN_ENDPOINT"] == "https://api.smith.langchain.com"
