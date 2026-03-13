@@ -338,10 +338,12 @@ def _langsmith_status(run_id: str) -> dict:
     api_key = str(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY") or "").strip()
     enabled = tracing_enabled and bool(api_key)
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
+    # LangSmith ingestion should target api.smith..., but dashboard/run links are on smith....
+    link_base_endpoint = endpoint.replace("https://api.smith.langchain.com", "https://smith.langchain.com")
     project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai-new").strip().strip('"')
     workspace_raw = str(os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
     workspace = workspace_raw if re.match(r"^[0-9a-fA-F-]{36}$", workspace_raw) else ""
-    base = f"{endpoint}/o/{workspace}" if workspace else endpoint
+    base = f"{link_base_endpoint}/o/{workspace}" if workspace else link_base_endpoint
     project_q = quote_plus(project)
     note = None
     if tracing_enabled and not api_key:
