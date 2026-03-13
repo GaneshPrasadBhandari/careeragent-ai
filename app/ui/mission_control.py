@@ -104,6 +104,51 @@ def _resolve_api_base(raw_value: str) -> str:
     return normalized or "http://localhost:8000"
 
 
+def _candidate_api_bases(raw_value: str) -> list[str]:
+    """Build de-duplicated backend URL candidates for Render/local deployments."""
+    primary = _resolve_api_base(raw_value)
+    candidates: list[str] = []
+
+    def _push(url: str) -> None:
+        clean = _resolve_api_base(url)
+        if clean and clean not in candidates:
+            candidates.append(clean)
+
+    _push(primary)
+    raw = str(raw_value or "").strip().rstrip("/")
+    if raw:
+        if not raw.startswith(("http://", "https://")):
+            host_hint = raw.split("/", 1)[0].split(":", 1)[0].strip().lower()
+            local_hosts = {"localhost", "127.0.0.1", "0.0.0.0"}
+            raw_scheme = "http" if host_hint in local_hosts else "https"
+            raw = f"{raw_scheme}://{raw.lstrip('/')}"
+        if raw not in candidates:
+            candidates.append(raw)
+
+    parsed = urlparse(primary)
+    host = (parsed.netloc or "").strip().lower()
+    scheme = parsed.scheme or "https"
+    if host.endswith(".onrender.com"):
+        subdomain = host.split(".", 1)[0]
+        render_swaps = (
+            ("-dashboard", "-api"),
+            ("-frontend", "-api"),
+            ("-front", "-api"),
+            ("-ui", "-api"),
+            ("-web", "-api"),
+            ("-dashboard", "-backend"),
+            ("-frontend", "-backend"),
+            ("-front", "-backend"),
+            ("-ui", "-backend"),
+            ("-web", "-backend"),
+        )
+        for src, dest in render_swaps:
+            if subdomain.endswith(src):
+                _push(f"{scheme}://{subdomain[:-len(src)]}{dest}.onrender.com")
+
+    return candidates
+
+
 def _normalize_clickable_url(url: str) -> str:
     clean = str(url or "").strip()
     if not clean:
@@ -387,11 +432,7 @@ def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests
 
 
 def _api_health(api_base: str) -> bool:
-    base = _resolve_api_base(api_base)
-    candidates = [base]
-    raw = str(api_base or "").strip().rstrip("/")
-    if raw and raw not in candidates:
-        candidates.append(raw)
+    candidates = _candidate_api_bases(api_base)
 
     health_paths = ("/health", "/ready", "/")
 
@@ -417,38 +458,45 @@ def _api_health(api_base: str) -> bool:
 
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
-    try:
-        resolved_base = _resolve_api_base(api_base).rstrip("/")
-        endpoint = f"{resolved_base}/hunt/start"
-        last_err = None
+    candidates = _candidate_api_bases(api_base)
+    last_err = None
+    for resolved_base in candidates:
+        try:
+            endpoint = f"{resolved_base.rstrip('/')}/hunt/start"
 
-        # Free-tier Render API services can return 502/503 for up to ~90s during
-        # cold start. Keep retrying with bounded exponential backoff so the first
-        # Start Hunt click can still succeed without forcing a manual retry.
-        for attempt in range(1, 9):
-            r = requests.post(
-                endpoint,
-                files={"resume": (filename, resume_bytes, "application/octet-stream")},
-                data={"config": json.dumps(config)},
-                timeout=60,
-            )
-            if r.status_code == 200:
-                return r.json().get("run_id")
-            last_err = f"Backend error {r.status_code}: {r.text[:200]}"
-            if r.status_code in {502, 503, 504} and attempt < 8:
-                # Opportunistic warm-up probe before retrying.
-                try:
-                    requests.get(f"{resolved_base}/health", timeout=8)
-                except Exception:
-                    pass
-                time.sleep(min(3.0 * attempt, 18.0))
-                continue
-            break
-        st.error(last_err or "Backend error: no response payload.")
-    except requests.exceptions.ConnectionError:
+            # Free-tier Render API services can return 502/503 for up to ~90s during
+            # cold start. Keep retrying with bounded exponential backoff so the first
+            # Start Hunt click can still succeed without forcing a manual retry.
+            for attempt in range(1, 9):
+                r = requests.post(
+                    endpoint,
+                    files={"resume": (filename, resume_bytes, "application/octet-stream")},
+                    data={"config": json.dumps(config)},
+                    timeout=60,
+                )
+                if r.status_code == 200:
+                    return r.json().get("run_id")
+                last_err = f"Backend error {r.status_code}: {r.text[:200]}"
+                if r.status_code in {502, 503, 504} and attempt < 8:
+                    # Opportunistic warm-up probe before retrying.
+                    try:
+                        requests.get(f"{resolved_base.rstrip('/')}/health", timeout=8)
+                    except Exception:
+                        pass
+                    time.sleep(min(3.0 * attempt, 18.0))
+                    continue
+                break
+        except requests.exceptions.ConnectionError:
+            last_err = f"Cannot connect to backend candidate: {resolved_base}"
+            continue
+        except Exception as exc:
+            st.error(f"Start hunt error: {exc}")
+            return None
+
+    if last_err and "Cannot connect" in last_err:
         st.error("🔴 Cannot connect to backend. Start API with `python api_main.py` (or `uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload`).")
-    except Exception as exc:
-        st.error(f"Start hunt error: {exc}")
+    else:
+        st.error(last_err or "Backend error: no response payload.")
     return None
 
 
