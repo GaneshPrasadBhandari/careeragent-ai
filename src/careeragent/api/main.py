@@ -119,6 +119,22 @@ except ModuleNotFoundError:  # pragma: no cover - constrained env fallback
         def __init__(self, *args, **kwargs):
             self.routes = []
 
+        async def __call__(self, scope, receive, send):
+            if scope.get("type") != "http":
+                return
+            body = b'{"status":"error","detail":"fastapi_missing"}'
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 503,
+                    "headers": [
+                        [b"content-type", b"application/json"],
+                        [b"content-length", str(len(body)).encode("ascii")],
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+
         def add_middleware(self, *args, **kwargs):
             return None
 
