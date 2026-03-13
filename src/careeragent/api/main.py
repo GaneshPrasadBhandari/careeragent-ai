@@ -1416,11 +1416,37 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
 def _persist_state(run_id: str) -> None:
     try:
+        _runs[run_id]["updated_at"] = _now()
         state_file = LOGS_DIR / f"state_{run_id}.json"
         data = {k: v for k, v in _runs[run_id].items() if k not in ("job_leads",)}
         state_file.write_text(json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.debug("State persist error: %s", exc)
+
+
+def _coerce_iso_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def _state_rank(state: dict | None) -> tuple[float, int, datetime]:
+    if not isinstance(state, dict):
+        return (0.0, 0, datetime.min.replace(tzinfo=timezone.utc))
+    progress = float(state.get("progress_pct") or 0.0)
+    log_len = len(state.get("agent_log") or [])
+    ts = (
+        _coerce_iso_ts(state.get("updated_at"))
+        or _coerce_iso_ts(state.get("completed_at"))
+        or _coerce_iso_ts(state.get("created_at"))
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (progress, log_len, ts)
 
 
 def _refresh_run_state(run_id: str) -> dict:
@@ -1430,19 +1456,27 @@ def _refresh_run_state(run_id: str) -> dict:
     polling status from a different worker than the one executing background
     pipeline tasks.
     """
+    mem_state = _runs.get(run_id)
     state_file = LOGS_DIR / f"state_{run_id}.json"
+    disk_state: dict | None = None
     if state_file.exists():
         try:
             disk_state = json.loads(state_file.read_text())
-            _runs[run_id] = disk_state
-            return disk_state
         except Exception as exc:
             log.debug("State reload error for %s: %s", run_id, exc)
 
-    state = _runs.get(run_id)
-    if state is None:
+    if disk_state and mem_state:
+        chosen = disk_state if _state_rank(disk_state) >= _state_rank(mem_state) else mem_state
+        _runs[run_id] = chosen
+        return chosen
+
+    if disk_state:
+        _runs[run_id] = disk_state
+        return disk_state
+
+    if mem_state is None:
         raise HTTPException(404, f"Run {run_id} not found")
-    return state
+    return mem_state
 
 
 def _persist_tracking(run_id: str, state: dict) -> None:
