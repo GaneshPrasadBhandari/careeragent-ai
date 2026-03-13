@@ -418,12 +418,13 @@ DEFAULT_OUTPUTS = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _api_get(api_base: str, path: str, timeout: int = 5) -> Optional[dict]:
-    try:
-        r = requests.get(f"{api_base.rstrip('/')}{path}", timeout=timeout)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
+    for candidate in _candidate_api_bases(api_base):
+        try:
+            r = requests.get(f"{candidate.rstrip('/')}{path}", timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            continue
     return None
 
 
@@ -501,7 +502,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
-    raw = _api_get(_resolve_api_base(api_base), f"/hunt/{run_id}/status", timeout=5)
+    raw = _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
     if not raw:
         return None
 
@@ -551,17 +552,18 @@ def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict]
         body = {"action": action, "action_type": action, "request_token": request_token}
         if payload:
             body.update(payload)
-        endpoint = f"{api_base.rstrip('/')}/hunt/{run_id}/action"
         last_err = None
-        for attempt in range(1, 7):
-            r = requests.post(endpoint, json=body, timeout=75)
-            if r.status_code == 200:
-                return True
-            last_err = f"Action failed ({r.status_code}): {r.text[:200]}"
-            if r.status_code in {502, 503, 504} and attempt < 6:
-                time.sleep(1.5 * attempt)
-                continue
-            break
+        for candidate in _candidate_api_bases(api_base):
+            endpoint = f"{candidate.rstrip('/')}/hunt/{run_id}/action"
+            for attempt in range(1, 7):
+                r = requests.post(endpoint, json=body, timeout=75)
+                if r.status_code == 200:
+                    return True
+                last_err = f"Action failed ({r.status_code}): {r.text[:200]}"
+                if r.status_code in {502, 503, 504} and attempt < 6:
+                    time.sleep(1.5 * attempt)
+                    continue
+                break
         st.error(last_err or "Action failed due to unknown backend response.")
     except Exception as exc:
         st.error(f"Action request failed: {exc}")
