@@ -387,9 +387,14 @@ def _api_health(api_base: str) -> bool:
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
-        endpoint = f"{_resolve_api_base(api_base).rstrip('/')}/hunt/start"
+        resolved_base = _resolve_api_base(api_base).rstrip("/")
+        endpoint = f"{resolved_base}/hunt/start"
         last_err = None
-        for attempt in range(1, 5):
+
+        # Free-tier Render API services can return 502/503 for up to ~90s during
+        # cold start. Keep retrying with bounded exponential backoff so the first
+        # Start Hunt click can still succeed without forcing a manual retry.
+        for attempt in range(1, 9):
             r = requests.post(
                 endpoint,
                 files={"resume": (filename, resume_bytes, "application/octet-stream")},
@@ -399,8 +404,13 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
             if r.status_code == 200:
                 return r.json().get("run_id")
             last_err = f"Backend error {r.status_code}: {r.text[:200]}"
-            if r.status_code in {502, 503, 504} and attempt < 4:
-                time.sleep(1.2 * attempt)
+            if r.status_code in {502, 503, 504} and attempt < 8:
+                # Opportunistic warm-up probe before retrying.
+                try:
+                    requests.get(f"{resolved_base}/health", timeout=8)
+                except Exception:
+                    pass
+                time.sleep(min(3.0 * attempt, 18.0))
                 continue
             break
         st.error(last_err or "Backend error: no response payload.")
