@@ -1,6 +1,8 @@
 import importlib
 import sys
 import types
+import asyncio
+from pathlib import Path
 
 
 def _import_api_main_with_stubs():
@@ -192,3 +194,30 @@ def test_role_relevance_filter_stays_strict_when_coverage_is_healthy():
 
     assert 20 <= len(out) < len(jobs)
     assert all(float(j.get("role_relevance") or 0.0) >= 0.5 for j in out)
+
+
+def test_parse_resume_timeout_uses_fallback_text(monkeypatch):
+    async def _slow_to_thread(fn, *args, **kwargs):
+        await asyncio.sleep(1.1)
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(api_main.asyncio, "to_thread", _slow_to_thread)
+    monkeypatch.setattr(api_main, "_fallback_resume_text", lambda _p: "Jane Doe\njane@example.com\nPython")
+
+    profile = asyncio.run(api_main._parse_resume(Path("resume.docx"), timeout_s=0.01))
+
+    assert profile["name"] == "Jane Doe"
+    assert profile.get("parse_warning") == "resume_parse_timeout_1s"
+
+
+def test_parse_resume_error_uses_fallback_text(monkeypatch):
+    def _boom(_path):
+        raise RuntimeError("parser exploded")
+
+    monkeypatch.setattr(api_main, "_parse_resume_sync", _boom)
+    monkeypatch.setattr(api_main, "_fallback_resume_text", lambda _p: "Alex\nalex@example.com\nML")
+
+    profile = asyncio.run(api_main._parse_resume(Path("resume.pdf"), timeout_s=5))
+
+    assert profile["name"] == "Alex"
+    assert profile.get("parse_warning", "").startswith("resume_parse_error:RuntimeError")

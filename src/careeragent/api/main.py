@@ -23,6 +23,7 @@ import sqlite3
 import sys
 import tempfile
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1634,7 +1635,29 @@ def _build_cover_letter_text(profile: dict, job: dict) -> str:
 
 
 @traceable(name="api.parse_resume")
-async def _parse_resume(resume_path: Path) -> dict:
+async def _parse_resume(resume_path: Path, timeout_s: float = 25.0) -> dict:
+    """Extract profile from uploaded resume file with a hard timeout guard.
+
+    Some large/corrupted DOCX/PDF files can block parser libraries long enough
+    to make the UI appear stuck at L2. Running extraction in a worker thread and
+    enforcing a timeout keeps pipeline progression deterministic.
+    """
+    effective_timeout = max(1.0, float(timeout_s))
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_parse_resume_sync, resume_path), timeout=effective_timeout)
+    except asyncio.TimeoutError:
+        log.warning("Resume parse timed out after %.1fs for %s; using fallback extractor", effective_timeout, resume_path.name)
+        profile = _extract_profile_from_text(_fallback_resume_text(resume_path))
+        profile["parse_warning"] = f"resume_parse_timeout_{int(effective_timeout)}s"
+        return profile
+    except Exception as exc:
+        log.warning("Resume parse failed for %s (%s); using fallback extractor", resume_path.name, exc)
+        profile = _extract_profile_from_text(_fallback_resume_text(resume_path))
+        profile["parse_warning"] = f"resume_parse_error:{type(exc).__name__}"
+        return profile
+
+
+def _parse_resume_sync(resume_path: Path) -> dict:
     """Extract profile from uploaded resume file."""
     text = ""
     suffix = resume_path.suffix.lower()
@@ -1664,6 +1687,26 @@ async def _parse_resume(resume_path: Path) -> dict:
         text = resume_path.read_text(errors="replace")
 
     return _extract_profile_from_text(text)
+
+
+def _fallback_resume_text(resume_path: Path) -> str:
+    """Best-effort extractor that avoids heavyweight parser dependencies."""
+    try:
+        suffix = resume_path.suffix.lower()
+        if suffix in (".txt", ".md"):
+            return resume_path.read_text(errors="replace")
+        if suffix == ".docx":
+            try:
+                with zipfile.ZipFile(resume_path, "r") as zf:
+                    xml = zf.read("word/document.xml").decode("utf-8", errors="replace")
+                xml = re.sub(r"<[^>]+>", " ", xml)
+                return re.sub(r"\s+", " ", xml).strip()
+            except Exception:
+                pass
+        raw = resume_path.read_bytes()[:250_000]
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return f"[resume parsing fallback unavailable for {resume_path.name}]"
 
 
 def _extract_profile_from_text(text: str) -> dict:
