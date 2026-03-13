@@ -369,27 +369,39 @@ def _api_health(api_base: str) -> bool:
     if raw and raw not in candidates:
         candidates.append(raw)
 
+    health_paths = ("/health", "/ready", "/")
+
     # Render cold starts can take 30-90s; keep health probes resilient without
     # blocking too long on a single request.
     for timeout, wait_s in ((3, 0.25), (5, 0.5), (8, 1.0), (12, 2.0)):
         for candidate in candidates:
-            resp = _api_get(candidate, "/health", timeout=timeout)
-            if resp is not None and resp.get("status") in {"ok", "healthy"}:
-                return True
-            try:
-                if requests.get(f"{candidate}/health", timeout=timeout).status_code == 200:
+            for path in health_paths:
+                resp = _api_get(candidate, path, timeout=timeout)
+                if resp is not None and (
+                    resp.get("status") in {"ok", "healthy"}
+                    or resp.get("ok") is True
+                    or str(resp.get("service") or "").strip().lower() == "careeragent-api"
+                ):
                     return True
-            except Exception:
-                pass
+                try:
+                    if requests.get(f"{candidate}{path}", timeout=timeout).status_code == 200:
+                        return True
+                except Exception:
+                    pass
         time.sleep(wait_s)
     return False
 
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
-        endpoint = f"{_resolve_api_base(api_base).rstrip('/')}/hunt/start"
+        resolved_base = _resolve_api_base(api_base).rstrip("/")
+        endpoint = f"{resolved_base}/hunt/start"
         last_err = None
-        for attempt in range(1, 5):
+
+        # Free-tier Render API services can return 502/503 for up to ~90s during
+        # cold start. Keep retrying with bounded exponential backoff so the first
+        # Start Hunt click can still succeed without forcing a manual retry.
+        for attempt in range(1, 9):
             r = requests.post(
                 endpoint,
                 files={"resume": (filename, resume_bytes, "application/octet-stream")},
@@ -399,8 +411,13 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
             if r.status_code == 200:
                 return r.json().get("run_id")
             last_err = f"Backend error {r.status_code}: {r.text[:200]}"
-            if r.status_code in {502, 503, 504} and attempt < 4:
-                time.sleep(1.2 * attempt)
+            if r.status_code in {502, 503, 504} and attempt < 8:
+                # Opportunistic warm-up probe before retrying.
+                try:
+                    requests.get(f"{resolved_base}/health", timeout=8)
+                except Exception:
+                    pass
+                time.sleep(min(3.0 * attempt, 18.0))
                 continue
             break
         st.error(last_err or "Backend error: no response payload.")
@@ -1403,19 +1420,22 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None))
 
         if not is_healthy:
-            st.markdown(
-                """
-                <div style="margin-top:8px;padding:10px 12px;border-radius:8px;background:#3A1D20;border:1px solid #7F1D1D;color:#FECACA;font-size:13px;line-height:1.45;">
-                    <strong>⚠ Backend health check failed.</strong><br/>
-                    Local run command:<br/>
-                    <code style="color:#FDE68A;">python api_main.py</code> (fallback-safe) <br/>
-                    Optional full FastAPI mode:<br/>
-                    <code style="color:#FDE68A;">uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload</code><br/>
-                    On Render, verify the API service is <em>deployed</em> and this dashboard points to its URL. Cold starts can take 30-90s; Start Hunt will still try with retries.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            if st.session_state.get("hunt_running") and st.session_state.get("run_id"):
+                st.info("Backend is waking up (Render cold start). Run is queued and status will appear shortly.")
+            else:
+                st.markdown(
+                    """
+                    <div style="margin-top:8px;padding:10px 12px;border-radius:8px;background:#3A1D20;border:1px solid #7F1D1D;color:#FECACA;font-size:13px;line-height:1.45;">
+                        <strong>⚠ Backend health check failed.</strong><br/>
+                        Local run command:<br/>
+                        <code style="color:#FDE68A;">python api_main.py</code> (fallback-safe) <br/>
+                        Optional full FastAPI mode:<br/>
+                        <code style="color:#FDE68A;">uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload</code><br/>
+                        On Render, verify the API service is <em>deployed</em> and this dashboard points to its URL. Cold starts can take 30-90s; Start Hunt will still try with retries.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
         elif resume_bytes is None:
             st.caption("Upload your resume to begin.")
 
@@ -1429,6 +1449,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                 st.session_state["hunt_running"] = True
                 st.session_state["last_poll"]    = 0.0
                 st.success(f"✓ Run started: `{run_id}`")
+                st.rerun()
             else:
                 st.error("Failed to start run — check backend logs.")
 
