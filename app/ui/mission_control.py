@@ -43,12 +43,36 @@ def _default_api_base() -> str:
     render_external_url = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
     render_service_name = (os.getenv("RENDER_SERVICE_NAME") or "").strip()
 
-    if render_service_name.endswith("-dashboard"):
-        inferred = render_service_name.replace("-dashboard", "-api")
+    def _infer_render_api_name(name: str) -> Optional[str]:
+        clean = str(name or "").strip().lower()
+        if not clean:
+            return None
+        replacements = (
+            ("-dashboard", "-api"),
+            ("-frontend", "-api"),
+            ("-front", "-api"),
+            ("-ui", "-api"),
+            ("-web", "-api"),
+        )
+        for suffix, mapped in replacements:
+            if clean.endswith(suffix):
+                return clean[: -len(suffix)] + mapped
+        return None
+
+    inferred_name = _infer_render_api_name(render_service_name)
+    if inferred_name:
+        inferred = inferred_name
         return f"https://{inferred}.onrender.com"
 
     if render_external_url and "-dashboard.onrender.com" in render_external_url:
         return render_external_url.replace("-dashboard.onrender.com", "-api.onrender.com").rstrip("/")
+
+    if render_external_url and ".onrender.com" in render_external_url:
+        host = urlparse(render_external_url).netloc or render_external_url
+        subdomain = host.split(".", 1)[0].strip()
+        inferred = _infer_render_api_name(subdomain)
+        if inferred:
+            return f"https://{inferred}.onrender.com"
 
     return _resolve_api_base("http://localhost:8000")
 

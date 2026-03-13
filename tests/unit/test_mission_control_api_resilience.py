@@ -6,7 +6,7 @@ from pathlib import Path
 def _load_functions():
     src = Path('app/ui/mission_control.py').read_text(encoding='utf-8')
     mod = ast.parse(src)
-    wanted = {'_resolve_api_base', '_api_health', '_api_start_hunt'}
+    wanted = {'_default_api_base', '_resolve_api_base', '_api_health', '_api_start_hunt'}
     nodes = [n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     fn_mod = ast.Module(body=nodes, type_ignores=[])
     code = compile(fn_mod, filename='mission_control_extract', mode='exec')
@@ -21,6 +21,7 @@ def _load_functions():
     parse = __import__('urllib.parse', fromlist=['urlparse', 'urlunparse'])
     scope = {
         'json': json,
+        'os': __import__('os'),
         'time': __import__('time'),
         'st': _St(),
         'Optional': __import__('typing').Optional,
@@ -35,6 +36,19 @@ def test_resolve_api_base_rewrites_dashboard_hostname_and_paths():
     scope = _load_functions()
     resolve = scope['_resolve_api_base']
     assert resolve('careeragent-dashboard.onrender.com/health') == 'https://careeragent-api.onrender.com'
+
+
+def test_default_api_base_infers_api_from_frontend_service_name(monkeypatch):
+    scope = _load_functions()
+    default = scope['_default_api_base']
+    monkeypatch.delenv('API_BASE_URL', raising=False)
+    monkeypatch.delenv('API_URL', raising=False)
+    monkeypatch.delenv('BACKEND_URL', raising=False)
+    monkeypatch.delenv('API_HOSTPORT', raising=False)
+    monkeypatch.setenv('RENDER_SERVICE_NAME', 'careeragent-frontend')
+    monkeypatch.delenv('RENDER_EXTERNAL_URL', raising=False)
+
+    assert default() == 'https://careeragent-api.onrender.com'
 
 
 
