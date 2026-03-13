@@ -71,9 +71,65 @@ def _repair_pydantic_shadowing() -> None:
 
 _repair_pydantic_shadowing()
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+try:
+    from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import FileResponse, JSONResponse
+except ModuleNotFoundError:  # pragma: no cover - constrained env fallback
+    class HTTPException(Exception):
+        def __init__(self, status_code: int, detail: str):
+            self.status_code = int(status_code)
+            self.detail = detail
+            super().__init__(f"HTTP {status_code}: {detail}")
+
+    class BackgroundTasks:
+        def __init__(self):
+            self.tasks = []
+
+        def add_task(self, fn, *args, **kwargs):
+            self.tasks.append((fn, args, kwargs))
+
+    class UploadFile:  # minimal shim for import-time typing
+        filename: str
+
+        async def read(self) -> bytes:
+            return b""
+
+    def File(*_args, **_kwargs):
+        return None
+
+    def Form(*_args, **_kwargs):
+        return None
+
+    class CORSMiddleware:
+        pass
+
+    class JSONResponse(dict):
+        def __init__(self, content=None, status_code: int = 200):
+            super().__init__(content or {})
+            self.status_code = status_code
+
+    class FileResponse:
+        def __init__(self, path: str, filename: str | None = None):
+            self.path = path
+            self.filename = filename
+
+    class _ShimFastAPI:
+        def __init__(self, *args, **kwargs):
+            self.routes = []
+
+        def add_middleware(self, *args, **kwargs):
+            return None
+
+        def _route(self, *_args, **_kwargs):
+            def _decorator(fn):
+                return fn
+            return _decorator
+
+        get = _route
+        post = _route
+
+    FastAPI = _ShimFastAPI
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.core.config import configure_runtime_env
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
@@ -1364,6 +1420,28 @@ def _persist_state(run_id: str) -> None:
         log.debug("State persist error: %s", exc)
 
 
+def _refresh_run_state(run_id: str) -> dict:
+    """Return the most up-to-date run state, preferring persisted disk state.
+
+    This keeps multi-worker deployments (e.g. Render/Gunicorn) consistent when
+    polling status from a different worker than the one executing background
+    pipeline tasks.
+    """
+    state_file = LOGS_DIR / f"state_{run_id}.json"
+    if state_file.exists():
+        try:
+            disk_state = json.loads(state_file.read_text())
+            _runs[run_id] = disk_state
+            return disk_state
+        except Exception as exc:
+            log.debug("State reload error for %s: %s", run_id, exc)
+
+    state = _runs.get(run_id)
+    if state is None:
+        raise HTTPException(404, f"Run {run_id} not found")
+    return state
+
+
 def _persist_tracking(run_id: str, state: dict) -> None:
     try:
         db_path = LOGS_DIR / "careeragent_tracking.db"
@@ -2201,16 +2279,7 @@ async def start_hunt(
 @traceable(name="api.get_status")
 async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
-    if run_id not in _runs:
-        # Try to reload from persisted file
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            data = json.loads(state_file.read_text())
-            _runs[run_id] = data
-        else:
-            raise HTTPException(404, f"Run {run_id} not found")
-
-    state = _runs[run_id]
+    state = _refresh_run_state(run_id)
     return {
         "run_id":           state["run_id"],
         "status":           state["status"],
@@ -2252,9 +2321,7 @@ async def get_status(run_id: str):
 @app.get("/hunt/{run_id}/jobs")
 @traceable(name="api.get_jobs")
 async def get_jobs(run_id: str, limit: int = 200):
-    if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
-    state = _runs[run_id]
+    state = _refresh_run_state(run_id)
     jobs  = state.get("scored_jobs", [])
     safe_limit = max(1, min(500, int(limit or 200)))
     return {
@@ -2267,9 +2334,7 @@ async def get_jobs(run_id: str, limit: int = 200):
 @app.get("/hunt/{run_id}/applications")
 @traceable(name="api.get_applications")
 async def get_applications(run_id: str):
-    if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
-    state = _runs[run_id]
+    state = _refresh_run_state(run_id)
     return {
         "run_id": run_id,
         "applications": state.get("apply_results", []),
@@ -2284,9 +2349,7 @@ async def get_applications(run_id: str):
 @app.post("/hunt/{run_id}/feedback")
 @traceable(name="api.feedback")
 async def post_feedback(run_id: str, body: dict):
-    if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
-    state = _runs[run_id]
+    state = _refresh_run_state(run_id)
     if not str((body or {}).get("text") or "").strip():
         raise HTTPException(400, "feedback text is required")
     event = _record_feedback_event(state, body or {})
@@ -2301,9 +2364,7 @@ async def post_feedback(run_id: str, body: dict):
 @app.post("/hunt/{run_id}/action")
 @traceable(name="api.run_action")
 async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict):
-    if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
-    state = _runs[run_id]
+    state = _refresh_run_state(run_id)
     action = (body or {}).get("action") or (body or {}).get("action_type")
     request_token = str((body or {}).get("request_token") or "").strip()
     if _is_duplicate_action(state, request_token):
@@ -2411,9 +2472,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
 
 @app.get("/hunt/{run_id}/artifacts")
 async def get_artifacts(run_id: str):
-    if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
-    return {"run_id": run_id, "artifacts": _runs[run_id].get("artifacts", {})}
+    state = _refresh_run_state(run_id)
+    return {"run_id": run_id, "artifacts": state.get("artifacts", {})}
 
 
 @app.get("/artifact/download")
