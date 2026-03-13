@@ -6,7 +6,7 @@ from pathlib import Path
 def _load_functions():
     src = Path('app/ui/mission_control.py').read_text(encoding='utf-8')
     mod = ast.parse(src)
-    wanted = {'_default_api_base', '_resolve_api_base', '_api_health', '_api_start_hunt'}
+    wanted = {'_default_api_base', '_resolve_api_base', '_candidate_api_bases', '_api_health', '_api_start_hunt'}
     nodes = [n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     fn_mod = ast.Module(body=nodes, type_ignores=[])
     code = compile(fn_mod, filename='mission_control_extract', mode='exec')
@@ -106,6 +106,9 @@ def test_api_start_hunt_retries_and_succeeds(monkeypatch):
         def __init__(self):
             self.calls = 0
 
+        def get(self, *args, **kwargs):
+            return Resp(200, payload={'status': 'ok'})
+
         def post(self, *args, **kwargs):
             self.calls += 1
             if self.calls < 3:
@@ -132,6 +135,9 @@ def test_api_start_hunt_reports_error_after_retries(monkeypatch):
     class RequestsStub:
         class exceptions:
             ConnectionError = RuntimeError
+
+        def get(self, *args, **kwargs):
+            return Resp(503, text='service unavailable')
 
         def post(self, *args, **kwargs):
             return Resp(503, text='service unavailable')
