@@ -25,6 +25,37 @@ def test_is_stalled_early_run_detects_first_layer_hang():
     assert api._is_stalled_early_run(state) is True
 
 
+def test_is_stalled_early_run_detects_second_layer_hang() -> None:
+    state = {
+        "status": "running",
+        "progress_pct": 10.0,
+        "updated_at": _ts_ago(45),
+        "layers": [
+            {"status": "ok"},
+            {"status": "ok"},
+            {"status": "running"},
+            {"status": "waiting"},
+            {"status": "waiting"},
+        ],
+    }
+    assert api._is_stalled_early_run(state) is True
+
+
+def test_is_stalled_early_run_ignores_recent_activity() -> None:
+    state = {
+        "status": "running",
+        "progress_pct": 10.0,
+        "updated_at": _ts_ago(5),
+        "layers": [
+            {"status": "ok"},
+            {"status": "running"},
+            {"status": "waiting"},
+            {"status": "waiting"},
+        ],
+    }
+    assert api._is_stalled_early_run(state) is False
+
+
 def test_try_recover_stalled_run_marks_once(tmp_path, monkeypatch):
     resume_path = tmp_path / "resume.txt"
     resume_path.write_text("python")

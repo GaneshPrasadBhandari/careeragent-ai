@@ -1,4 +1,4 @@
-from careeragent.managers.leadscout_service import _is_plausible_job_link, _normalize_result_url
+from careeragent.managers.leadscout_service import _curated_query_url, _is_plausible_job_link, _normalize_result_url
 from careeragent.managers.leadscout_service import JobLead, LeadScoutService
 
 
@@ -83,3 +83,22 @@ def test_hybrid_relevance_score_rewards_role_keyword_overlap() -> None:
     )
     assert score > 0.45
     assert "role_hits" in reason
+
+
+def test_curated_query_url_uses_valid_lever_host() -> None:
+    url = _curated_query_url("jobs.lever.co", "platform+engineer")
+    assert url.startswith("https://jobs.lever.co")
+
+
+def test_backfill_curated_search_urls_avoids_invalid_www_hosts() -> None:
+    svc = LeadScoutService(max_results_per_source=3)
+    out = svc._backfill_curated_search_urls(
+        [],
+        intent_plan={"target_roles": ["Platform Engineer"], "keywords": ["azure", "openai"], "geo_preferences": {"remote": True}},
+        target_count=7,
+    )
+    backfilled = [x.url for x in out if x.source == "query_backfill"]
+    assert any("jobs.lever.co" in u for u in backfilled)
+    assert any("myworkdayjobs.com/en-US/recruiting" in u for u in backfilled)
+    assert not any("www.jobs.lever.co" in u for u in backfilled)
+    assert not any("www.myworkdayjobs.com" in u for u in backfilled)

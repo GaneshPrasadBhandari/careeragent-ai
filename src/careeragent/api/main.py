@@ -1501,18 +1501,24 @@ def _is_stalled_early_run(state: dict) -> bool:
     if not isinstance(state, dict) or state.get("status") != "running":
         return False
     layers = state.get("layers") or []
-    if not isinstance(layers, list) or len(layers) < 2:
+    if not isinstance(layers, list) or len(layers) < 3:
         return False
 
     l0 = layers[0] if isinstance(layers[0], dict) else {}
     l1 = layers[1] if isinstance(layers[1], dict) else {}
+    l2 = layers[2] if isinstance(layers[2], dict) else {}
     progress = float(state.get("progress_pct") or 0.0)
 
+    early_running = l1.get("status") == "running" or l2.get("status") == "running"
+    before_discovery = all(
+        str((layers[i] if i < len(layers) else {}).get("status") or "waiting") == "waiting"
+        for i in range(3, min(len(layers), 10))
+    )
     early_stuck = (
-        progress <= 12.0
-        and l1.get("status") == "running"
+        progress <= 25.0
+        and early_running
         and l0.get("status") in {"ok", "running"}
-        and all(str((layers[i] if i < len(layers) else {}).get("status") or "waiting") == "waiting" for i in range(2, min(len(layers), 10)))
+        and before_discovery
     )
     if not early_stuck:
         return False
@@ -1560,7 +1566,7 @@ def _release_recovery_slot(run_id: str) -> None:
 
 
 def _try_recover_stalled_run(run_id: str, state: dict) -> None:
-    """Best-effort auto-recovery for stale runs that never moved past L1."""
+    """Best-effort auto-recovery for stale runs stuck before discovery (L1/L2)."""
     if not _is_stalled_early_run(state):
         return
     if state.get("recovery_attempted_at"):
