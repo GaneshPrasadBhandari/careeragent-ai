@@ -160,9 +160,17 @@ def _infer_company_name(*, title: str, company_hint: str, url: str) -> str:
 
 def _curated_query_url(domain_path: str, query: str) -> str:
     """Build resilient, openable board-search links for curated backfill rows."""
-    domain = str(domain_path or "").strip().lower().strip("/")
-    if not domain:
+    raw_domain = str(domain_path or "").strip().lower()
+    if not raw_domain:
         return ""
+    if "://" not in raw_domain:
+        parsed = urlparse(f"https://{raw_domain}")
+    else:
+        parsed = urlparse(raw_domain)
+    host_only = (parsed.netloc or parsed.path.split("/")[0]).strip().lower()
+    host_only = host_only.removeprefix("www.")
+    path_hint = parsed.path or ""
+    domain = host_only
 
     # Domains that commonly break behind `www.` (e.g., jobs.lever.co).
     if domain.startswith(("jobs.", "boards.")):
@@ -184,10 +192,13 @@ def _curated_query_url(domain_path: str, query: str) -> str:
     if "greenhouse" in domain:
         return f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}"
     if "jobs.lever.co" in domain or "lever.co" in domain:
-        return f"https://jobs.lever.co/?q={query}"
+        # Root lever.co often lands on vendor homepage; use site search to jump to tenant pages.
+        return f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}"
     if "myworkdayjobs.com" in domain:
         # myworkdayjobs root cannot serve cross-tenant searches; use a stable site-search.
         return f"https://www.google.com/search?q=site%3Amyworkdayjobs.com+{query}"
+    if path_hint and path_hint != "/":
+        return f"https://{host}{path_hint}?q={query}"
     return f"https://{host}?q={query}"
 
 

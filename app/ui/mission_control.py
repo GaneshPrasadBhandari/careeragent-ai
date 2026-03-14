@@ -1031,22 +1031,16 @@ def render_agent_feed(status: Optional[dict]) -> None:
     """Live Agent Feed section."""
     feed = status.get("agent_log", []) if status else []
 
+    st.markdown('<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div></div>', unsafe_allow_html=True)
     if not feed:
-        feed_content = '<div class="feed-empty">Waiting for agent activity…</div>'
-    else:
-        entries = ""
-        for entry in reversed(feed[-20:]):  # newest first
-            ts  = entry.get("ts", "")[:19].replace("T", " ")
-            msg = entry.get("msg", "")
-            entries += f'<div class="feed-entry"><span class="feed-ts">{escape(str(ts))}</span><span class="feed-msg">{escape(str(msg))}</span></div>'
-        feed_content = entries
-
-    st.markdown(f"""
-    <div class="feed-wrap">
-        <div class="feed-title">+ Live Agent Feed</div>
-        {feed_content}
-    </div>
-    """, unsafe_allow_html=True)
+        st.warning("Live agent feed is empty for this run right now. Waiting for agent activity…")
+        return
+    lines: list[str] = []
+    for entry in reversed(feed[-25:]):
+        ts = str(entry.get("ts", ""))[:19].replace("T", " ")
+        msg = str(entry.get("msg", "")).strip()
+        lines.append(f"[{ts}] {msg}")
+    st.code("\n".join(lines), language=None)
 
 
 def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:

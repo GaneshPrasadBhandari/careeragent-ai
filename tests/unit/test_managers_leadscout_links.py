@@ -94,7 +94,8 @@ def test_hybrid_relevance_score_rewards_role_keyword_overlap() -> None:
 
 def test_curated_query_url_uses_valid_lever_host() -> None:
     url = _curated_query_url("jobs.lever.co", "platform+engineer")
-    assert url.startswith("https://jobs.lever.co")
+    assert "google.com/search" in url
+    assert "site%3Ajobs.lever.co" in url
 
 
 def test_backfill_curated_search_urls_avoids_invalid_www_hosts() -> None:
@@ -118,6 +119,11 @@ def test_curated_query_url_uses_stable_endpoints_for_fragile_boards() -> None:
     assert "/Job/index.htm?sc.keyword=" in glassdoor
     assert "/jobs-search?search=" in zipr
     assert "google.com/search" in workday and "site%3Amyworkdayjobs.com" in workday
+
+
+def test_curated_query_url_avoids_double_jobs_path_for_ziprecruiter() -> None:
+    zipr = _curated_query_url("ziprecruiter.com/Jobs", "platform+engineer")
+    assert "jobs/jobs-search" not in zipr
 
 
 def test_infer_company_name_extracts_from_title_suffix() -> None:

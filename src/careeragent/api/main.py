@@ -150,8 +150,10 @@ except ModuleNotFoundError:  # pragma: no cover - constrained env fallback
     FastAPI = _ShimFastAPI
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.core.config import configure_runtime_env
+from careeragent.core.settings import Settings
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
 from careeragent.services.notification_service import NotificationService
+from careeragent.tools.llm_tools import GeminiClient
 
 try:
     from langsmith.run_helpers import traceable  # type: ignore
@@ -995,6 +997,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     github_url = next((u for u in profile_links if "github.com" in u.lower()), "")
     candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
     candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
+    identity_bundle = _build_identity_bundle(profile, notif_cfg)
 
     apply_limit = int((state.get("config") or {}).get("apply_jobs_limit") or 0)
     to_apply = qualified if apply_limit <= 0 else qualified[:apply_limit]
@@ -1002,70 +1005,79 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["apply.playwright_form_autofill", "notify.email", "notify.sms"], attempt_count=1)
     apply_results = []
     skipped_non_direct = 0
-    for index, job in enumerate(to_apply, start=1):
-        job_id = str(job.get("id") or f"job_{index}")
-        job_url = str(job.get("url") or "")
-        artifact_set = (state.get("artifacts") or {}).get(job_id, {})
-        resume_docx = artifact_set.get("resume_docx")
-        cover_docx = artifact_set.get("cover_docx")
-        proof_path = _write_submission_proof(run_id, job_id, job)
-        direct_url = _is_direct_application_url(job_url)
-        if not direct_url:
-            skipped_non_direct += 1
-        success_signal = _detect_submission_success_signal(job_url, job) if direct_url else {
-            "success_state": False,
-            "success_text_detected": False,
-            "success_redirect_detected": False,
-            "signals": [],
-        }
-        if direct_url and candidate_email and success_signal.get("success_state"):
-            application_status = "submitted_confirmed"
-            next_action = "submission_confirmed_screenshot_captured"
-            verification_status = "confirmed_success_state"
-        elif direct_url and candidate_email:
-            application_status = "submitted_pending_verification"
-            next_action = "confirm_submission_in_ats_portal"
-            verification_status = "pending_employer_confirmation"
-        elif direct_url:
-            application_status = "queued_missing_contact"
-            next_action = "supply_missing_contact_or_review"
-            verification_status = "missing_contact"
-        else:
-            application_status = "skipped_non_direct_job_url"
-            next_action = "open_direct_job_posting_url"
-            verification_status = "not_attempted_non_direct_url"
-        normalized_company = _normalize_company_name(job.get("company", ""), job_url, job.get("title", ""))
-        apply_results.append({
-            "job_id":  job_id,
-            "title":   job.get("title", ""),
-            "company": normalized_company,
-            "source_company": job.get("company", ""),
-            "status":  application_status,
-            "url":     job_url,
-            "apply_channel": "playwright_autofill",
-            "resume_docx": resume_docx,
-            "cover_letter_docx": cover_docx,
-            "submission_proof": str(proof_path),
-            "screenshot_path": str(proof_path),
-            "applied_at": _now(),
-            "next_action": next_action,
-            "verification_method": "Treat as confirmed only when ATS shows an application ID or employer acknowledgement email arrives.",
-            "verification_status": verification_status,
-            "success_state": success_signal,
-            "followup_due_at": _now(),
-            "is_direct_job_url": direct_url,
-            "identity_bundle": identity_bundle,
-            "autofill_payload": {
-                "full_name": identity_bundle.get("full_name"),
-                "email": identity_bundle.get("primary_email"),
-                "phone": identity_bundle.get("primary_phone"),
-                "linkedin": linkedin_url,
-                "github": github_url,
-                "sms_opt_in": bool(notif_cfg.get("enable_sms")),
-                "email_opt_in": bool(notif_cfg.get("enable_email")),
-                "email_injection_targets": identity_bundle.get("email_field_targets"),
-            },
-        })
+    try:
+        for index, job in enumerate(to_apply, start=1):
+            job_id = str(job.get("id") or f"job_{index}")
+            job_url = str(job.get("url") or "")
+            artifact_set = (state.get("artifacts") or {}).get(job_id, {})
+            resume_docx = artifact_set.get("resume_docx")
+            cover_docx = artifact_set.get("cover_docx")
+            proof_path = _write_submission_proof(run_id, job_id, job)
+            direct_url = _is_direct_application_url(job_url)
+            if not direct_url:
+                skipped_non_direct += 1
+            success_signal = _detect_submission_success_signal(job_url, job) if direct_url else {
+                "success_state": False,
+                "success_text_detected": False,
+                "success_redirect_detected": False,
+                "signals": [],
+            }
+            if direct_url and candidate_email and success_signal.get("success_state"):
+                application_status = "submitted_confirmed"
+                next_action = "submission_confirmed_screenshot_captured"
+                verification_status = "confirmed_success_state"
+            elif direct_url and candidate_email:
+                application_status = "submitted_pending_verification"
+                next_action = "confirm_submission_in_ats_portal"
+                verification_status = "pending_employer_confirmation"
+            elif direct_url:
+                application_status = "queued_missing_contact"
+                next_action = "supply_missing_contact_or_review"
+                verification_status = "missing_contact"
+            else:
+                application_status = "skipped_non_direct_job_url"
+                next_action = "open_direct_job_posting_url"
+                verification_status = "not_attempted_non_direct_url"
+            normalized_company = _normalize_company_name(job.get("company", ""), job_url, job.get("title", ""))
+            apply_results.append({
+                "job_id":  job_id,
+                "title":   job.get("title", ""),
+                "company": normalized_company,
+                "source_company": job.get("company", ""),
+                "status":  application_status,
+                "url":     job_url,
+                "apply_channel": "playwright_autofill",
+                "resume_docx": resume_docx,
+                "cover_letter_docx": cover_docx,
+                "submission_proof": str(proof_path),
+                "screenshot_path": str(proof_path),
+                "applied_at": _now(),
+                "next_action": next_action,
+                "verification_method": "Treat as confirmed only when ATS shows an application ID or employer acknowledgement email arrives.",
+                "verification_status": verification_status,
+                "success_state": success_signal,
+                "followup_due_at": _now(),
+                "is_direct_job_url": direct_url,
+                "identity_bundle": identity_bundle,
+                "autofill_payload": {
+                    "full_name": identity_bundle.get("full_name"),
+                    "email": identity_bundle.get("primary_email"),
+                    "phone": identity_bundle.get("primary_phone"),
+                    "linkedin": linkedin_url,
+                    "github": github_url,
+                    "sms_opt_in": bool(notif_cfg.get("enable_sms")),
+                    "email_opt_in": bool(notif_cfg.get("enable_email")),
+                    "email_injection_targets": identity_bundle.get("email_field_targets"),
+                },
+            })
+    except Exception as exc:
+        state["layers"][7]["status"] = "error"
+        state["layers"][7]["error"] = str(exc)
+        state.setdefault("errors", []).append(f"L7: {exc}")
+        state["status"] = "error"
+        _log_agent(state, 7, f"Apply stage failed unexpectedly: {exc}")
+        _persist_state(run_id)
+        return
     state["apply_results"] = apply_results
     state["jobs_applied"]  = len(apply_results)
     state["interviews"] = [
@@ -2272,7 +2284,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *,
     out_dir.mkdir(parents=True, exist_ok=True)
     artifacts: dict[str, dict[str, Any]] = {}
 
-    baseline_md = _build_resume_markdown(profile, keyword_hints=[])
+    baseline_md = _build_resume_markdown(profile, keyword_hints=[], job=None)
     baseline_ats = _compute_resume_ats_scores(baseline_md, "", profile.get("skills") or [])
 
     for job in jobs:
@@ -2283,7 +2295,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *,
         jd_text = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "title"))
         keyword_hints = extract_skills(jd_text, extra_candidates=profile.get("skills") or [])[:12]
         keyword_hints = list(dict.fromkeys(keyword_hints + list(learning_terms or [])))[:16]
-        tailored_md = _build_resume_markdown(profile, keyword_hints=keyword_hints)
+        tailored_md = _build_resume_markdown(profile, keyword_hints=keyword_hints, job=job)
         tailored_ats = _compute_resume_ats_scores(tailored_md, jd_text, profile.get("skills") or [])
 
         baseline_md_path = job_dir / "resume_baseline.md"
@@ -2341,7 +2353,30 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *,
     return artifacts
 
 
-def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
+def _llm_cognitive_projects(profile: dict, *, job: Optional[dict], desired_projects: int, jd_terms: list[str]) -> list[str]:
+    existing = [str(p).strip() for p in (profile.get("projects") or []) if str(p).strip()]
+    if len(existing) >= desired_projects:
+        return existing
+    try:
+        settings = Settings()
+        if not settings.GEMINI_API_KEY:
+            return existing
+        client = GeminiClient(settings, model=os.getenv("CAREERAGENT_ATS_MODEL") or "gemini-1.5-flash")
+        prompt = (
+            "You are a resume strategist. Return JSON only: {\"projects\":[...]} with ATS-friendly project titles. "
+            f"Need {desired_projects} total projects. Candidate summary: {profile.get('summary','')}. "
+            f"Experience: {profile.get('experience', [])[:6]}. Existing projects: {existing}. "
+            f"Target role: {((job or {}).get('title') or '')}. JD skills: {jd_terms[:14]}."
+        )
+        data = client.generate_json(prompt, temperature=0.2, max_tokens=500) or {}
+        extra = [str(x).strip() for x in (data.get("projects") or []) if str(x).strip()]
+        merged = list(dict.fromkeys(existing + extra))
+        return merged[: max(desired_projects, 2)]
+    except Exception:
+        return existing
+
+
+def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optional[dict] = None) -> str:
     jd_terms = list(dict.fromkeys([s for s in keyword_hints if str(s).strip()]))[:10]
     base_skills = list(dict.fromkeys([str(s) for s in (profile.get("skills") or []) if str(s).strip()]))
 
@@ -2390,7 +2425,8 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
     if total_years >= 10:
         desired_projects = 4
 
-    selected_projects = notable_projects[:max(desired_projects, 2)]
+    llm_projects = _llm_cognitive_projects(profile, job=job, desired_projects=desired_projects, jd_terms=jd_terms)
+    selected_projects = (llm_projects or notable_projects)[:max(desired_projects, 2)]
     project_lines: list[str] = []
     for idx, project in enumerate(selected_projects[:8], start=1):
         project_lines.append(f"### Project {idx}: {project}")
