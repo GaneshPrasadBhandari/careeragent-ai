@@ -99,6 +99,15 @@ def test_backfill_curated_search_urls_avoids_invalid_www_hosts() -> None:
     )
     backfilled = [x.url for x in out if x.source == "query_backfill"]
     assert any("jobs.lever.co" in u for u in backfilled)
-    assert any("myworkdayjobs.com/en-US/recruiting" in u for u in backfilled)
+    assert any("site%3Amyworkdayjobs.com" in u for u in backfilled)
     assert not any("www.jobs.lever.co" in u for u in backfilled)
     assert not any("www.myworkdayjobs.com" in u for u in backfilled)
+
+
+def test_curated_query_url_uses_stable_endpoints_for_fragile_boards() -> None:
+    glassdoor = _curated_query_url("glassdoor.com/Job/jobs.htm", "software+engineer")
+    zipr = _curated_query_url("ziprecruiter.com/Jobs", "software+engineer")
+    workday = _curated_query_url("myworkdayjobs.com", "platform+engineer")
+    assert "/Job/index.htm?sc.keyword=" in glassdoor
+    assert "/jobs-search?search=" in zipr
+    assert "google.com/search" in workday and "site%3Amyworkdayjobs.com" in workday

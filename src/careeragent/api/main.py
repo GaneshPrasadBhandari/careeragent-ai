@@ -173,8 +173,9 @@ BASE_DIR      = Path(__file__).resolve().parent.parent.parent.parent  # project 
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 LOGS_DIR      = BASE_DIR / "logs"
 UPLOADS_DIR   = BASE_DIR / "uploads"
+FEEDBACK_DIR  = ARTIFACTS_DIR / "feedback"
 
-for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
+for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR, FEEDBACK_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
@@ -381,6 +382,24 @@ def _langsmith_status(run_id: str) -> dict:
         "tracing_flag": tracing_flag or None,
         "has_api_key": bool(api_key),
     }
+
+
+def _storage_paths(run_id: str) -> dict:
+    return {
+        "uploads_dir": str(UPLOADS_DIR),
+        "artifacts_dir": str(ARTIFACTS_DIR / run_id),
+        "feedback_dir": str(FEEDBACK_DIR / datetime.now(timezone.utc).strftime("%Y-%m-%d") / run_id),
+        "logs_feedback_file": str(LOGS_DIR / f"feedback_{run_id}.jsonl"),
+        "tracking_db": str(LOGS_DIR / "careeragent_tracking.db"),
+    }
+
+
+def _is_dev_request_authorized(token: str) -> bool:
+    expected = str(os.getenv("CAREERAGENT_DEV_TOKEN") or "").strip()
+    presented = str(token or "").strip()
+    if not expected:
+        return False
+    return presented == expected
 
 
 def _select_qualified_jobs(scored: list[dict], threshold: float, *, min_floor: int = 12) -> list[dict]:
@@ -2566,6 +2585,22 @@ async def get_status(run_id: str):
     }
 
 
+@app.get("/dev/hunt/{run_id}/storage")
+@traceable(name="api.dev_storage")
+async def get_dev_storage(run_id: str, token: str = ""):
+    if not _is_dev_request_authorized(token):
+        raise HTTPException(403, "developer storage endpoint is disabled or token is invalid")
+    state = _refresh_run_state(run_id)
+    return {
+        "run_id": run_id,
+        "storage": _storage_paths(run_id),
+        "feedback_events": state.get("feedback_events", [])[-200:],
+        "notification_log": state.get("notification_log", [])[-200:],
+        "artifacts": state.get("artifacts", {}),
+        "apply_results": state.get("apply_results", []),
+    }
+
+
 @app.get("/hunt/{run_id}/jobs")
 @traceable(name="api.get_jobs")
 async def get_jobs(run_id: str, limit: int = 200):
@@ -2604,9 +2639,19 @@ async def post_feedback(run_id: str, body: dict):
     feedback_file = LOGS_DIR / f"feedback_{run_id}.jsonl"
     with feedback_file.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
+    day_dir = FEEDBACK_DIR / datetime.now(timezone.utc).strftime("%Y-%m-%d") / run_id
+    day_dir.mkdir(parents=True, exist_ok=True)
+    ts_token = str(event.get("ts") or _now()).replace(":", "-")
+    feedback_snapshot = day_dir / f"feedback_{ts_token}.json"
+    feedback_snapshot.write_text(json.dumps(event, indent=2), encoding="utf-8")
     _persist_feedback_event(run_id, event)
     _persist_state(run_id)
-    return {"ok": True, "event": event, "totals": state.get("learning_loop", {})}
+    return {
+        "ok": True,
+        "event": event,
+        "totals": state.get("learning_loop", {}),
+        "stored_at": str(feedback_snapshot),
+    }
 
 
 @app.post("/hunt/{run_id}/action")

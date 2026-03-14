@@ -615,7 +615,22 @@ Without that, the rest of your README can render badly.
 
 
 
-## 19. Deployment Direction
+## 19. Beta Storage, Privacy, and Developer Access (Render)
+
+- End-user dashboard views intentionally avoid exposing raw storage paths and full feedback payloads.
+- Current beta persistence is **Render service local filesystem + SQLite in `logs/`**:
+  - uploads: `uploads/`
+  - generated artifacts: `artifacts/<run_id>/...`
+  - dated feedback snapshots: `artifacts/feedback/YYYY-MM-DD/<run_id>/...`
+  - tracking DB: `logs/careeragent_tracking.db`
+  - run state snapshots: `logs/state_<run_id>.json`
+- For developer-only inspection, use the protected endpoint:
+  - `GET /dev/hunt/{run_id}/storage?token=<CAREERAGENT_DEV_TOKEN>`
+  - Set `CAREERAGENT_DEV_TOKEN` on the API service env in Render.
+- Important for free/beta Render tiers: local filesystem is tied to the service instance and may not be durable across full redeploy/rebuilds.
+
+
+## 20. Deployment Direction
 CareerAgent-AI is being prepared for:
 
 - Docker packaging

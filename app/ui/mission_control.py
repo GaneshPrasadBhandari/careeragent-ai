@@ -289,7 +289,7 @@ def _inject_css() -> None:
 
     /* ── Agent Feed ── */
     .feed-wrap {
-        background: #0d1117;
+        background: #030712;
         border: 1px solid #D9DEE5;
         border-radius: 10px;
         padding: 14px 18px;
@@ -297,11 +297,12 @@ def _inject_css() -> None:
         overflow-y: auto;
         margin-top: 12px;
     }
-    .feed-title { font-size: 11px; color: #4ADE80 !important; text-transform: uppercase;
-                  letter-spacing: 0.1em; margin-bottom: 8px; font-weight: 700; }
-    .feed-entry { font-size: 12px; color: #FACC15 !important; padding: 3px 0; line-height: 1.45; font-weight: 600; }
-    .feed-ts    { color: #93C5FD !important; font-size: 11px; margin-right: 8px; }
-    .feed-msg   { color: #FEF9C3 !important; }
+    .feed-title { font-size: 12px; color: #FACC15 !important; text-transform: uppercase;
+                  letter-spacing: 0.12em; margin-bottom: 8px; font-weight: 800; }
+    .feed-entry { font-size: 13px; color: #FDE047 !important; padding: 4px 0; line-height: 1.5; font-weight: 700;
+                  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace; }
+    .feed-ts    { color: #FBBF24 !important; font-size: 12px; margin-right: 8px; font-weight: 800; }
+    .feed-msg   { color: #FEF08A !important; }
     .feed-empty { color: #FCD34D !important; font-size: 12px; font-style: italic; }
     .feed-wrap, .feed-wrap *, .feed-wrap [data-testid="stMarkdownContainer"], .feed-wrap p, .feed-wrap span {
         color: #FACC15 !important;
@@ -1252,6 +1253,21 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
             st.markdown(f"[Open LangSmith runs]({langsmith.get('run_url')})")
         if langsmith.get("note"):
             st.caption(langsmith.get("note"))
+        with st.expander("How to enable LangSmith on Render", expanded=False):
+            st.markdown(
+                """
+1. In your **Render API service** (not in the dashboard UI service), open **Environment**.
+2. Add:
+   - `LANGSMITH_API_KEY=<your_key>`
+   - `LANGSMITH_TRACING=true`
+   - `LANGSMITH_PROJECT=careeragent-ai-new` (or your project name)
+   - optional: `LANGSMITH_WORKSPACE_ID=<workspace_uuid>`
+3. Redeploy the API service.
+4. Start a new run, then open **Open LangSmith project** and **Open LangSmith runs** links here.
+
+If links open but no traces show, ensure the same env vars are on the backend service that runs FastAPI.
+                """
+            )
     with lcol2:
         langgraph = status.get("langgraph", {}) or {}
         st.markdown("**LangGraph tracing**")
@@ -1321,7 +1337,8 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
 
     feedback_events = status.get("feedback_events") or []
     if feedback_events:
-        st.dataframe(feedback_events[-20:], use_container_width=True, hide_index=True)
+        st.caption(f"Feedback signals captured for this run: {len(feedback_events)}")
+        st.caption("Detailed feedback text is intentionally hidden in end-user dashboard view.")
     else:
         st.caption("No feedback captured yet. Submit feedback above to improve future runs.")
 
