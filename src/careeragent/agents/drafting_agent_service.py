@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -254,7 +255,7 @@ class DraftingAgentService:
 
     def __init__(self, settings: Settings) -> None:
         self.s = settings
-        self.gemini = GeminiClient(settings)
+        self.gemini = GeminiClient(settings, model="gemini-1.5-pro")
 
     def generate_for_jobs(self, state: AgentState) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -382,6 +383,8 @@ class DraftingAgentService:
                 for e in (profile.get("education") or [])[:4]
             ],
         }
+        years_experience = _estimate_experience_years(clean_profile.get("experience") or [])
+        requires_senior_portfolio = years_experience >= 10
 
         prompt = (
             "You are an expert US resume writer specializing in ATS-optimized resumes for tech professionals.\n\n"
@@ -392,6 +395,8 @@ class DraftingAgentService:
             "3. Every experience entry uses ### Role | Company | Date range format + bullet points.\n"
             "4. Skills: include ALL candidate skills + any JD skills the candidate plausibly has.\n"
             "5. Do NOT invent employers, degrees, or specific metrics. Use 'improved' without inventing numbers.\n\n"
+            "9. Strict No-URL Policy: Remove all URLs from body sections. URLs are allowed only in the header contact line.\n"
+            "10. Experience-to-Project Mapping: If candidate has 10+ years experience, synthesize at least 3-4 distinct projects from profile experience bullets.\n\n"
             "STRICT RULES FOR COVER LETTER:\n"
             "6. Story structure: Opening → Action paragraph → Result paragraph → Challenge/growth paragraph → Close\n"
             "7. Pick ONE strong project from experience and map to JD's biggest technical challenge.\n"
@@ -399,6 +404,8 @@ class DraftingAgentService:
             "OUTPUT: Return ONLY a JSON object — no markdown fences, no other text:\n"
             "{\"resume_md\": \"...\", \"cover_md\": \"...\"}\n\n"
             f"CANDIDATE_PROFILE:\n{json.dumps(clean_profile, indent=2)}\n\n"
+            f"EXPERIENCE_YEARS_ESTIMATE: {years_experience}\n"
+            f"REQUIRES_SENIOR_PORTFOLIO: {requires_senior_portfolio}\n\n"
             f"TARGET_ROLE: {title}\n\n"
             f"JOB_DESCRIPTION:\n{jd[:8000]}\n"
         )
@@ -417,8 +424,37 @@ class DraftingAgentService:
             cover_md = fallback_cover
 
         resume_md = _sanitize_resume_markdown(resume_md, profile=clean_profile, title=title, jd=jd)
+        resume_md = _strip_urls_except_header_contact(resume_md)
         cover_md = _sanitize_cover_letter(cover_md, profile=clean_profile, title=title)
+        cover_md = _strip_urls_except_header_contact(cover_md)
         return resume_md, cover_md
+
+
+def _estimate_experience_years(experience: List[Dict[str, Any]]) -> int:
+    years = 0
+    for e in experience or []:
+        start = str(e.get("start_date") or "")
+        end = str(e.get("end_date") or "")
+        start_year = int(start[:4]) if re.match(r"^\d{4}", start) else None
+        end_year = int(end[:4]) if re.match(r"^\d{4}", end) else None
+        if start_year:
+            years += max(1, (end_year or datetime.now().year) - start_year)
+    return min(40, years)
+
+
+def _strip_urls_except_header_contact(text: str) -> str:
+    lines = (text or "").splitlines()
+    out: List[str] = []
+    header_done = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("## "):
+            header_done = True
+        if header_done:
+            ln = re.sub(r"https?://\S+", "", ln)
+            ln = re.sub(r"\bwww\.\S+", "", ln)
+        out.append(re.sub(r"\s{2,}", " ", ln).rstrip())
+    return "\n".join(out).strip() + "\n"
 
 
 

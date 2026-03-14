@@ -17,9 +17,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Optional
 
@@ -34,6 +36,7 @@ JSEARCH_KEY    = os.getenv("JSEARCH_API_KEY", "")
 
 REQUEST_TIMEOUT = 20
 SCRAPE_TIMEOUT  = 30
+SESSION_STATE_DIR = Path(os.getenv("CAREERAGENT_SESSION_STATE_DIR", ".careeragent_session"))
 
 
 @dataclass
@@ -75,6 +78,8 @@ class LeadScoutService:
         self.max_per_source = max_results_per_source
         self.enable_playwright = enable_playwright_scrape
         self.last_search_telemetry: dict[str, Any] = {}
+        self._session_root = SESSION_STATE_DIR
+        self._session_root.mkdir(parents=True, exist_ok=True)
 
     # ── Canonical entry point ───────────────────────────────────────────────
 
@@ -102,6 +107,8 @@ class LeadScoutService:
         top_roles = intent_plan.get("target_roles", [])[:3]
         if self.enable_playwright:
             for role in top_roles:
+                tasks.append(self._scrape_linkedin(role))
+                tasks.append(self._scrape_google_jobs(role, location))
                 tasks.append(self._scrape_greenhouse(role))
                 tasks.append(self._scrape_lever(role))
 
@@ -663,6 +670,26 @@ class LeadScoutService:
             log.warning("Greenhouse scrape failed: %s", exc)
             return []
 
+    async def _scrape_linkedin(self, role: str) -> list[JobLead]:
+        if not self.enable_playwright:
+            return []
+        try:
+            search_url = f"https://www.linkedin.com/jobs/search/?keywords={role.replace(' ', '%20')}"
+            return await self._playwright_scrape(search_url, "linkedin", role)
+        except Exception as exc:
+            log.warning("LinkedIn scrape failed: %s", exc)
+            return []
+
+    async def _scrape_google_jobs(self, role: str, location: str) -> list[JobLead]:
+        if not self.enable_playwright:
+            return []
+        try:
+            search_url = f"https://www.google.com/search?q={role.replace(' ', '+')}+{location.replace(' ', '+')}+jobs"
+            return await self._playwright_scrape(search_url, "google", role)
+        except Exception as exc:
+            log.warning("Google scrape failed: %s", exc)
+            return []
+
     # ── Source: Playwright → Lever ──────────────────────────────────────────
 
     async def _scrape_lever(self, role: str) -> list[JobLead]:
@@ -687,11 +714,51 @@ class LeadScoutService:
         leads = []
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
-                page    = await browser.new_page()
+                profile_dir = self._session_root / f"{source}_profile"
+                profile_dir.mkdir(parents=True, exist_ok=True)
+                context = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    headless=True,
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-US",
+                )
+                page = context.pages[0] if context.pages else await context.new_page()
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=SCRAPE_TIMEOUT * 1000)
-                    await page.wait_for_timeout(2000)
+                    await page.wait_for_timeout(1500)
+
+                    if source == "linkedin":
+                        # Human-like delay before touching LinkedIn-specific selectors.
+                        await page.wait_for_timeout(3000 + random.randint(80, 650))
+                        items = await page.query_selector_all("a[href*='/jobs/view/']")
+                        for item in items[: self.max_per_source]:
+                            href = await item.get_attribute("href")
+                            title = (await item.inner_text() or "").strip()
+                            if href and "/jobs/view/" in href:
+                                leads.append(JobLead(
+                                    id=re.sub(r"\W+", "_", title or href)[:40],
+                                    title=title or role,
+                                    company="",
+                                    url=href,
+                                    source=source,
+                                ))
+                    elif source == "google":
+                        links = await page.query_selector_all("a[href^='https://']")
+                        for link in links[: self.max_per_source * 2]:
+                            href = await link.get_attribute("href")
+                            title = (await link.inner_text() or "").strip()
+                            if not href:
+                                continue
+                            if not any(d in href for d in ("linkedin.com/jobs", "indeed.com", "greenhouse.io", "lever.co", "myworkdayjobs.com", "ziprecruiter.com")):
+                                continue
+                            leads.append(JobLead(
+                                id=re.sub(r"\W+", "_", title or href)[:40],
+                                title=title or role,
+                                company="",
+                                url=href,
+                                source=source,
+                            ))
 
                     if source == "greenhouse":
                         items = await page.query_selector_all(".opening")
@@ -725,7 +792,7 @@ class LeadScoutService:
                 except PWTimeout:
                     log.warning("Playwright timeout scraping %s", url)
                 finally:
-                    await browser.close()
+                    await context.close()
         except Exception as exc:
             log.warning("Playwright %s scrape error: %s", source, exc)
 
