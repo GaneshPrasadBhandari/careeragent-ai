@@ -76,6 +76,8 @@ _normalize_config = api_main._normalize_config
 _stub_leads = api_main._stub_leads
 _dedupe_jobs = api_main._dedupe_jobs
 _record_feedback_event = api_main._record_feedback_event
+_storage_paths = api_main._storage_paths
+_is_dev_request_authorized = api_main._is_dev_request_authorized
 _is_duplicate_action = api_main._is_duplicate_action
 _mark_action_processed = api_main._mark_action_processed
 
@@ -107,6 +109,25 @@ def test_feedback_event_updates_learning_loop():
     assert event["evaluation"]["is_genuine"] is True
     assert state["learning_loop"]["employer_feedback"] == 1
     assert state["employer_outcomes"]["interview"] == 1
+
+
+def test_storage_paths_include_feedback_partitioning_by_date_and_runid():
+    paths = _storage_paths("run_abc")
+    assert paths["uploads_dir"].endswith("uploads")
+    assert paths["artifacts_dir"].endswith("artifacts/run_abc")
+    assert "/feedback/" in paths["feedback_dir"] and paths["feedback_dir"].endswith("/run_abc")
+    assert paths["logs_feedback_file"].endswith("feedback_run_abc.jsonl")
+    assert paths["tracking_db"].endswith("careeragent_tracking.db")
+
+
+def test_dev_storage_authorization_requires_matching_token(monkeypatch):
+    monkeypatch.delenv("CAREERAGENT_DEV_TOKEN", raising=False)
+    assert _is_dev_request_authorized("anything") is False
+
+    monkeypatch.setenv("CAREERAGENT_DEV_TOKEN", "secret123")
+    assert _is_dev_request_authorized("") is False
+    assert _is_dev_request_authorized("wrong") is False
+    assert _is_dev_request_authorized("secret123") is True
 
 
 def test_cover_letter_format_is_classic():

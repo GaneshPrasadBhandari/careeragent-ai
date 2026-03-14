@@ -115,11 +115,19 @@ def _curated_query_url(domain_path: str, query: str) -> str:
     if "linkedin" in domain:
         return f"https://{host}/?keywords={query}"
     if "indeed" in domain:
-        return f"https://{host}?q={query}"
+        return f"https://{host}/jobs?q={query}"
     if "glassdoor" in domain:
-        return f"https://{host}?sc.keyword={query}"
+        # /Job/jobs.htm frequently 404s for direct query params; /Job/index.htm is stable.
+        return f"https://{host}/Job/index.htm?sc.keyword={query}"
+    if "ziprecruiter" in domain:
+        return f"https://{host}/jobs-search?search={query}"
+    if "greenhouse" in domain:
+        return f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}"
+    if "jobs.lever.co" in domain or "lever.co" in domain:
+        return f"https://jobs.lever.co/?q={query}"
     if "myworkdayjobs.com" in domain:
-        return f"https://{host}/en-US/recruiting?q={query}"
+        # myworkdayjobs root cannot serve cross-tenant searches; use a stable site-search.
+        return f"https://www.google.com/search?q=site%3Amyworkdayjobs.com+{query}"
     return f"https://{host}?q={query}"
 
 
