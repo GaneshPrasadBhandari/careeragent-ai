@@ -14,6 +14,7 @@ Fixes applied:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -25,6 +26,41 @@ from urllib.parse import urlparse, urlunparse
 
 import requests
 import streamlit as st
+
+
+class LiveFeedHandler(logging.Handler):
+    """Capture orchestrator/agent info logs and mirror them into Mission Control feed."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if record.levelno != logging.INFO:
+                return
+            msg = str(record.getMessage() or "").strip()
+            if not msg:
+                return
+            if "live_feed_log" not in st.session_state:
+                st.session_state["live_feed_log"] = []
+            st.session_state["live_feed_log"].append(
+                {
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "msg": msg,
+                }
+            )
+            st.session_state["live_feed_log"] = st.session_state["live_feed_log"][-120:]
+        except Exception:
+            return
+
+
+def _install_live_feed_logger() -> None:
+    if st.session_state.get("live_feed_handler_installed"):
+        return
+    handler = LiveFeedHandler()
+    handler.setLevel(logging.INFO)
+    for logger_name in ("careeragent.orchestrator", "orchestrator", "careeragent.agents", "leadscout"):
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.INFO)
+        logger.addHandler(handler)
+    st.session_state["live_feed_handler_installed"] = True
 
 
 def _default_api_base() -> str:
@@ -1029,18 +1065,30 @@ def render_json_downloads(status: Optional[dict]) -> None:
 
 def render_agent_feed(status: Optional[dict]) -> None:
     """Live Agent Feed section."""
+    container = st.empty()
     feed = status.get("agent_log", []) if status else []
+    live_logger_feed = st.session_state.get("live_feed_log", [])
+    merged_feed = [*feed, *live_logger_feed][-25:]
 
-    st.markdown('<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div></div>', unsafe_allow_html=True)
-    if not feed:
-        st.warning("Live agent feed is empty for this run right now. Waiting for agent activity…")
+    if not merged_feed:
+        container.markdown(
+            '<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div><div class="feed-empty">Waiting for agent activity…</div></div>',
+            unsafe_allow_html=True,
+        )
         return
+
     lines: list[str] = []
-    for entry in reversed(feed[-25:]):
+    for entry in reversed(merged_feed):
         ts = str(entry.get("ts", ""))[:19].replace("T", " ")
         msg = str(entry.get("msg", "")).strip()
-        lines.append(f"[{ts}] {msg}")
-    st.code("\n".join(lines), language=None)
+        lines.append(
+            f'<div class="feed-entry"><span class="feed-ts">[{escape(ts)}]</span>'
+            f'<span style="color: #FFD700; font-family: monospace;">{escape(msg)}</span></div>'
+        )
+    container.markdown(
+        f'<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div>{"".join(lines)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
@@ -1245,24 +1293,9 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
         if langsmith.get("dashboard_url"):
             st.markdown(f"[Open LangSmith project]({langsmith.get('dashboard_url')})")
         if langsmith.get("run_url"):
-            st.markdown(f"[Open LangSmith runs]({langsmith.get('run_url')})")
+            st.link_button("View Trace", langsmith.get("run_url"), use_container_width=False)
         if langsmith.get("note"):
             st.caption(langsmith.get("note"))
-        with st.expander("How to enable LangSmith on Render", expanded=False):
-            st.markdown(
-                """
-1. In your **Render API service** (not in the dashboard UI service), open **Environment**.
-2. Add:
-   - `LANGSMITH_API_KEY=<your_key>`
-   - `LANGSMITH_TRACING=true`
-   - `LANGSMITH_PROJECT=careeragent-ai-new` (or your project name)
-   - optional: `LANGSMITH_WORKSPACE_ID=<workspace_uuid>`
-3. Redeploy the API service.
-4. Start a new run, then open **Open LangSmith project** and **Open LangSmith runs** links here.
-
-If links open but no traces show, ensure the same env vars are on the backend service that runs FastAPI.
-                """
-            )
     with lcol2:
         langgraph = status.get("langgraph", {}) or {}
         st.markdown("**LangGraph tracing**")
@@ -1582,6 +1615,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
 def main():
     _init_session()
+    _install_live_feed_logger()
     _inject_css()
 
     # ── Sidebar ───────────────────────────────────────────────────────────────

@@ -176,8 +176,10 @@ ARTIFACTS_DIR = BASE_DIR / "artifacts"
 LOGS_DIR      = BASE_DIR / "logs"
 UPLOADS_DIR   = BASE_DIR / "uploads"
 FEEDBACK_DIR  = ARTIFACTS_DIR / "feedback"
+DEV_HIDDEN_DIR = BASE_DIR / ".developer"
+FEEDBACK_STORE_JSON = DEV_HIDDEN_DIR / "feedback_store.json"
 
-for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR, FEEDBACK_DIR]:
+for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR, FEEDBACK_DIR, DEV_HIDDEN_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
@@ -578,6 +580,7 @@ def _build_analytics_summary(state: dict) -> dict:
             "learning_loop": state.get("learning_loop", {}),
             "employer_outcomes": state.get("employer_outcomes", {}),
             "feedback_events": state.get("feedback_events", [])[-25:],
+            "self_correction": _feedback_self_correction_settings(),
         },
     }
 
@@ -754,7 +757,61 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
             outcomes["rejected"] += 1
         else:
             outcomes["unknown"] += 1
+    _write_feedback_store_snapshot(state)
     return event
+
+
+def _read_feedback_store() -> dict:
+    if not FEEDBACK_STORE_JSON.exists():
+        return {
+            "learning_loop": {},
+            "employer_outcomes": {},
+            "feedback_events": [],
+            "global_temperature": 0.2,
+            "prompt_bias": "neutral",
+            "updated_at": _now(),
+        }
+    try:
+        return json.loads(FEEDBACK_STORE_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "learning_loop": {},
+            "employer_outcomes": {},
+            "feedback_events": [],
+            "global_temperature": 0.2,
+            "prompt_bias": "neutral",
+            "updated_at": _now(),
+        }
+
+
+def _write_feedback_store_snapshot(state: dict) -> None:
+    loop = dict(state.get("learning_loop") or {})
+    accepted = int(loop.get("accepted") or 0)
+    rejected = int(loop.get("rejected") or 0)
+    total = max(1, accepted + rejected)
+    quality_ratio = accepted / total
+    temp = 0.15 if quality_ratio >= 0.7 else (0.35 if quality_ratio <= 0.3 else 0.25)
+    bias = "precision" if quality_ratio >= 0.7 else ("recall" if quality_ratio <= 0.3 else "balanced")
+
+    payload = {
+        "learning_loop": loop,
+        "employer_outcomes": state.get("employer_outcomes", {}),
+        "feedback_events": (state.get("feedback_events") or [])[-200:],
+        "global_temperature": temp,
+        "prompt_bias": bias,
+        "updated_at": _now(),
+    }
+    FEEDBACK_STORE_JSON.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _feedback_self_correction_settings() -> dict:
+    store = _read_feedback_store()
+    return {
+        "global_temperature": float(store.get("global_temperature") or 0.2),
+        "prompt_bias": str(store.get("prompt_bias") or "neutral"),
+        "feedback_events": list(store.get("feedback_events") or [])[-25:],
+        "updated_at": store.get("updated_at"),
+    }
 
 
 def _self_learning_terms_from_feedback(state: dict) -> list[str]:
@@ -764,6 +821,40 @@ def _self_learning_terms_from_feedback(state: dict) -> list[str]:
         return []
     skills = extract_skills(corpus, extra_candidates=(state.get("profile") or {}).get("skills") or [])
     return list(dict.fromkeys(skills))[:14]
+
+
+def _company_tone_label(company: str) -> str:
+    name = str(company or "").lower()
+    corporate_markers = ("ntt", "oracle", "microsoft", "amazon", "google", "ibm", "deloitte", "accenture")
+    startup_markers = ("ai", "labs", "technologies", "startup", "ventures", "systems")
+    if any(m in name for m in corporate_markers):
+        return "Corporate"
+    if any(m in name for m in startup_markers):
+        return "Startup/Tech"
+    return "Professional"
+
+
+def _build_followup_body(*, tone: str, role: str, candidate_name: str) -> str:
+    if tone == "Corporate":
+        return (
+            "Dear Hiring Team,\n\n"
+            f"I recently submitted my application for the {role} position and wanted to follow up with appreciation for your consideration. "
+            "I would value the opportunity to discuss how my experience can support your organization’s goals.\n\n"
+            f"Sincerely,\n{candidate_name}"
+        )
+    if tone == "Startup/Tech":
+        return (
+            "Hi Team,\n\n"
+            f"I applied for the {role} role and wanted to quickly follow up. I’m excited about the chance to help ship impactful work and contribute fast. "
+            "Happy to share examples of recent AI/engineering outcomes if useful.\n\n"
+            f"Best,\n{candidate_name}"
+        )
+    return (
+        "Hello Hiring Manager,\n\n"
+        f"I recently applied for the {role} position and wanted to reiterate my interest. "
+        "I’d welcome a conversation to discuss fit and next steps.\n\n"
+        f"Best regards,\n{candidate_name}"
+    )
 
 
 def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
@@ -1099,18 +1190,15 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
         company = str(row.get("company") or "Hiring Team")
         role = str(row.get("title") or "the role")
         job_id = str(row.get("job_id") or "unknown")
+        role_tone = _company_tone_label(company)
         email_drafts.append({
             "job_id": job_id,
             "subject": f"Follow-up on application: {role} at {company}",
-            "body": (
-                "Hello Hiring Manager,\\n\\n"
-                f"I recently applied for the {role} position and wanted to reiterate my interest. "
-                f"I am excited about the opportunity to contribute and would welcome the chance to discuss my fit.\\n\\n"
-                f"Best regards,\\n{candidate_name}"
-            ),
+            "body": _build_followup_body(tone=role_tone, role=role, candidate_name=candidate_name),
             "status": "drafted",
             "channel": "email",
             "recipient": company,
+            "role_tone_match": role_tone,
         })
     state["followup_queue"] = [
         {
@@ -1899,7 +1987,11 @@ def _normalize_company_name(company_raw: str, job_url: str, title: str = "") -> 
 def _build_cover_letter_text(profile: dict, job: dict) -> str:
     """Create a classic business cover letter format with robust role alignment."""
     role = _clean_role_title(job.get("title", ""))
-    company = _normalize_company_name(job.get("company") or "", job.get("url") or "", job.get("title") or "")
+    try:
+        company = _normalize_company_name(job.get("company") or "", job.get("url") or "", job.get("title") or "")
+    except NameError:
+        raw_company = str(job.get("company") or "").strip()
+        company = raw_company if raw_company and "." not in raw_company else "Hiring Team"
     candidate = str(profile.get("name") or "Candidate")
     email = str(profile.get("email") or "")
     phone = str(profile.get("phone") or "")
