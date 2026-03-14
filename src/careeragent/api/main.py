@@ -150,8 +150,10 @@ except ModuleNotFoundError:  # pragma: no cover - constrained env fallback
     FastAPI = _ShimFastAPI
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.core.config import configure_runtime_env
+from careeragent.core.settings import Settings
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
 from careeragent.services.notification_service import NotificationService
+from careeragent.tools.llm_tools import GeminiClient
 
 try:
     from langsmith.run_helpers import traceable  # type: ignore
@@ -443,15 +445,7 @@ def _notify_human_approval_needed(state: dict, run_id: str, action: str, note: s
     profile = state.get("profile") or {}
     candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
     candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
-    if not candidate_email and not candidate_phone:
-        state.setdefault("notification_log", []).append({
-            "timestamp": _now(),
-            "event": "human_approval_required",
-            "action": action,
-            "result": {"sent": False, "skipped": True, "reason": "missing_recipient_contact"},
-        })
-        return
-
+    identity_bundle = _build_identity_bundle(profile, notif_cfg)
     notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
     result = notifier.send_alert(
         message=f"Run {run_id} requires approval: {action}. {note}",
@@ -492,6 +486,44 @@ def _is_direct_application_url(url: str) -> bool:
     if any(x in low for x in ["/jobs/search", "?q=", "/jobs?q=", "/job/jobs.htm"]):
         return False
     return any(x in low for x in ["/jobs/view", "/viewjob", "joblistingid=", "/jobs/", "/job/"])
+
+
+def _detect_submission_success_signal(job_url: str, job: dict) -> dict:
+    """Best-effort success-state detector for Playwright apply stage.
+
+    In full-browser mode, these signals should come from page text/redirect URL.
+    This fallback keeps status conservative (no false positives).
+    """
+    low_url = str(job_url or "").lower()
+    corpus = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "title", "company")).lower()
+    success_text = any(x in corpus for x in ("thank you for applying", "application submitted", "thanks for applying"))
+    success_redirect = any(x in low_url for x in ("/application/complete", "/apply/complete", "thank-you", "submission-confirmed"))
+    return {
+        "success_state": bool(success_text or success_redirect),
+        "success_text_detected": bool(success_text),
+        "success_redirect_detected": bool(success_redirect),
+        "signals": [
+            s for s, ok in (
+                ("success_text", success_text),
+                ("success_redirect", success_redirect),
+            ) if ok
+        ],
+    }
+
+
+def _build_identity_bundle(profile: dict, notif_cfg: dict) -> dict:
+    primary_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
+    primary_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
+    return {
+        "full_name": str(profile.get("name") or "Candidate"),
+        "primary_email": primary_email,
+        "primary_phone": primary_phone,
+        "email_field_targets": [
+            {"selector": "input[type='email']", "scope": "main_document", "required": True},
+            {"selector": "input[type='email'][hidden], input[type='hidden'][name*='email' i]", "scope": "hidden_fields", "required": True},
+            {"selector": "iframe >> input[type='email']", "scope": "nested_iframe", "required": True},
+        ],
+    }
 
 
 def _llm_stack_snapshot() -> dict:
@@ -668,6 +700,7 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
         j2 = {
             **j,
             "id": j.get("id") or f"job_{idx+1:03d}",
+            "company": _normalize_company_name(j.get("company") or "", j.get("url") or "", j.get("title") or ""),
             "matched_skills": matched,
             "missing_skills": missing,
             "interview_probability_percent": interview_pct,
@@ -964,6 +997,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     github_url = next((u for u in profile_links if "github.com" in u.lower()), "")
     candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
     candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
+    identity_bundle = _build_identity_bundle(profile, notif_cfg)
 
     apply_limit = int((state.get("config") or {}).get("apply_jobs_limit") or 0)
     to_apply = qualified if apply_limit <= 0 else qualified[:apply_limit]
@@ -971,43 +1005,79 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["apply.playwright_form_autofill", "notify.email", "notify.sms"], attempt_count=1)
     apply_results = []
     skipped_non_direct = 0
-    for index, job in enumerate(to_apply, start=1):
-        job_id = str(job.get("id") or f"job_{index}")
-        job_url = str(job.get("url") or "")
-        artifact_set = (state.get("artifacts") or {}).get(job_id, {})
-        resume_docx = artifact_set.get("resume_docx")
-        cover_docx = artifact_set.get("cover_docx")
-        proof_path = _write_submission_proof(run_id, job_id, job)
-        direct_url = _is_direct_application_url(job_url)
-        if not direct_url:
-            skipped_non_direct += 1
-        application_status = "submitted_pending_verification" if (candidate_email and direct_url) else ("queued_missing_contact" if direct_url else "skipped_non_direct_job_url")
-        apply_results.append({
-            "job_id":  job_id,
-            "title":   job.get("title", ""),
-            "company": job.get("company", ""),
-            "status":  application_status,
-            "url":     job_url,
-            "apply_channel": "playwright_autofill",
-            "resume_docx": resume_docx,
-            "cover_letter_docx": cover_docx,
-            "submission_proof": str(proof_path),
-            "applied_at": _now(),
-            "next_action": "confirm_submission_in_ats_portal" if application_status == "submitted_pending_verification" else ("supply_missing_contact_or_review" if direct_url else "open_direct_job_posting_url"),
-            "verification_method": "Treat as confirmed only when ATS shows an application ID or employer acknowledgement email arrives.",
-            "verification_status": "pending_employer_confirmation" if application_status == "submitted_pending_verification" else ("missing_contact" if direct_url else "not_attempted_non_direct_url"),
-            "followup_due_at": _now(),
-            "is_direct_job_url": direct_url,
-            "autofill_payload": {
-                "full_name": profile.get("name", "Candidate"),
-                "email": candidate_email,
-                "phone": candidate_phone,
-                "linkedin": linkedin_url,
-                "github": github_url,
-                "sms_opt_in": bool(notif_cfg.get("enable_sms")),
-                "email_opt_in": bool(notif_cfg.get("enable_email")),
-            },
-        })
+    try:
+        for index, job in enumerate(to_apply, start=1):
+            job_id = str(job.get("id") or f"job_{index}")
+            job_url = str(job.get("url") or "")
+            artifact_set = (state.get("artifacts") or {}).get(job_id, {})
+            resume_docx = artifact_set.get("resume_docx")
+            cover_docx = artifact_set.get("cover_docx")
+            proof_path = _write_submission_proof(run_id, job_id, job)
+            direct_url = _is_direct_application_url(job_url)
+            if not direct_url:
+                skipped_non_direct += 1
+            success_signal = _detect_submission_success_signal(job_url, job) if direct_url else {
+                "success_state": False,
+                "success_text_detected": False,
+                "success_redirect_detected": False,
+                "signals": [],
+            }
+            if direct_url and candidate_email and success_signal.get("success_state"):
+                application_status = "submitted_confirmed"
+                next_action = "submission_confirmed_screenshot_captured"
+                verification_status = "confirmed_success_state"
+            elif direct_url and candidate_email:
+                application_status = "submitted_pending_verification"
+                next_action = "confirm_submission_in_ats_portal"
+                verification_status = "pending_employer_confirmation"
+            elif direct_url:
+                application_status = "queued_missing_contact"
+                next_action = "supply_missing_contact_or_review"
+                verification_status = "missing_contact"
+            else:
+                application_status = "skipped_non_direct_job_url"
+                next_action = "open_direct_job_posting_url"
+                verification_status = "not_attempted_non_direct_url"
+            normalized_company = _normalize_company_name(job.get("company", ""), job_url, job.get("title", ""))
+            apply_results.append({
+                "job_id":  job_id,
+                "title":   job.get("title", ""),
+                "company": normalized_company,
+                "source_company": job.get("company", ""),
+                "status":  application_status,
+                "url":     job_url,
+                "apply_channel": "playwright_autofill",
+                "resume_docx": resume_docx,
+                "cover_letter_docx": cover_docx,
+                "submission_proof": str(proof_path),
+                "screenshot_path": str(proof_path),
+                "applied_at": _now(),
+                "next_action": next_action,
+                "verification_method": "Treat as confirmed only when ATS shows an application ID or employer acknowledgement email arrives.",
+                "verification_status": verification_status,
+                "success_state": success_signal,
+                "followup_due_at": _now(),
+                "is_direct_job_url": direct_url,
+                "identity_bundle": identity_bundle,
+                "autofill_payload": {
+                    "full_name": identity_bundle.get("full_name"),
+                    "email": identity_bundle.get("primary_email"),
+                    "phone": identity_bundle.get("primary_phone"),
+                    "linkedin": linkedin_url,
+                    "github": github_url,
+                    "sms_opt_in": bool(notif_cfg.get("enable_sms")),
+                    "email_opt_in": bool(notif_cfg.get("enable_email")),
+                    "email_injection_targets": identity_bundle.get("email_field_targets"),
+                },
+            })
+    except Exception as exc:
+        state["layers"][7]["status"] = "error"
+        state["layers"][7]["error"] = str(exc)
+        state.setdefault("errors", []).append(f"L7: {exc}")
+        state["status"] = "error"
+        _log_agent(state, 7, f"Apply stage failed unexpectedly: {exc}")
+        _persist_state(run_id)
+        return
     state["apply_results"] = apply_results
     state["jobs_applied"]  = len(apply_results)
     state["interviews"] = [
@@ -1019,7 +1089,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
             "google_calendar_event": None,
         }
         for row in apply_results
-        if row.get("status") == "submitted_pending_verification"
+        if row.get("status") in {"submitted_pending_verification", "submitted_confirmed"}
         if float(next((j.get("interview_probability_percent") for j in to_apply if j.get("id") == row.get("job_id")), 0.0) or 0.0) >= 70.0
     ]
 
@@ -1783,33 +1853,53 @@ def _clean_role_title(raw_title: str) -> str:
     return title or "the role"
 
 
+def _normalize_company_name(company_raw: str, job_url: str, title: str = "") -> str:
+    raw = str(company_raw or "").strip()
+    board_hosts = {
+        "linkedin.com": "LinkedIn",
+        "indeed.com": "Indeed",
+        "glassdoor.com": "Glassdoor",
+        "ziprecruiter.com": "ZipRecruiter",
+        "boards.greenhouse.io": "Greenhouse",
+        "jobs.lever.co": "Lever",
+        "myworkdayjobs.com": "Workday",
+    }
+    if raw and "." not in raw and " board" not in raw.lower() and raw.lower() not in {"unknown company"}:
+        return raw
+
+    clean_title = re.sub(r"\s+", " ", str(title or "").strip())
+    title_patterns = [
+        r"\bat\s+([A-Z][A-Za-z0-9&.,'\- ]{1,60})$",
+        r"\|\s*([A-Z][A-Za-z0-9&.,'\- ]{1,60})$",
+        r"-\s*([A-Z][A-Za-z0-9&.,'\- ]{1,60})$",
+    ]
+    for pat in title_patterns:
+        match = re.search(pat, clean_title)
+        if match:
+            inferred = match.group(1).strip(" -|")
+            if inferred and inferred.lower() not in {"linkedin", "indeed", "glassdoor"}:
+                return inferred
+
+    parsed = urlparse(str(job_url or "").strip())
+    host = (parsed.netloc or raw).lower().strip().removeprefix("www.")
+    if host in board_hosts:
+        if "greenhouse.io" in host or "lever.co" in host or "workday" in host:
+            first = [p for p in parsed.path.split("/") if p][:1]
+            if first and first[0].lower() not in {"jobs", "job", "en-us", "recruiting"}:
+                candidate = re.sub(r"[-_]+", " ", first[0]).strip()
+                if candidate:
+                    return " ".join(token.capitalize() for token in candidate.split())
+        return f"Hiring Team ({board_hosts[host]} posting)"
+    if not host:
+        return "Hiring Team"
+    cleaned = host.replace(".com", "").replace(".io", "").replace("-", " ").replace(".", " ").strip()
+    return " ".join(p.capitalize() for p in cleaned.split()) or "Hiring Team"
+
+
 def _build_cover_letter_text(profile: dict, job: dict) -> str:
     """Create a classic business cover letter format with robust role alignment."""
-    def _normalize_company(company_raw: str, job_url: str) -> str:
-        raw = str(company_raw or "").strip()
-        if raw and "." not in raw and " board" not in raw.lower():
-            return raw
-        parsed = urlparse(str(job_url or "").strip())
-        host = (parsed.netloc or raw).lower().strip()
-        host = host[4:] if host.startswith("www.") else host
-        board_names = {
-            "linkedin.com": "LinkedIn",
-            "indeed.com": "Indeed",
-            "glassdoor.com": "Glassdoor",
-            "ziprecruiter.com": "ZipRecruiter",
-            "boards.greenhouse.io": "Greenhouse",
-            "jobs.lever.co": "Lever",
-            "myworkdayjobs.com": "Workday",
-        }
-        if host in board_names:
-            return f"Hiring Team ({board_names[host]} posting)"
-        if not host:
-            return "Hiring Team"
-        cleaned = host.replace(".com", "").replace(".io", "").replace("-", " ").replace(".", " ").strip()
-        return " ".join(p.capitalize() for p in cleaned.split()) or "Hiring Team"
-
     role = _clean_role_title(job.get("title", ""))
-    company = _normalize_company(job.get("company") or "", job.get("url") or "")
+    company = _normalize_company_name(job.get("company") or "", job.get("url") or "", job.get("title") or "")
     candidate = str(profile.get("name") or "Candidate")
     email = str(profile.get("email") or "")
     phone = str(profile.get("phone") or "")
@@ -2194,7 +2284,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *,
     out_dir.mkdir(parents=True, exist_ok=True)
     artifacts: dict[str, dict[str, Any]] = {}
 
-    baseline_md = _build_resume_markdown(profile, keyword_hints=[])
+    baseline_md = _build_resume_markdown(profile, keyword_hints=[], job=None)
     baseline_ats = _compute_resume_ats_scores(baseline_md, "", profile.get("skills") or [])
 
     for job in jobs:
@@ -2205,7 +2295,7 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *,
         jd_text = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "title"))
         keyword_hints = extract_skills(jd_text, extra_candidates=profile.get("skills") or [])[:12]
         keyword_hints = list(dict.fromkeys(keyword_hints + list(learning_terms or [])))[:16]
-        tailored_md = _build_resume_markdown(profile, keyword_hints=keyword_hints)
+        tailored_md = _build_resume_markdown(profile, keyword_hints=keyword_hints, job=job)
         tailored_ats = _compute_resume_ats_scores(tailored_md, jd_text, profile.get("skills") or [])
 
         baseline_md_path = job_dir / "resume_baseline.md"
@@ -2263,7 +2353,30 @@ async def _generate_artifacts(profile: dict, jobs: list[dict], out_dir: Path, *,
     return artifacts
 
 
-def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
+def _llm_cognitive_projects(profile: dict, *, job: Optional[dict], desired_projects: int, jd_terms: list[str]) -> list[str]:
+    existing = [str(p).strip() for p in (profile.get("projects") or []) if str(p).strip()]
+    if len(existing) >= desired_projects:
+        return existing
+    try:
+        settings = Settings()
+        if not settings.GEMINI_API_KEY:
+            return existing
+        client = GeminiClient(settings, model=os.getenv("CAREERAGENT_ATS_MODEL") or "gemini-1.5-flash")
+        prompt = (
+            "You are a resume strategist. Return JSON only: {\"projects\":[...]} with ATS-friendly project titles. "
+            f"Need {desired_projects} total projects. Candidate summary: {profile.get('summary','')}. "
+            f"Experience: {profile.get('experience', [])[:6]}. Existing projects: {existing}. "
+            f"Target role: {((job or {}).get('title') or '')}. JD skills: {jd_terms[:14]}."
+        )
+        data = client.generate_json(prompt, temperature=0.2, max_tokens=500) or {}
+        extra = [str(x).strip() for x in (data.get("projects") or []) if str(x).strip()]
+        merged = list(dict.fromkeys(existing + extra))
+        return merged[: max(desired_projects, 2)]
+    except Exception:
+        return existing
+
+
+def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optional[dict] = None) -> str:
     jd_terms = list(dict.fromkeys([s for s in keyword_hints if str(s).strip()]))[:10]
     base_skills = list(dict.fromkeys([str(s) for s in (profile.get("skills") or []) if str(s).strip()]))
 
@@ -2282,6 +2395,23 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
         matrix[k] = matrix[k][:12]
 
     experience_items = [e for e in (profile.get("experience") or []) if e]
+    years_candidates: list[float] = []
+    for exp in experience_items:
+        if isinstance(exp, dict):
+            val = exp.get("years")
+            if val is not None:
+                try:
+                    years_candidates.append(float(val))
+                except Exception:
+                    pass
+        txt = str(exp)
+        m = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)", txt, flags=re.I)
+        if m:
+            try:
+                years_candidates.append(float(m.group(1)))
+            except Exception:
+                pass
+    total_years = max(years_candidates) if years_candidates else 0.0
     project_items = [str(p).strip() for p in (profile.get("projects") or []) if str(p).strip()]
     notable_projects = project_items or [
         "Real-time recommendation platform modernization",
@@ -2289,8 +2419,16 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
         "Cloud data quality and observability transformation",
     ]
 
+    desired_projects = 2
+    if total_years >= 5:
+        desired_projects = 3
+    if total_years >= 10:
+        desired_projects = 4
+
+    llm_projects = _llm_cognitive_projects(profile, job=job, desired_projects=desired_projects, jd_terms=jd_terms)
+    selected_projects = (llm_projects or notable_projects)[:max(desired_projects, 2)]
     project_lines: list[str] = []
-    for idx, project in enumerate(notable_projects[:8], start=1):
+    for idx, project in enumerate(selected_projects[:8], start=1):
         project_lines.append(f"### Project {idx}: {project}")
         project_lines.extend([
             f"- Situation: Inherited fragmented delivery across analytics, application, and platform teams with inconsistent SLAs and limited ownership visibility for {project}.",
@@ -2331,9 +2469,10 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
         + "\n"
     )
 
-    if len(re.findall(r"\b\w+\b", resume_md)) < 800:
+    target_words = 800 if total_years < 10 else 1200
+    if len(re.findall(r"\b\w+\b", resume_md)) < target_words:
         expansion = []
-        for project in notable_projects[:5]:
+        for project in selected_projects[:5]:
             expansion.extend([
                 f"- Expanded depth: For {project}, directed cross-functional architecture reviews, performance experiments, and production hardening workstreams to ensure scale-readiness.",
                 "- Expanded depth: Formalized service-level objectives, build-vs-buy tradeoff analyses, and risk-mitigation controls; increased roadmap predictability by 33%.",

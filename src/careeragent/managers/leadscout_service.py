@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
@@ -59,6 +60,22 @@ JOB_BOARD_DOMAINS = [
 
 SKIP_PATHS = ["/blog/", "/news/", "/about", "/company", "/press", "/learn"]
 
+SUPPORTED_MIRROR_SITES = [
+    "linkedin.com/jobs/view",
+    "indeed.com/viewjob",
+    "glassdoor.com/job",
+    "boards.greenhouse.io",
+    "jobs.lever.co",
+    "myworkdayjobs.com",
+]
+
+ROTATING_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+]
+
 
 def _normalize_result_url(url: str) -> str:
     raw = str(url or "").strip()
@@ -98,11 +115,62 @@ def _normalize_result_url(url: str) -> str:
     return base
 
 
+def _clean_company_name(raw: str) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    if not text:
+        return ""
+    low = text.lower()
+    board_noise = {
+        "linkedin", "linkedin.com", "indeed", "indeed.com", "glassdoor", "glassdoor.com",
+        "ziprecruiter", "ziprecruiter.com", "myworkdayjobs", "workday", "jobs", "careers",
+    }
+    if low in board_noise:
+        return ""
+    return text
+
+
+def _infer_company_name(*, title: str, company_hint: str, url: str) -> str:
+    cleaned_hint = _clean_company_name(company_hint)
+    if cleaned_hint:
+        return cleaned_hint
+
+    title_text = re.sub(r"\s+", " ", str(title or "").strip())
+    patterns = [
+        r"\bat\s+([A-Z][A-Za-z0-9&.,'\- ]{1,50})$",
+        r"\|\s*([A-Z][A-Za-z0-9&.,'\- ]{1,50})$",
+        r"-\s*([A-Z][A-Za-z0-9&.,'\- ]{1,50})$",
+    ]
+    for pat in patterns:
+        m = re.search(pat, title_text)
+        if m:
+            inferred = _clean_company_name(m.group(1).strip(" -|"))
+            if inferred:
+                return inferred
+
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    if any(x in host for x in ("greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com")):
+        first = [p for p in parsed.path.split("/") if p][:1]
+        if first and first[0].lower() not in {"jobs", "job", "en-us", "recruiting"}:
+            tenant = re.sub(r"[-_]+", " ", first[0]).strip()
+            if tenant:
+                return " ".join(tok.capitalize() for tok in tenant.split())
+    return "Unknown company"
+
+
 def _curated_query_url(domain_path: str, query: str) -> str:
     """Build resilient, openable board-search links for curated backfill rows."""
-    domain = str(domain_path or "").strip().lower().strip("/")
-    if not domain:
+    raw_domain = str(domain_path or "").strip().lower()
+    if not raw_domain:
         return ""
+    if "://" not in raw_domain:
+        parsed = urlparse(f"https://{raw_domain}")
+    else:
+        parsed = urlparse(raw_domain)
+    host_only = (parsed.netloc or parsed.path.split("/")[0]).strip().lower()
+    host_only = host_only.removeprefix("www.")
+    path_hint = parsed.path or ""
+    domain = host_only
 
     # Domains that commonly break behind `www.` (e.g., jobs.lever.co).
     if domain.startswith(("jobs.", "boards.")):
@@ -124,10 +192,13 @@ def _curated_query_url(domain_path: str, query: str) -> str:
     if "greenhouse" in domain:
         return f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}"
     if "jobs.lever.co" in domain or "lever.co" in domain:
-        return f"https://jobs.lever.co/?q={query}"
+        # Root lever.co often lands on vendor homepage; use site search to jump to tenant pages.
+        return f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}"
     if "myworkdayjobs.com" in domain:
         # myworkdayjobs root cannot serve cross-tenant searches; use a stable site-search.
         return f"https://www.google.com/search?q=site%3Amyworkdayjobs.com+{query}"
+    if path_hint and path_hint != "/":
+        return f"https://{host}{path_hint}?q={query}"
     return f"https://{host}?q={query}"
 
 
@@ -153,6 +224,26 @@ def _is_plausible_job_link(url: str) -> bool:
     if any(d in host for d in ("workday", "myworkdayjobs", "icims.com", "jobvite.com", "smartrecruiters.com", "ziprecruiter.com", "myvisajobs.com")):
         return "/job" in path
     return True
+
+
+def _is_supported_mirror_board_url(url: str) -> bool:
+    low = str(url or "").lower()
+    return any(site in low for site in SUPPORTED_MIRROR_SITES)
+
+
+def _looks_like_blocked_portal_response(status_code: int, body: str) -> bool:
+    low = str(body or "").lower()
+    return status_code in {401, 403, 404, 429, 503} or any(
+        token in low
+        for token in (
+            "access denied",
+            "bot detection",
+            "security challenge",
+            "verify you are human",
+            "request blocked",
+            "cloudflare",
+        )
+    )
 
 
 @dataclass
@@ -189,6 +280,21 @@ class LeadScoutService:
         self.max_per_source = max_results_per_source
         self.enable_playwright = enable_playwright_scrape
         self._settings = Settings()
+        self._ua_pool = list(ROTATING_USER_AGENTS)
+        self._ua_cursor = random.randint(0, max(0, len(self._ua_pool) - 1)) if self._ua_pool else 0
+        self._playwright_stealth = {
+            "headless": True,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
+            "context": {
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
+                "color_scheme": "light",
+            },
+        }
         self._llm_clients: list[GeminiClient] = [
             GeminiClient(self._settings, model="gemini-1.5-flash"),
             GeminiClient(self._settings, model="gemini-1.5-pro"),
@@ -228,6 +334,7 @@ class LeadScoutService:
                 "remotive": True,
                 "llm_query_planner": bool(self._settings.GEMINI_API_KEY),
                 "llm_ranker": bool(self._settings.GEMINI_API_KEY),
+                "headless_stealth_ready": True,
             },
             "counts": {"serper_organic": 0, "tavily": 0, "remotive": 0},
             "fallback_reason": None,
@@ -273,6 +380,9 @@ class LeadScoutService:
                     diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
                 leads.extend(batch)
 
+        if leads:
+            leads = await self._validate_and_retry_links(leads, serper_key=serper_key)
+
         # Deduplicate by canonical URL
         seen, unique = set(), []
         for lead in leads:
@@ -316,6 +426,84 @@ class LeadScoutService:
 
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+
+    def _next_user_agent(self) -> str:
+        if not self._ua_pool:
+            return ""
+        self._ua_cursor = (self._ua_cursor + 1) % len(self._ua_pool)
+        return self._ua_pool[self._ua_cursor]
+
+    async def _resolve_redirect_or_block(self, url: str) -> tuple[bool, str, str]:
+        """Return (ok, final_url, reason)."""
+        headers = {
+            "User-Agent": self._next_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.google.com/",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
+                response = await client.get(url)
+            final_url = str(response.url)
+            body = (response.text or "")[:1200]
+            blocked = _looks_like_blocked_portal_response(response.status_code, body)
+            if blocked:
+                return False, final_url or url, f"blocked_or_error_http_{response.status_code}"
+            return True, final_url or url, "ok"
+        except Exception as exc:
+            return False, url, f"resolve_error:{type(exc).__name__}"
+
+    async def _search_retry_mirror_link(self, *, company: str, title: str, serper_key: str) -> str:
+        if not serper_key:
+            return ""
+        company_q = str(company or "").strip()
+        title_q = str(title or "").strip()
+        query = (
+            f"{company_q} {title_q} "
+            "(site:linkedin.com/jobs/view OR site:indeed.com/viewjob OR site:boards.greenhouse.io OR site:jobs.lever.co OR site:myworkdayjobs.com)"
+        ).strip()
+        headers = {"X-API-KEY": serper_key, "Content-Type": "application/json", "User-Agent": self._next_user_agent()}
+        payload = {"q": query, "gl": "us", "hl": "en", "num": 8}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post("https://google.serper.dev/search", json=payload, headers=headers)
+            if resp.status_code != 200:
+                return ""
+            data = resp.json()
+            for row in data.get("organic", []):
+                url = _normalize_result_url(row.get("link", ""))
+                if url and _is_supported_mirror_board_url(url) and _is_plausible_job_link(url):
+                    return url
+            return ""
+        except Exception:
+            return ""
+
+    async def _validate_and_retry_links(self, leads: list[JobLead], *, serper_key: str) -> list[JobLead]:
+        repaired: list[JobLead] = []
+        for lead in leads:
+            url = str(lead.url or "")
+            if not url:
+                repaired.append(lead)
+                continue
+
+            host = urlparse(url).netloc.lower()
+            if not any(token in host for token in ("workday", "myworkdayjobs", "greenhouse", "lever", "icims", "smartrecruiters", "jobvite", "ashbyhq", "rippling")):
+                repaired.append(lead)
+                continue
+
+            ok, final_url, reason = await self._resolve_redirect_or_block(url)
+            if ok and _is_plausible_job_link(final_url):
+                lead.url = final_url
+                repaired.append(lead)
+                continue
+
+            mirror = await self._search_retry_mirror_link(company=lead.company, title=lead.title, serper_key=serper_key)
+            if mirror:
+                lead.url = mirror
+                lead.source = f"{lead.source}_search_retry" if lead.source else "search_retry"
+                lead.description = (lead.description or "")[:420] + f" | search_retry_reason: {reason}"
+            repaired.append(lead)
+        return repaired
 
     @staticmethod
     def _parse_posted_datetime(value: str) -> Optional[datetime]:
@@ -582,7 +770,7 @@ class LeadScoutService:
             existing.append(JobLead(
                 id=f"backfill_{idx:03d}",
                 title=role,
-                company=dom.split('/')[0],
+                company="Unknown company",
                 url=url,
                 location="Remote" if intent_plan.get("geo_preferences", {}).get("remote", True) else self._resolve_location(intent_plan),
                 remote=bool(intent_plan.get("geo_preferences", {}).get("remote", True)),
@@ -735,7 +923,7 @@ class LeadScoutService:
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
-                    company     = r.get("displayLink", ""),
+                    company     = _infer_company_name(title=title, company_hint=r.get("displayLink", ""), url=url),
                     url         = url,
                     description = r.get("snippet", "")[:500],
                     posted_date = r.get("date", ""),
@@ -785,7 +973,7 @@ class LeadScoutService:
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
-                    company     = "",
+                    company     = _infer_company_name(title=title, company_hint="", url=url),
                     url         = url,
                     description = r.get("content", "")[:500],
                     posted_date = r.get("published_date", ""),

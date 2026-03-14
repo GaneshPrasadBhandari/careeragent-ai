@@ -1,4 +1,11 @@
-from careeragent.managers.leadscout_service import _curated_query_url, _is_plausible_job_link, _normalize_result_url
+from careeragent.managers.leadscout_service import (
+    _curated_query_url,
+    _infer_company_name,
+    _is_plausible_job_link,
+    _is_supported_mirror_board_url,
+    _looks_like_blocked_portal_response,
+    _normalize_result_url,
+)
 from careeragent.managers.leadscout_service import JobLead, LeadScoutService
 
 
@@ -87,7 +94,8 @@ def test_hybrid_relevance_score_rewards_role_keyword_overlap() -> None:
 
 def test_curated_query_url_uses_valid_lever_host() -> None:
     url = _curated_query_url("jobs.lever.co", "platform+engineer")
-    assert url.startswith("https://jobs.lever.co")
+    assert "google.com/search" in url
+    assert "site%3Ajobs.lever.co" in url
 
 
 def test_backfill_curated_search_urls_avoids_invalid_www_hosts() -> None:
@@ -111,3 +119,36 @@ def test_curated_query_url_uses_stable_endpoints_for_fragile_boards() -> None:
     assert "/Job/index.htm?sc.keyword=" in glassdoor
     assert "/jobs-search?search=" in zipr
     assert "google.com/search" in workday and "site%3Amyworkdayjobs.com" in workday
+
+
+def test_curated_query_url_avoids_double_jobs_path_for_ziprecruiter() -> None:
+    zipr = _curated_query_url("ziprecruiter.com/Jobs", "platform+engineer")
+    assert "jobs/jobs-search" not in zipr
+
+
+def test_infer_company_name_extracts_from_title_suffix() -> None:
+    company = _infer_company_name(
+        title="Principal Data Scientist - Acme Labs",
+        company_hint="",
+        url="https://www.indeed.com/viewjob?jk=abc123",
+    )
+    assert company == "Acme Labs"
+
+
+def test_infer_company_name_uses_tenant_slug_for_ats_hosts() -> None:
+    company = _infer_company_name(
+        title="AI Engineer",
+        company_hint="",
+        url="https://boards.greenhouse.io/paper/jobs/987654",
+    )
+    assert company == "Paper"
+
+
+def test_supported_mirror_board_url_recognizes_supported_hosts() -> None:
+    assert _is_supported_mirror_board_url("https://www.linkedin.com/jobs/view/123") is True
+    assert _is_supported_mirror_board_url("https://example.com/careers/123") is False
+
+
+def test_blocked_portal_detector_flags_access_denied_pages() -> None:
+    assert _looks_like_blocked_portal_response(403, "Access denied by security policy") is True
+    assert _looks_like_blocked_portal_response(200, "Regular job page content") is False

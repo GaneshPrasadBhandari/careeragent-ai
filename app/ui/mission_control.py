@@ -293,7 +293,8 @@ def _inject_css() -> None:
         border: 1px solid #D9DEE5;
         border-radius: 10px;
         padding: 14px 18px;
-        max-height: 200px;
+        min-height: 140px;
+        max-height: 240px;
         overflow-y: auto;
         margin-top: 12px;
     }
@@ -302,7 +303,7 @@ def _inject_css() -> None:
     .feed-entry { font-size: 13px; color: #FDE047 !important; padding: 4px 0; line-height: 1.5; font-weight: 700;
                   font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace; }
     .feed-ts    { color: #FBBF24 !important; font-size: 12px; margin-right: 8px; font-weight: 800; }
-    .feed-msg   { color: #FEF08A !important; }
+    .feed-msg   { color: #FFF59D !important; font-weight: 700; }
     .feed-empty { color: #FCD34D !important; font-size: 12px; font-style: italic; }
     .feed-wrap, .feed-wrap *, .feed-wrap [data-testid="stMarkdownContainer"], .feed-wrap p, .feed-wrap span {
         color: #FACC15 !important;
@@ -1030,22 +1031,16 @@ def render_agent_feed(status: Optional[dict]) -> None:
     """Live Agent Feed section."""
     feed = status.get("agent_log", []) if status else []
 
+    st.markdown('<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div></div>', unsafe_allow_html=True)
     if not feed:
-        feed_content = '<div class="feed-empty">Waiting for agent activity…</div>'
-    else:
-        entries = ""
-        for entry in reversed(feed[-20:]):  # newest first
-            ts  = entry.get("ts", "")[:19].replace("T", " ")
-            msg = entry.get("msg", "")
-            entries += f'<div class="feed-entry"><span class="feed-ts">{escape(str(ts))}</span><span class="feed-msg">{escape(str(msg))}</span></div>'
-        feed_content = entries
-
-    st.markdown(f"""
-    <div class="feed-wrap">
-        <div class="feed-title">+ Live Agent Feed</div>
-        {feed_content}
-    </div>
-    """, unsafe_allow_html=True)
+        st.warning("Live agent feed is empty for this run right now. Waiting for agent activity…")
+        return
+    lines: list[str] = []
+    for entry in reversed(feed[-25:]):
+        ts = str(entry.get("ts", ""))[:19].replace("T", " ")
+        msg = str(entry.get("msg", "")).strip()
+        lines.append(f"[{ts}] {msg}")
+    st.code("\n".join(lines), language=None)
 
 
 def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
@@ -1290,6 +1285,7 @@ If links open but no traces show, ensure the same env vars are on the backend se
                 "Channel": row.get("apply_channel"),
                 "Next Action": row.get("next_action"),
                 "Apply URL": row.get("url"),
+                "Screenshot Path": row.get("screenshot_path") or row.get("submission_proof"),
             }
             for row in applications
         ], use_container_width=True, hide_index=True)
@@ -1338,7 +1334,18 @@ If links open but no traces show, ensure the same env vars are on the backend se
     feedback_events = status.get("feedback_events") or []
     if feedback_events:
         st.caption(f"Feedback signals captured for this run: {len(feedback_events)}")
-        st.caption("Detailed feedback text is intentionally hidden in end-user dashboard view.")
+        preview_rows = [
+            {
+                "time": str(e.get("ts") or "")[:19].replace("T", " "),
+                "source": e.get("source"),
+                "accepted": (e.get("evaluation") or {}).get("is_genuine"),
+                "confidence": (e.get("evaluation") or {}).get("confidence"),
+                "reason": (e.get("evaluation") or {}).get("reason"),
+                "feedback": str(e.get("text") or "")[:180],
+            }
+            for e in reversed(feedback_events[-12:])
+        ]
+        st.dataframe(preview_rows, use_container_width=True, hide_index=True)
     else:
         st.caption("No feedback captured yet. Submit feedback above to improve future runs.")
 
@@ -1362,6 +1369,15 @@ If links open but no traces show, ensure the same env vars are on the backend se
     notification_log = status.get("notification_log") or []
     if notification_log:
         st.dataframe(notification_log, use_container_width=True, hide_index=True)
+        unresolved = []
+        for row in notification_log:
+            result = row.get("result") or {}
+            if result.get("sent"):
+                continue
+            reason = result.get("reason") or result.get("error") or "provider_not_configured"
+            unresolved.append(f"{row.get('event', 'notification')}: {reason}")
+        if unresolved:
+            st.warning("Notification issues detected:\n" + "\n".join(f"- {x}" for x in unresolved[:6]))
         st.caption("Notification results include provider-level delivery attempts and responses.")
     else:
         st.caption("No notifications attempted yet.")
