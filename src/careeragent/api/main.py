@@ -466,6 +466,15 @@ def _langgraph_status(run_id: str) -> dict:
     }
 
 
+def _is_direct_application_url(url: str) -> bool:
+    low = str(url or "").strip().lower()
+    if not low:
+        return False
+    if any(x in low for x in ["/jobs/search", "?q=", "/jobs?q=", "/job/jobs.htm"]):
+        return False
+    return any(x in low for x in ["/jobs/view", "/viewjob", "joblistingid=", "/jobs/", "/job/"])
+
+
 def _llm_stack_snapshot() -> dict:
     ats_model = os.getenv("CAREERAGENT_ATS_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
     parser_model = os.getenv("CAREERAGENT_PARSER_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash"
@@ -942,28 +951,34 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
 
     _layer_running(state, 7, "ApplyExecutor: submitting applications via Playwright…", tools_used=["apply.playwright_form_autofill", "notify.email", "notify.sms"], attempt_count=1)
     apply_results = []
+    skipped_non_direct = 0
     for index, job in enumerate(to_apply, start=1):
         job_id = str(job.get("id") or f"job_{index}")
+        job_url = str(job.get("url") or "")
         artifact_set = (state.get("artifacts") or {}).get(job_id, {})
         resume_docx = artifact_set.get("resume_docx")
         cover_docx = artifact_set.get("cover_docx")
         proof_path = _write_submission_proof(run_id, job_id, job)
-        application_status = "submitted" if candidate_email else "queued_missing_contact"
+        direct_url = _is_direct_application_url(job_url)
+        if not direct_url:
+            skipped_non_direct += 1
+        application_status = "submitted_pending_verification" if (candidate_email and direct_url) else ("queued_missing_contact" if direct_url else "skipped_non_direct_job_url")
         apply_results.append({
             "job_id":  job_id,
             "title":   job.get("title", ""),
             "company": job.get("company", ""),
             "status":  application_status,
-            "url":     job.get("url", ""),
+            "url":     job_url,
             "apply_channel": "playwright_autofill",
             "resume_docx": resume_docx,
             "cover_letter_docx": cover_docx,
             "submission_proof": str(proof_path),
             "applied_at": _now(),
-            "next_action": "await_response" if application_status == "submitted" else "supply_missing_contact_or_review",
-            "verification_method": "Check employer ATS portal/email inbox for confirmation ID and await recruiter response",
-            "verification_status": "pending_employer_confirmation",
+            "next_action": "confirm_submission_in_ats_portal" if application_status == "submitted_pending_verification" else ("supply_missing_contact_or_review" if direct_url else "open_direct_job_posting_url"),
+            "verification_method": "Treat as confirmed only when ATS shows an application ID or employer acknowledgement email arrives.",
+            "verification_status": "pending_employer_confirmation" if application_status == "submitted_pending_verification" else ("missing_contact" if direct_url else "not_attempted_non_direct_url"),
             "followup_due_at": _now(),
+            "is_direct_job_url": direct_url,
             "autofill_payload": {
                 "full_name": profile.get("name", "Candidate"),
                 "email": candidate_email,
@@ -985,6 +1000,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
             "google_calendar_event": None,
         }
         for row in apply_results
+        if row.get("status") == "submitted_pending_verification"
         if float(next((j.get("interview_probability_percent") for j in to_apply if j.get("id") == row.get("job_id")), 0.0) or 0.0) >= 70.0
     ]
 
@@ -998,7 +1014,7 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
             "job_id": job_id,
             "subject": f"Follow-up on application: {role} at {company}",
             "body": (
-                f"Hello {company} Hiring Team,\\n\\n"
+                "Hello Hiring Manager,\\n\\n"
                 f"I recently applied for the {role} position and wanted to reiterate my interest. "
                 f"I am excited about the opportunity to contribute and would welcome the chance to discuss my fit.\\n\\n"
                 f"Best regards,\\n{candidate_name}"
@@ -1028,10 +1044,10 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
         target_id="apply_executor",
         score=1.0 if apply_results else 0.0,
         threshold=0.2,
-        feedback=[f"queued={len(apply_results)}"],
+        feedback=[f"queued={len(apply_results)}", f"non_direct_urls={skipped_non_direct}"],
     )
-    _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), interviews_predicted=len(state["interviews"]), tools_used=["playwright"], attempt_count=1)
-    state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
+    _layer_ok(state, 7, f"{len(apply_results)} application actions queued ✓", applied=len(apply_results), interviews_predicted=len(state["interviews"]), tools_used=["playwright"], attempt_count=1)
+    state["layers"][7]["output"] = f"{len(apply_results)} application actions queued ({skipped_non_direct} non-direct URLs skipped)"
 
     if (notif_cfg.get("enable_email") or notif_cfg.get("enable_sms")) and apply_results:
         notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
@@ -1750,8 +1766,31 @@ def _clean_role_title(raw_title: str) -> str:
 
 def _build_cover_letter_text(profile: dict, job: dict) -> str:
     """Create a classic business cover letter format with robust role alignment."""
+    def _normalize_company(company_raw: str, job_url: str) -> str:
+        raw = str(company_raw or "").strip()
+        if raw and "." not in raw and " board" not in raw.lower():
+            return raw
+        parsed = urlparse(str(job_url or "").strip())
+        host = (parsed.netloc or raw).lower().strip()
+        host = host[4:] if host.startswith("www.") else host
+        board_names = {
+            "linkedin.com": "LinkedIn",
+            "indeed.com": "Indeed",
+            "glassdoor.com": "Glassdoor",
+            "ziprecruiter.com": "ZipRecruiter",
+            "boards.greenhouse.io": "Greenhouse",
+            "jobs.lever.co": "Lever",
+            "myworkdayjobs.com": "Workday",
+        }
+        if host in board_names:
+            return f"Hiring Team ({board_names[host]} posting)"
+        if not host:
+            return "Hiring Team"
+        cleaned = host.replace(".com", "").replace(".io", "").replace("-", " ").replace(".", " ").strip()
+        return " ".join(p.capitalize() for p in cleaned.split()) or "Hiring Team"
+
     role = _clean_role_title(job.get("title", ""))
-    company = str(job.get("company") or "Hiring Team")
+    company = _normalize_company(job.get("company") or "", job.get("url") or "")
     candidate = str(profile.get("name") or "Candidate")
     email = str(profile.get("email") or "")
     phone = str(profile.get("phone") or "")
@@ -1763,20 +1802,22 @@ def _build_cover_letter_text(profile: dict, job: dict) -> str:
     projects = [str(x).strip() for x in (profile.get("projects") or []) if str(x).strip()]
     impact_anchor = projects[0] if projects else (experience_items[0] if experience_items else "enterprise platform modernization")
 
-    company_line = f"{company}\n" if company and "demo board" not in company.lower() else ""
+    company_line = f"{company}\n" if company and "hiring team" not in company.lower() else ""
+    salutation = "Dear Hiring Manager,"
+    company_phrase = company if company and "hiring team" not in company.lower() else "your team"
 
     return (
         f"{candidate}\n"
         f"{email} | {phone}\n"
         f"{_now()[:10]}\n\n"
-        "Hiring Team\n"
+        "Hiring Manager\n"
         f"{company_line}\n"
         f"Subject: Application for {role}\n\n"
-        f"Dear {company if company and 'demo board' not in company.lower() else 'Hiring Team'},\n\n"
-        f"I am writing to express interest in the {role} position at {company}. {summary}\n\n"
+        f"{salutation}\n\n"
+        f"I am writing to express interest in the {role} position with {company_phrase}. {summary}\n\n"
         f"My background aligns strongly with your requirements, especially in {top_skills}. "
         f"A representative example is {impact_anchor}, where I partnered cross-functionally to improve reliability, delivery velocity, and measurable business outcomes.\n\n"
-        f"I am confident this blend of technical depth and execution discipline would let me contribute quickly to {company}. "
+        f"I am confident this blend of technical depth and execution discipline would let me contribute quickly to {company_phrase}. "
         "I would value the opportunity to discuss how my background can support your team's goals.\n\n"
         "Thank you for your time and consideration.\n\n"
         "Sincerely,\n"

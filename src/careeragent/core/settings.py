@@ -23,6 +23,7 @@ class Settings(BaseModel):
     LANGCHAIN_PROJECT: str = "careeragent-ai-phase6"
     LANGCHAIN_TRACING_V2: str = "true"
     LANGSMITH_TRACING: str = "true"
+    LANGGRAPH_STUDIO_URL: Optional[str] = None
 
     DATABASE_URL: str = "sqlite:///outputs/careeragent.db"
 
@@ -74,6 +75,7 @@ class Settings(BaseModel):
                 "LANGCHAIN_PROJECT",
                 "LANGCHAIN_TRACING_V2",
                 "LANGSMITH_TRACING",
+                "LANGGRAPH_STUDIO_URL",
                 "DATABASE_URL",
                 "QDRANT_URL",
                 "QDRANT_API_KEY",

@@ -299,12 +299,12 @@ def _inject_css() -> None:
     }
     .feed-title { font-size: 11px; color: #4ADE80 !important; text-transform: uppercase;
                   letter-spacing: 0.1em; margin-bottom: 8px; font-weight: 700; }
-    .feed-entry { font-size: 12px; color: #FDE68A !important; padding: 3px 0; line-height: 1.45; }
+    .feed-entry { font-size: 12px; color: #FACC15 !important; padding: 3px 0; line-height: 1.45; font-weight: 600; }
     .feed-ts    { color: #93C5FD !important; font-size: 11px; margin-right: 8px; }
     .feed-msg   { color: #FEF9C3 !important; }
     .feed-empty { color: #FCD34D !important; font-size: 12px; font-style: italic; }
     .feed-wrap, .feed-wrap *, .feed-wrap [data-testid="stMarkdownContainer"], .feed-wrap p, .feed-wrap span {
-        color: #FDE68A !important;
+        color: #FACC15 !important;
     }
 
     /* ── Section header ── */
@@ -1076,11 +1076,19 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
     ]
     st.caption(f"Showing {len(filtered)} / {len(jobs)} jobs")
 
+    non_direct = [j for j in filtered if not bool(j.get("is_direct_job_url", True))]
+    if non_direct:
+        st.warning(
+            f"{len(non_direct)} listings are board/search URLs (not direct posting URLs). "
+            "They are shown for discovery context, but should be opened and replaced with direct ATS job pages before applying."
+        )
+
     for job in filtered[:40]:
         score = job.get("score", 0)
         score_c = "green" if score >= 0.7 else ("orange" if score >= 0.45 else "")
         remote_b = "🌐 Remote" if job.get("remote") else f"📍 {job.get('location','')}"
         why = ", ".join(job.get("matched_skills", [])[:4]) or "Keyword overlap + semantic fit"
+        direct_badge = "✅ Direct job URL" if bool(job.get("is_direct_job_url", True)) else "⚠️ Search/board URL"
         st.markdown(f"""
         <div class="job-row">
             <div>
@@ -1091,6 +1099,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 </div>
                 <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 <a href="{_normalize_clickable_url(job.get('url',''))}" target="_blank" rel="noopener noreferrer">Open posting</a></div>
                 <div style="font-size:10px;color:#5C677D;word-break:break-all">{escape(_safe_url_text(_normalize_clickable_url(job.get('url',''))))}</div>
+                <div style="font-size:11px;color:{'#2D6A4F' if bool(job.get('is_direct_job_url', True)) else '#B45309'};margin-top:2px">{direct_badge}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
