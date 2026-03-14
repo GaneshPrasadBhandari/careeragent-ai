@@ -22,6 +22,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -1524,6 +1525,40 @@ def _is_stalled_early_run(state: dict) -> bool:
     return (datetime.now(timezone.utc) - updated).total_seconds() >= 20
 
 
+def _recovery_lock_path(run_id: str) -> Path:
+    return LOGS_DIR / f"recovery_{run_id}.lock"
+
+
+def _claim_recovery_slot(run_id: str, *, ttl_seconds: int = 600) -> bool:
+    """Cross-worker one-at-a-time guard for stalled-run recovery attempts."""
+    lock_path = _recovery_lock_path(run_id)
+    now_ts = time.time()
+    try:
+        if lock_path.exists():
+            age = max(0.0, now_ts - lock_path.stat().st_mtime)
+            if age < ttl_seconds:
+                return False
+            try:
+                lock_path.unlink()
+            except Exception:
+                return False
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(_now())
+        return True
+    except FileExistsError:
+        return False
+    except Exception:
+        return False
+
+
+def _release_recovery_slot(run_id: str) -> None:
+    try:
+        _recovery_lock_path(run_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _try_recover_stalled_run(run_id: str, state: dict) -> None:
     """Best-effort auto-recovery for stale runs that never moved past L1."""
     if not _is_stalled_early_run(state):
@@ -1535,15 +1570,23 @@ def _try_recover_stalled_run(run_id: str, state: dict) -> None:
     if not resume_path.exists():
         return
 
-    state["recovery_attempted_at"] = _now()
-    _log_agent(state, 1, "Run appeared stalled in early startup. Auto-retrying pipeline scheduling…")
-    _persist_state(run_id)
+    if not _claim_recovery_slot(run_id):
+        return
+
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(run_pipeline(run_id, resume_path))
-        log.warning("Recovered stalled run %s via status poll", run_id)
     except Exception as exc:
+        state["recovery_last_error"] = str(exc)
+        _persist_state(run_id)
+        _release_recovery_slot(run_id)
         log.warning("Could not auto-recover run %s: %s", run_id, exc)
+        return
+
+    state["recovery_attempted_at"] = _now()
+    _log_agent(state, 1, "Run appeared stalled in early startup. Auto-retrying pipeline scheduling…")
+    _persist_state(run_id)
+    log.warning("Recovered stalled run %s via status poll", run_id)
 
 
 def _persist_tracking(run_id: str, state: dict) -> None:
