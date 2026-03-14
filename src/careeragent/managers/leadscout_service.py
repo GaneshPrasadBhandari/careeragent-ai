@@ -281,7 +281,15 @@ class LeadScoutService:
 
         target_count = int(intent_plan.get("max_jobs") or 80)
         if len(unique) < target_count:
-            unique = self._backfill_curated_search_urls(unique, intent_plan=intent_plan, target_count=target_count)
+            # If live providers produced little/no data, avoid flooding ranking with many
+            # repetitive query URLs that are not direct application pages.
+            backfill_target = target_count if unique else min(target_count, 30)
+            unique = self._backfill_curated_search_urls(unique, intent_plan=intent_plan, target_count=backfill_target)
+            if backfill_target < target_count:
+                diagnostics["fallback_reason"] = (
+                    f"Live providers returned low volume; limited non-direct query backfill to {backfill_target} rows "
+                    "to keep rankings actionable."
+                )
 
         try:
             unique = await asyncio.wait_for(

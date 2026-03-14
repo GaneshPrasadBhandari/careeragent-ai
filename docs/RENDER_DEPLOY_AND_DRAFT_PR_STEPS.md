@@ -63,7 +63,8 @@ Set these in Render (Environment tab):
 - `GEMINI_API_KEY` / other LLM keys you use
 - `SERPER_API_KEY` (if using Serper)
 - `TAVILY_API_KEY` (if using Tavily)
-- `LANGGRAPH_STUDIO_URL` (optional but recommended; enables direct LangGraph run-trace link in dashboard analytics)
+- `LANGGRAPH_STUDIO_URL` (optional but recommended; enables direct LangGraph run-trace link in dashboard analytics). Use format:
+  `https://smith.langchain.com/o/<workspace>/projects/<project>`
 - `DATABASE_URL` (if not default sqlite path)
 - any notification keys you use (SendGrid/Resend/Twilio)
 
@@ -104,4 +105,3 @@ This allows Streamlit sidebar to prefill the backend URL automatically.
 - Share dashboard URL + 3-line usage instruction.
 - Ask each tester to submit feedback via Analytics tab.
 - Track recruiter/user feedback trends before Phase 7 planning.
-
