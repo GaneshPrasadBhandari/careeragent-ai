@@ -98,6 +98,31 @@ def _normalize_result_url(url: str) -> str:
     return base
 
 
+def _curated_query_url(domain_path: str, query: str) -> str:
+    """Build resilient, openable board-search links for curated backfill rows."""
+    domain = str(domain_path or "").strip().lower().strip("/")
+    if not domain:
+        return ""
+
+    # Domains that commonly break behind `www.` (e.g., jobs.lever.co).
+    if domain.startswith(("jobs.", "boards.")):
+        host = domain
+    elif domain == "myworkdayjobs.com":
+        host = domain
+    else:
+        host = f"www.{domain}"
+
+    if "linkedin" in domain:
+        return f"https://{host}/?keywords={query}"
+    if "indeed" in domain:
+        return f"https://{host}?q={query}"
+    if "glassdoor" in domain:
+        return f"https://{host}?sc.keyword={query}"
+    if "myworkdayjobs.com" in domain:
+        return f"https://{host}/en-US/recruiting?q={query}"
+    return f"https://{host}?q={query}"
+
+
 def _is_plausible_job_link(url: str) -> bool:
     low = str(url or "").lower()
     if not low:
@@ -533,14 +558,7 @@ class LeadScoutService:
             kw = keywords[idx % len(keywords)] if keywords else ""
             dom = domains[idx % len(domains)]
             q = quote_plus((f"{role} {kw}").strip())
-            if "linkedin" in dom:
-                url = f"https://www.{dom}/?keywords={q}"
-            elif "indeed" in dom:
-                url = f"https://www.{dom}?q={q}"
-            elif "glassdoor" in dom:
-                url = f"https://www.{dom}?sc.keyword={q}"
-            else:
-                url = f"https://www.{dom}?q={q}"
+            url = _curated_query_url(dom, q)
             idx += 1
             if url in seen:
                 continue
