@@ -22,6 +22,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -1495,6 +1496,99 @@ def _refresh_run_state(run_id: str) -> dict:
     return mem_state
 
 
+def _is_stalled_early_run(state: dict) -> bool:
+    """Detect runs stuck in early layers due dropped background task/process churn."""
+    if not isinstance(state, dict) or state.get("status") != "running":
+        return False
+    layers = state.get("layers") or []
+    if not isinstance(layers, list) or len(layers) < 2:
+        return False
+
+    l0 = layers[0] if isinstance(layers[0], dict) else {}
+    l1 = layers[1] if isinstance(layers[1], dict) else {}
+    progress = float(state.get("progress_pct") or 0.0)
+
+    early_stuck = (
+        progress <= 12.0
+        and l1.get("status") == "running"
+        and l0.get("status") in {"ok", "running"}
+        and all(str((layers[i] if i < len(layers) else {}).get("status") or "waiting") == "waiting" for i in range(2, min(len(layers), 10)))
+    )
+    if not early_stuck:
+        return False
+
+    updated = _coerce_iso_ts(state.get("updated_at")) or _coerce_iso_ts(state.get("created_at"))
+    if not updated:
+        return True
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - updated).total_seconds() >= 20
+
+
+def _recovery_lock_path(run_id: str) -> Path:
+    return LOGS_DIR / f"recovery_{run_id}.lock"
+
+
+def _claim_recovery_slot(run_id: str, *, ttl_seconds: int = 600) -> bool:
+    """Cross-worker one-at-a-time guard for stalled-run recovery attempts."""
+    lock_path = _recovery_lock_path(run_id)
+    now_ts = time.time()
+    try:
+        if lock_path.exists():
+            age = max(0.0, now_ts - lock_path.stat().st_mtime)
+            if age < ttl_seconds:
+                return False
+            try:
+                lock_path.unlink()
+            except Exception:
+                return False
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(_now())
+        return True
+    except FileExistsError:
+        return False
+    except Exception:
+        return False
+
+
+def _release_recovery_slot(run_id: str) -> None:
+    try:
+        _recovery_lock_path(run_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _try_recover_stalled_run(run_id: str, state: dict) -> None:
+    """Best-effort auto-recovery for stale runs that never moved past L1."""
+    if not _is_stalled_early_run(state):
+        return
+    if state.get("recovery_attempted_at"):
+        return
+
+    resume_path = Path(str(state.get("resume_path") or "")).expanduser()
+    if not resume_path.exists():
+        return
+
+    if not _claim_recovery_slot(run_id):
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(run_pipeline(run_id, resume_path))
+    except Exception as exc:
+        state["recovery_last_error"] = str(exc)
+        _persist_state(run_id)
+        _release_recovery_slot(run_id)
+        log.warning("Could not auto-recover run %s: %s", run_id, exc)
+        return
+
+    state["recovery_attempted_at"] = _now()
+    _log_agent(state, 1, "Run appeared stalled in early startup. Auto-retrying pipeline scheduling…")
+    _persist_state(run_id)
+    log.warning("Recovered stalled run %s via status poll", run_id)
+
+
 def _persist_tracking(run_id: str, state: dict) -> None:
     try:
         db_path = LOGS_DIR / "careeragent_tracking.db"
@@ -2384,6 +2478,8 @@ async def start_hunt(
 @traceable(name="api.get_status")
 async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
+    state = _refresh_run_state(run_id)
+    _try_recover_stalled_run(run_id, state)
     state = _refresh_run_state(run_id)
     return {
         "run_id":           state["run_id"],
