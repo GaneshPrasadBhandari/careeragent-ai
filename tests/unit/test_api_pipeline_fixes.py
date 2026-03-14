@@ -82,6 +82,10 @@ _is_duplicate_action = api_main._is_duplicate_action
 _mark_action_processed = api_main._mark_action_processed
 
 _apply_role_relevance_filter = api_main._apply_role_relevance_filter
+_normalize_company_name = api_main._normalize_company_name
+_build_resume_markdown = api_main._build_resume_markdown
+_detect_submission_success_signal = api_main._detect_submission_success_signal
+_build_identity_bundle = api_main._build_identity_bundle
 
 
 def test_langsmith_status_uses_boolean_env(monkeypatch):
@@ -242,3 +246,44 @@ def test_parse_resume_error_uses_fallback_text(monkeypatch):
 
     assert profile["name"] == "Alex"
     assert profile.get("parse_warning", "").startswith("resume_parse_error:RuntimeError")
+
+
+def test_normalize_company_name_uses_ats_tenant_slug() -> None:
+    company = _normalize_company_name(
+        "boards.greenhouse.io",
+        "https://boards.greenhouse.io/openai/jobs/1234",
+        "Senior AI Engineer",
+    )
+    assert company == "Openai"
+
+
+def test_resume_markdown_adds_more_projects_for_senior_profiles() -> None:
+    profile = {
+        "name": "Senior Candidate",
+        "experience": [{"title": "Architect", "years": 12}],
+        "projects": ["Project A", "Project B", "Project C", "Project D"],
+        "skills": ["Python", "LLM"],
+    }
+    resume_md = _build_resume_markdown(profile, keyword_hints=["rag"])
+    assert "### Project 3" in resume_md
+    assert "### Project 4" in resume_md
+
+
+def test_detect_submission_success_signal_prefers_explicit_success_markers() -> None:
+    sig = _detect_submission_success_signal(
+        "https://company.example.com/apply/complete?id=123",
+        {"description": "Thanks for applying to this role."},
+    )
+    assert sig["success_state"] is True
+    assert sig["signals"]
+
+
+def test_identity_bundle_contains_email_targets_for_main_hidden_and_iframe() -> None:
+    bundle = _build_identity_bundle(
+        {"name": "Alex", "email": "alex@example.com", "phone": "+15085550123"},
+        {"email": "", "phone": ""},
+    )
+    selectors = [x.get("selector") for x in bundle.get("email_field_targets") or []]
+    assert "input[type='email']" in selectors
+    assert any("hidden" in str(s) for s in selectors)
+    assert any("iframe" in str(s) for s in selectors)
