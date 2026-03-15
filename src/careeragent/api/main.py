@@ -1228,6 +1228,9 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     )
     _layer_ok(state, 7, f"{len(apply_results)} application actions queued ✓", applied=len(apply_results), interviews_predicted=len(state["interviews"]), tools_used=["playwright"], attempt_count=1)
     state["layers"][7]["output"] = f"{len(apply_results)} application actions queued ({skipped_non_direct} non-direct URLs skipped)"
+    if apply_results:
+        preview_company = str(apply_results[0].get("company") or "Target Company")
+        _log_agent(state, 7, f"✅ APPLICATION SYNCED: Custom Resume & Cover Letter generated for {preview_company}.")
 
     if (notif_cfg.get("enable_email") or notif_cfg.get("enable_sms")) and apply_results:
         notifier = NotificationService(dry_run=str(os.getenv("CAREERAGENT_NOTIFICATIONS_DRY_RUN", "false")).strip().lower() in {"1", "true", "yes", "on"})
@@ -1249,6 +1252,8 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
                 "phone": candidate_phone,
             },
         })
+        for warning in (l7_alert.get("warnings") or []):
+            _log_agent(state, 7, str(warning))
 
     if (not skip_followup_gate) and state.get("config", {}).get("require_followup_approval", True) and apply_results:
         state["status"] = "pending_human_input"
@@ -1291,6 +1296,8 @@ async def _continue_l8_to_l9(run_id: str) -> None:
             },
             "result": alert_result,
         })
+        for warning in (alert_result.get("warnings") or []):
+            _log_agent(state, 7, str(warning))
 
     _layer_running(state, 8, "Recording results to tracking database…", tools_used=["sqlite_tracking"], attempt_count=1)
     await asyncio.sleep(0.3)

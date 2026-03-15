@@ -289,6 +289,28 @@ def _read_beta_feedback() -> list[dict]:
     return out
 
 
+def _clear_test_feedback_data() -> int:
+    """Delete obvious test/demo feedback rows while keeping real beta data."""
+    db_path = _ensure_beta_feedback_db()
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM public_beta_feedback
+            WHERE lower(user_identifier) LIKE '%test%'
+               OR lower(user_identifier) LIKE '%demo%'
+               OR lower(user_identifier) LIKE '%sample%'
+               OR lower(user_identifier) LIKE '%qa%'
+               OR lower(user_identifier) LIKE '%dummy%'
+               OR lower(user_identifier) = 'public-user'
+               OR lower(feedback_text) LIKE '%test%'
+               OR lower(feedback_text) LIKE '%dummy%'
+               OR lower(feedback_text) LIKE '%lorem ipsum%'
+            """
+        )
+        deleted = int(cur.rowcount or 0)
+    return deleted
+
+
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
@@ -428,6 +450,18 @@ def _inject_css() -> None:
     .feed-empty { color: #FCD34D !important; font-size: 12px; font-style: italic; }
     .feed-wrap, .feed-wrap *, .feed-wrap [data-testid="stMarkdownContainer"], .feed-wrap p, .feed-wrap span {
         color: #FACC15 !important;
+    }
+
+    /* ── Matrix terminal override (L0 visibility) ── */
+    .stCode, .live-feed-log {
+        color: #00FF00 !important;
+        background-color: #000000 !important;
+        font-family: 'Courier New', monospace;
+        border: 1px solid #333;
+    }
+    .live-feed-log *, .stCode * {
+        color: #00FF00 !important;
+        font-family: 'Courier New', monospace !important;
     }
 
     /* ── Section header ── */
@@ -1157,7 +1191,7 @@ def render_agent_feed(status: Optional[dict]) -> None:
 
     if not merged_feed:
         container.markdown(
-            '<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div><div class="feed-empty">Waiting for agent activity…</div></div>',
+            '<div class="feed-wrap live-feed-log"><div class="feed-title">+ Live Agent Feed</div><div class="feed-empty">Waiting for agent activity…</div></div>',
             unsafe_allow_html=True,
         )
         return
@@ -1171,7 +1205,7 @@ def render_agent_feed(status: Optional[dict]) -> None:
             f'<span style="color: #FFD700; font-family: monospace;">{escape(msg)}</span></div>'
         )
     container.markdown(
-        f'<div class="feed-wrap"><div class="feed-title">+ Live Agent Feed</div>{"".join(lines)}</div>',
+        f'<div class="feed-wrap live-feed-log"><div class="feed-title">+ Live Agent Feed</div>{"".join(lines)}</div>',
         unsafe_allow_html=True,
     )
 
@@ -1508,6 +1542,17 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
 def render_executive_summary() -> None:
     st.markdown("### Executive Summary — Public Beta Feedback")
     rows = _read_beta_feedback()
+    st.markdown("#### Feedback Review")
+    st.caption("Live review dashboard backed by analytics/feedback_archive.db for beta-demo triage.")
+    clear_col, info_col = st.columns([1, 2])
+    with clear_col:
+        if st.button("🗂️ Archive Management: Clear Test Data", use_container_width=True):
+            deleted = _clear_test_feedback_data()
+            st.success(f"Archive cleaned. Removed {deleted} test/demo feedback rows.")
+            rows = _read_beta_feedback()
+    with info_col:
+        st.caption("Use archive cleanup before final demos to keep only real beta-tester feedback.")
+
     if not rows:
         st.info("No public beta feedback has been submitted yet.")
         return
