@@ -181,29 +181,37 @@ class NotificationService:
         enable_email: bool = True,
         enable_sms: bool = True,
     ) -> Dict[str, Any]:
+        def _safe_call(fn, **kwargs) -> Dict[str, Any]:
+            try:
+                out = fn(**kwargs)
+                return out if isinstance(out, dict) else {"sent": False, "skipped": True, "reason": "provider_invalid_response"}
+            except Exception:
+                # Silent failure guard: notification provider issues must never break workflow completion.
+                return {"sent": False, "skipped": True, "reason": "provider_error_suppressed"}
+
         email_results: list[Dict[str, Any]] = []
         warnings: list[str] = []
         sms_res: Dict[str, Any] = {"sent": False, "skipped": True, "reason": "sms_disabled"}
-        resend_validation = self._validate_resend_credentials()
+        resend_validation = _safe_call(self._validate_resend_credentials)
         if not resend_validation.get("ok"):
             warnings.append(str(resend_validation.get("warning") or "").strip())
 
         if enable_email:
-            gmail_res = self._send_gmail(subject=title, body=message, to_addr=to_email)
+            gmail_res = _safe_call(self._send_gmail, subject=title, body=message, to_addr=to_email)
             email_results.append(gmail_res)
             if not gmail_res.get("sent"):
-                resend_res = self._send_resend(subject=title, body=message, to_addr=to_email)
+                resend_res = _safe_call(self._send_resend, subject=title, body=message, to_addr=to_email)
                 email_results.append(resend_res)
                 if not resend_res.get("sent"):
-                    sendgrid_res = self._send_sendgrid(subject=title, body=message, to_addr=to_email)
+                    sendgrid_res = _safe_call(self._send_sendgrid, subject=title, body=message, to_addr=to_email)
                     email_results.append(sendgrid_res)
                     if not sendgrid_res.get("sent"):
-                        email_results.append(self._send_smtp(subject=title, body=message, to_addr=to_email))
+                        email_results.append(_safe_call(self._send_smtp, subject=title, body=message, to_addr=to_email))
         else:
             email_results.append({"sent": False, "skipped": True, "reason": "email_disabled"})
 
         if enable_sms:
-            sms_res = self._send_twilio_sms(body=f"{title}: {message}", to_number=to_phone)
+            sms_res = _safe_call(self._send_twilio_sms, body=f"{title}: {message}", to_number=to_phone)
 
         topic = self._settings.NTFY_TOPIC or "careeragent_alerts_ganesh"
         url = f"{self._settings.NTFY_BASE_URL.rstrip('/')}/{topic}"
