@@ -47,3 +47,6 @@ logs/
 _rollback/
 uploads/
 .artifacts
+
+# Public beta local analytics archives
+analytics/*.db

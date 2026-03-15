@@ -351,28 +351,31 @@ def _mark_action_processed(state: dict, token: str) -> None:
 
 
 def _langsmith_status(run_id: str) -> dict:
-    tracing_flag = str(
-        os.getenv("LANGSMITH_TRACING")
-        or os.getenv("LANGCHAIN_TRACING_V2")
-        or os.getenv("LANGCHAIN_TRACING")
-        or ""
-    ).strip().lower()
+    # Respect an explicit LANGSMITH_TRACING override (especially explicit "false").
+    if os.getenv("LANGSMITH_TRACING") is not None:
+        tracing_flag = str(os.getenv("LANGSMITH_TRACING") or "").strip().lower()
+    else:
+        tracing_flag = str(
+            os.getenv("LANGCHAIN_TRACING_V2")
+            or os.getenv("LANGCHAIN_TRACING")
+            or ""
+        ).strip().lower()
     tracing_enabled = tracing_flag in {"1", "true", "yes", "on"}
-    api_key = str(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY") or "").strip()
+    api_key = str(os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY") or "").strip()
     enabled = tracing_enabled and bool(api_key)
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://smith.langchain.com").rstrip("/")
     # LangSmith ingestion should target api.smith..., but dashboard/run links are on smith....
     link_base_endpoint = endpoint.replace("https://api.smith.langchain.com", "https://smith.langchain.com")
-    project = (os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "careeragent-ai-new").strip().strip('"')
+    project = (os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "careeragent-ai-beta").strip().strip('"')
     workspace_raw = str(os.getenv("LANGSMITH_WORKSPACE_ID") or "").strip()
     workspace = workspace_raw if re.match(r"^[0-9a-fA-F-]{36}$", workspace_raw) else ""
     base = f"{link_base_endpoint}/o/{workspace}" if workspace else link_base_endpoint
     project_q = quote_plus(project)
     note = None
     if tracing_enabled and not api_key:
-        note = "Tracing is enabled but LANGSMITH_API_KEY/LANGCHAIN_API_KEY is missing."
+        note = "Tracing is enabled but LANGCHAIN_API_KEY/LANGSMITH_API_KEY is missing."
     elif api_key and not tracing_enabled:
-        note = "LangSmith API key found but tracing is off. Set LANGSMITH_TRACING=true."
+        note = "LangSmith API key found but tracing is off. Set LANGCHAIN_TRACING_V2=true."
     dashboard_url = f"{base}/projects?name={project_q}"
     run_url = f"{base}/projects/p/{project_q}/r" if workspace else None
     return {
@@ -529,14 +532,14 @@ def _build_identity_bundle(profile: dict, notif_cfg: dict) -> dict:
 
 
 def _llm_stack_snapshot() -> dict:
-    ats_model = os.getenv("CAREERAGENT_ATS_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    ats_model = os.getenv("CAREERAGENT_ATS_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-pro"
     parser_model = os.getenv("CAREERAGENT_PARSER_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash"
     reasoning_model = os.getenv("CAREERAGENT_REASONING_MODEL") or os.getenv("ANTHROPIC_MODEL") or "claude-3-5-sonnet"
     return {
         "ats_resume_writer": {
-            "provider": "openai-compatible",
+            "provider": "google",
             "model": ats_model,
-            "why": "Best quality/cost default for ATS resume + cover letter drafting.",
+            "why": "Strict professional drafting tuned for public beta resume/cover generation.",
         },
         "resume_parser": {
             "provider": "google",
@@ -2453,9 +2456,9 @@ def _llm_cognitive_projects(profile: dict, *, job: Optional[dict], desired_proje
         settings = Settings()
         if not settings.GEMINI_API_KEY:
             return existing
-        client = GeminiClient(settings, model=os.getenv("CAREERAGENT_ATS_MODEL") or "gemini-1.5-flash")
+        client = GeminiClient(settings, model=os.getenv("CAREERAGENT_ATS_MODEL") or "gemini-1.5-pro")
         prompt = (
-            "You are a resume strategist. Return JSON only: {\"projects\":[...]} with ATS-friendly project titles. "
+            "You are a strict professional resume strategist. Return JSON only: {\"projects\":[...]} with ATS-safe, executive-quality project titles. Avoid casual wording, placeholders, and URLs. "
             f"Need {desired_projects} total projects. Candidate summary: {profile.get('summary','')}. "
             f"Experience: {profile.get('experience', [])[:6]}. Existing projects: {existing}. "
             f"Target role: {((job or {}).get('title') or '')}. JD skills: {jd_terms[:14]}."
@@ -2466,6 +2469,12 @@ def _llm_cognitive_projects(profile: dict, *, job: Optional[dict], desired_proje
         return merged[: max(desired_projects, 2)]
     except Exception:
         return existing
+
+
+
+def _strip_raw_urls(text: str) -> str:
+    return re.sub(r"https?://\S+|www\.\S+", "", str(text or "")).strip()
+
 
 
 def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optional[dict] = None) -> str:
@@ -2523,11 +2532,11 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optiona
     for idx, project in enumerate(selected_projects[:8], start=1):
         project_lines.append(f"### Project {idx}: {project}")
         project_lines.extend([
-            f"- Situation: Inherited fragmented delivery across analytics, application, and platform teams with inconsistent SLAs and limited ownership visibility for {project}.",
-            "- Task: Led architecture modernization with clear technical milestones, ownership models, and measurable acceptance criteria across product, engineering, and operations stakeholders.",
-            "- Action: Designed event-driven services, codified CI/CD guardrails, and introduced automated validation gates; reduced release cycle time by 42% and cut deployment failures by 37%.",
-            "- Action: Implemented telemetry-first observability with latency/error/cost dashboards and anomaly alerting; improved incident detection speed by 58% and lowered MTTR by 46%.",
-            "- Result: Delivered sustained production performance gains (99.95% service availability, 31% infrastructure cost reduction, and ~18 hours/week engineering time reclaimed).",
+            f"- Led end-to-end modernization across analytics, application, and platform domains for {project}, clarifying ownership and technical operating rhythms.",
+            "- Defined architecture milestones, risk controls, and measurable acceptance criteria across product, engineering, and operations stakeholders.",
+            "- Designed event-driven services, codified CI/CD guardrails, and introduced automated validation gates; reduced release cycle time by 42% and cut deployment failures by 37%.",
+            "- Implemented telemetry-first observability with latency/error/cost dashboards and anomaly alerting; improved incident detection speed by 58% and lowered MTTR by 46%.",
+            "- Delivered sustained production performance gains (99.95% service availability, 31% infrastructure cost reduction, and ~18 hours/week engineering time reclaimed).",
         ])
 
     exp_lines = []
@@ -2539,11 +2548,11 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optiona
         exp_lines = ["- 16+ years delivering AI/ML platforms, cloud-native systems, and data operations at enterprise scale."]
 
     edu_lines = [f"- {e}" for e in (profile.get("education") or [])[:4]] or ["- Education details available"]
-    summary = profile.get("summary", "Principal-level technical architect with 16+ years building resilient, measurable software platforms.")
+    summary = _strip_raw_urls(profile.get("summary", "Principal-level technical architect with 16+ years building resilient, measurable software platforms."))
 
     resume_md = (
         f"# {profile.get('name','Candidate')}\n"
-        f"{profile.get('email','')} · {profile.get('phone','')}\n\n"
+        f"{_strip_raw_urls(profile.get('email',''))} · {_strip_raw_urls(profile.get('phone',''))}\n\n"
         "## Professional Summary\n"
         f"{summary}\n"
         "- Architected multi-region distributed systems, production MLOps stacks, and governed data platforms with measurable business outcomes.\n"
@@ -2561,7 +2570,7 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optiona
         + "\n"
     )
 
-    target_words = 800 if total_years < 10 else 1200
+    target_words = 800 if total_years < 10 else 1500
     if len(re.findall(r"\b\w+\b", resume_md)) < target_words:
         expansion = []
         for project in selected_projects[:5]:
@@ -2572,6 +2581,8 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str], job: Optiona
             ])
         resume_md = f"{resume_md}\n### Additional Technical Depth\n" + "\n".join(expansion) + "\n"
 
+    resume_md = _strip_raw_urls(resume_md)
+    resume_md = re.sub(r"[ \t]{2,}", " ", resume_md)
     return resume_md
 
 

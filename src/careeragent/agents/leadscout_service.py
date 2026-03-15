@@ -729,9 +729,22 @@ class LeadScoutService:
                     await page.wait_for_timeout(1500)
 
                     if source == "linkedin":
-                        # Human-like delay before touching LinkedIn-specific selectors.
+                        # Stable selector-driven LinkedIn Jobs navigation (avoids feed redirects).
+                        if "linkedin.com/feed" in page.url.lower() or "/feed/" in page.url.lower():
+                            await context.clear_cookies()
+                            jobs_url = f"https://www.linkedin.com/jobs/search/?keywords={role.replace(' ', '%20')}"
+                            await page.goto(jobs_url, wait_until="domcontentloaded", timeout=SCRAPE_TIMEOUT * 1000)
                         await page.wait_for_timeout(3000 + random.randint(80, 650))
-                        items = await page.query_selector_all("a[href*='/jobs/view/']")
+                        selectors = [
+                            "a[href*='/jobs/view/']",
+                            "a.job-card-list__title",
+                            "a.base-card__full-link",
+                        ]
+                        items = []
+                        for sel in selectors:
+                            items = await page.query_selector_all(sel)
+                            if items:
+                                break
                         for item in items[: self.max_per_source]:
                             href = await item.get_attribute("href")
                             title = (await item.inner_text() or "").strip()

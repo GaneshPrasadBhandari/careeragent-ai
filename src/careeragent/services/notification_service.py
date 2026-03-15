@@ -52,7 +52,7 @@ class NotificationService:
 
     def _send_resend(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         api_key = str(getattr(self._settings, "RESEND_API_KEY", "") or "").strip()
-        from_addr = str((getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
+        from_addr = str((getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "RESEND_FROM_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
         to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or "")).strip()
         if not (api_key and from_addr and to_addr):
             return {"sent": False, "skipped": True, "reason": "resend_not_configured", "to": to_addr}
@@ -71,9 +71,9 @@ class NotificationService:
 
     def _send_smtp(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         host = str(getattr(self._settings, "SMTP_HOST", "") or "").strip()
-        username = str(getattr(self._settings, "SMTP_USERNAME", "") or "").strip()
-        password = str(getattr(self._settings, "SMTP_PASSWORD", "") or "").strip()
-        from_addr = str((getattr(self._settings, "SMTP_FROM_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
+        username = str(getattr(self._settings, "SMTP_USERNAME", "") or getattr(self._settings, "SMTP_USER", "") or "").strip()
+        password = str(getattr(self._settings, "SMTP_PASSWORD", "") or getattr(self._settings, "SMTP_PASS", "") or "").strip()
+        from_addr = str((getattr(self._settings, "SMTP_FROM_EMAIL", "") or getattr(self._settings, "SMTP_FROM", "") or getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
         to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or "")).strip()
         port_raw = getattr(self._settings, "SMTP_PORT", 587)
         use_tls = str(getattr(self._settings, "SMTP_USE_TLS", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -91,19 +91,27 @@ class NotificationService:
             message["From"] = formataddr(("CareerAgent", from_addr))
             message["To"] = to_addr
 
-            with smtplib.SMTP(host=host, port=port, timeout=15) as server:
-                if use_tls:
-                    server.starttls()
-                if username and password:
-                    server.login(username, password)
-                server.sendmail(from_addr, [to_addr], message.as_string())
-            return {"sent": True, "channel": "smtp", "to": to_addr}
+            if port == 465 and use_tls:
+                with smtplib.SMTP_SSL(host=host, port=port, timeout=15) as server:
+                    if username and password:
+                        server.login(username, password)
+                    server.sendmail(from_addr, [to_addr], message.as_string())
+            else:
+                with smtplib.SMTP(host=host, port=port, timeout=15) as server:
+                    server.ehlo()
+                    if use_tls:
+                        server.starttls()
+                        server.ehlo()
+                    if username and password:
+                        server.login(username, password)
+                    server.sendmail(from_addr, [to_addr], message.as_string())
+            return {"sent": True, "channel": "smtp", "to": to_addr, "handshake": "ok"}
         except Exception as e:
-            return {"sent": False, "channel": "smtp", "error": str(e), "to": to_addr}
+            return {"sent": False, "channel": "smtp", "error": str(e), "to": to_addr, "handshake": "failed"}
 
     def _send_sendgrid(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         api_key = str(getattr(self._settings, "SENDGRID_API_KEY", "") or "").strip()
-        from_addr = str((getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
+        from_addr = str((getattr(self._settings, "SENDER_EMAIL", "") or getattr(self._settings, "RESEND_FROM_EMAIL", "") or getattr(self._settings, "GMAIL_FROM_EMAIL", "") or "")).strip()
         to_addr = str((to_addr or getattr(self._settings, "GMAIL_TO_EMAIL", "") or getattr(self._settings, "SENDER_EMAIL", "") or "")).strip()
         if not (api_key and from_addr and to_addr):
             return {"sent": False, "skipped": True, "reason": "sendgrid_not_configured", "to": to_addr}
