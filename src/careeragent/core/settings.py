@@ -15,12 +15,12 @@ class Settings(BaseModel):
     SERPER_API_KEY: Optional[str] = None
 
     LANGSMITH_API_KEY: Optional[str] = None
-    LANGSMITH_PROJECT: str = "careeragent-ai-phase6"
+    LANGSMITH_PROJECT: str = "careeragent-ai-beta"
     LANGSMITH_WORKSPACE_ID: Optional[str] = None
     LANGSMITH_ENDPOINT: str = "https://api.smith.langchain.com"
     LANGCHAIN_ENDPOINT: Optional[str] = None
     LANGCHAIN_API_KEY: Optional[str] = None
-    LANGCHAIN_PROJECT: str = "careeragent-ai-phase6"
+    LANGCHAIN_PROJECT: str = "careeragent-ai-beta"
     LANGCHAIN_TRACING_V2: str = "true"
     LANGSMITH_TRACING: str = "true"
     LANGGRAPH_STUDIO_URL: Optional[str] = None
@@ -105,6 +105,27 @@ class Settings(BaseModel):
                 "MAX_HTTP_SECONDS",
             ]
         }
+        # Backward-compatible aliases for deployment environments that inject
+        # provider-specific variable names.
+        alias_map = {
+            "SMTP_USERNAME": ["SMTP_USER", "SMTP_LOGIN", "MAIL_USERNAME"],
+            "SMTP_PASSWORD": ["SMTP_PASS", "MAIL_PASSWORD"],
+            "SMTP_FROM_EMAIL": ["SMTP_FROM", "MAIL_FROM", "FROM_EMAIL"],
+            "SENDER_EMAIL": ["RESEND_FROM_EMAIL", "SENDGRID_FROM_EMAIL", "FROM_EMAIL"],
+            "TWILIO_AUTH_TOKEN": ["TWILIO_TOKEN"],
+            "TWILIO_FROM_NUMBER": ["TWILIO_PHONE_NUMBER"],
+            "TWILIO_TO_NUMBER": ["SMS_TO_NUMBER"],
+            "LANGCHAIN_API_KEY": ["LANGSMITH_API_KEY"],
+        }
+        for canonical, aliases in alias_map.items():
+            if env_data.get(canonical):
+                continue
+            for alias in aliases:
+                alias_val = os.getenv(alias)
+                if alias_val is not None and str(alias_val).strip():
+                    env_data[canonical] = alias_val
+                    break
+
         env_data = {k: v for k, v in env_data.items() if v is not None}
         merged = {**env_data, **data}
         super().__init__(**merged)
@@ -118,8 +139,8 @@ def bootstrap_langsmith(s: Settings) -> None:
     else:
         os.environ.pop("LANGSMITH_API_KEY", None)
     os.environ["LANGCHAIN_API_KEY"] = langchain_key or langsmith_key
-    tracing = str(s.LANGSMITH_TRACING or s.LANGCHAIN_TRACING_V2 or "true")
-    project = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-phase6")
+    tracing = str(s.LANGCHAIN_TRACING_V2 or s.LANGSMITH_TRACING or "true")
+    project = str(s.LANGSMITH_PROJECT or s.LANGCHAIN_PROJECT or "careeragent-ai-beta")
     os.environ["LANGCHAIN_TRACING_V2"] = tracing
     os.environ["LANGSMITH_TRACING"] = tracing
     os.environ["LANGCHAIN_PROJECT"] = project

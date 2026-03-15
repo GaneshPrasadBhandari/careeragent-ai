@@ -9,7 +9,10 @@ for p in [str(_REPO_ROOT), str(_SRC)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from careeragent.core.config import configure_runtime_env  # noqa: E402
 from app.ui.mission_control import main  # noqa: E402
+
+configure_runtime_env()
 
 if __name__ == "__main__":
     main()

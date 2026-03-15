@@ -152,3 +152,9 @@ def test_supported_mirror_board_url_recognizes_supported_hosts() -> None:
 def test_blocked_portal_detector_flags_access_denied_pages() -> None:
     assert _looks_like_blocked_portal_response(403, "Access denied by security policy") is True
     assert _looks_like_blocked_portal_response(200, "Regular job page content") is False
+
+
+def test_curated_query_url_keeps_linkedin_on_jobs_search() -> None:
+    li = _curated_query_url("linkedin.com/jobs", "ai+engineer")
+    assert "/jobs/search/?keywords=" in li
+    assert "/feed" not in li

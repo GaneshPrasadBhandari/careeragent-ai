@@ -181,7 +181,8 @@ def _curated_query_url(domain_path: str, query: str) -> str:
         host = f"www.{domain}"
 
     if "linkedin" in domain:
-        return f"https://{host}/?keywords={query}"
+        # Keep users anchored to LinkedIn Jobs search to avoid homepage/feed redirects.
+        return f"https://{host}/jobs/search/?keywords={query}"
     if "indeed" in domain:
         return f"https://{host}/jobs?q={query}"
     if "glassdoor" in domain:
@@ -433,6 +434,31 @@ class LeadScoutService:
         self._ua_cursor = (self._ua_cursor + 1) % len(self._ua_pool)
         return self._ua_pool[self._ua_cursor]
 
+    async def _linkedin_fresh_context_resolve(self, url: str) -> tuple[bool, str]:
+        """LinkedIn-only recovery: clear cookies in browser context, then retry URL."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return False, url
+
+        try:
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+                context = await browser.new_context(locale="en-US")
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                final_url = str(page.url)
+                if "linkedin.com/feed" in final_url.lower() or "/feed/" in final_url.lower():
+                    await context.clear_cookies()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                    final_url = str(page.url)
+                await context.close()
+                await browser.close()
+                return _is_plausible_job_link(final_url), final_url
+        except Exception:
+            return False, url
+
+
     async def _resolve_redirect_or_block(self, url: str) -> tuple[bool, str, str]:
         """Return (ok, final_url, reason)."""
         headers = {
@@ -449,6 +475,11 @@ class LeadScoutService:
             blocked = _looks_like_blocked_portal_response(response.status_code, body)
             if blocked:
                 return False, final_url or url, f"blocked_or_error_http_{response.status_code}"
+            if "linkedin.com" in final_url.lower() and "/feed" in final_url.lower():
+                recovered_ok, recovered_url = await self._linkedin_fresh_context_resolve(url)
+                if recovered_ok and _is_plausible_job_link(recovered_url):
+                    return True, recovered_url, "ok_linkedin_cookie_reset"
+                return False, recovered_url or final_url or url, "linkedin_feed_redirect"
             return True, final_url or url, "ok"
         except Exception as exc:
             return False, url, f"resolve_error:{type(exc).__name__}"

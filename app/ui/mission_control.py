@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import time
 import uuid
 from html import escape
@@ -202,6 +203,90 @@ def _safe_url_text(url: str, limit: int = 120) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}…"
+
+
+BETA_DB_PATH = Path("analytics/feedback_archive.db")
+
+
+def _ensure_beta_feedback_db() -> Path:
+    BETA_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(BETA_DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public_beta_feedback (
+                timestamp TEXT NOT NULL,
+                user_identifier TEXT NOT NULL,
+                user_role TEXT NOT NULL,
+                feedback_text TEXT NOT NULL,
+                rating INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS linkedin_user_sessions (
+                first_seen TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                user_identifier TEXT NOT NULL,
+                source TEXT NOT NULL
+            )
+            """
+        )
+    return BETA_DB_PATH
+
+
+def _track_public_beta_session() -> dict:
+    db_path = _ensure_beta_feedback_db()
+    if not st.session_state.get("public_beta_session_id"):
+        st.session_state["public_beta_session_id"] = uuid.uuid4().hex
+    session_id = str(st.session_state["public_beta_session_id"])
+    qp = st.query_params
+    source = str(qp.get("source", "direct")).lower()
+    is_linkedin = source == "linkedin" or "linkedin" in str(qp.get("utm_source", "")).lower()
+    user_identifier = str(qp.get("user", "public-linkedin-user" if is_linkedin else "public-user"))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO linkedin_user_sessions(first_seen, session_id, user_identifier, source) VALUES (datetime('now'), ?, ?, ?)",
+            (session_id, user_identifier, "linkedin" if is_linkedin else source),
+        )
+        total = conn.execute("SELECT COUNT(DISTINCT session_id) FROM linkedin_user_sessions").fetchone()[0]
+        li_total = conn.execute("SELECT COUNT(DISTINCT session_id) FROM linkedin_user_sessions WHERE source='linkedin'").fetchone()[0]
+    return {"session_id": session_id, "user_identifier": user_identifier, "source": ("linkedin" if is_linkedin else source), "total_sessions": total, "linkedin_sessions": li_total}
+
+
+def _insert_beta_feedback(*, user_identifier: str, user_role: str, feedback_text: str, rating: int) -> None:
+    db_path = _ensure_beta_feedback_db()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO public_beta_feedback(timestamp, user_identifier, user_role, feedback_text, rating) VALUES (datetime('now'), ?, ?, ?, ?)",
+            (user_identifier.strip() or "anonymous", user_role.strip() or "public", feedback_text.strip(), int(rating)),
+        )
+
+
+def _read_beta_feedback() -> list[dict]:
+    db_path = _ensure_beta_feedback_db()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT timestamp, user_identifier, user_role, feedback_text, rating FROM public_beta_feedback ORDER BY timestamp DESC"
+        ).fetchall()
+    out = []
+    for ts, uid, role, txt, rating in rows:
+        rv = int(rating)
+        if rv >= 4:
+            sentiment = "🟢 Positive"
+        elif rv >= 3:
+            sentiment = "🟡 Neutral"
+        else:
+            sentiment = "🔴 Issues"
+        out.append({
+            "Timestamp": ts,
+            "User": uid,
+            "Role": role,
+            "Rating": rv,
+            "Visual Sentiment": sentiment,
+            "Feedback": txt,
+        })
+    return out
 
 
 
@@ -1420,6 +1505,25 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
         st.warning("**Pipeline Errors:**\n" + "\n".join(f"- {e}" for e in errors))
 
 
+def render_executive_summary() -> None:
+    st.markdown("### Executive Summary — Public Beta Feedback")
+    rows = _read_beta_feedback()
+    if not rows:
+        st.info("No public beta feedback has been submitted yet.")
+        return
+    st.caption("Sortable table for leadership demo reviews. Visual Sentiment uses rating-based color coding.")
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    total = len(rows)
+    positive = sum(1 for r in rows if str(r.get("Visual Sentiment","")).startswith("🟢"))
+    neutral = sum(1 for r in rows if str(r.get("Visual Sentiment","")).startswith("🟡"))
+    issues = sum(1 for r in rows if str(r.get("Visual Sentiment","")).startswith("🔴"))
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Feedback", total)
+    c2.metric("Positive", positive)
+    c3.metric("Neutral", neutral)
+    c4.metric("Issues", issues)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1548,6 +1652,27 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         st.divider()
 
+        st.caption("PUBLIC BETA FEEDBACK")
+        tracker = st.session_state.get("beta_tracker") or _track_public_beta_session()
+        st.session_state["beta_tracker"] = tracker
+        st.caption(f"LinkedIn testers: {tracker.get('linkedin_sessions', 0)} | Total public sessions: {tracker.get('total_sessions', 0)}")
+        with st.form("beta_feedback_sidebar", clear_on_submit=True):
+            beta_role = st.selectbox("Your role", ["LinkedIn User", "Recruiter", "Hiring Manager", "Engineer", "Other"], index=0)
+            beta_rating = st.slider("Rating", min_value=1, max_value=5, value=4)
+            beta_text = st.text_area("What should we improve?", height=90, placeholder="Share your thoughts…")
+            beta_submit = st.form_submit_button("Submit Beta Feedback")
+            if beta_submit:
+                if beta_text.strip():
+                    _insert_beta_feedback(
+                        user_identifier=str(tracker.get("user_identifier") or tracker.get("session_id") or "public-user"),
+                        user_role=beta_role,
+                        feedback_text=beta_text.strip(),
+                        rating=int(beta_rating),
+                    )
+                    st.success("Thanks — feedback saved to beta archive.")
+                else:
+                    st.warning("Please enter feedback text before submitting.")
+
         # ── Resume Upload ─────────────────────────────────────────────────────
         st.caption("RESUME")
         resume_file = st.file_uploader(
@@ -1666,7 +1791,7 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         langsmith = (status or {}).get("langsmith", {}) if status else {}
-        fallback_url = f"https://smith.langchain.com/projects?name={langsmith.get('project') or 'careeragent-ai-new'}"
+        fallback_url = f"https://smith.langchain.com/projects?name={langsmith.get('project') or 'careeragent-ai-beta'}"
         if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
             link = langsmith.get("dashboard_url") or fallback_url
             st.markdown(f"[🧭 LangSmith dashboard]({link})")
@@ -1703,12 +1828,13 @@ def main():
     render_progress_bar(status, layers_data)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = st.tabs([
+    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics, tab_exec = st.tabs([
         "📋  Pipeline Layers",
         "💼  Job Board",
         "🧩  Match Analysis",
         "🎓  Learning Center",
         "📊  Analytics",
+        "🧾  Executive Summary",
     ])
 
     with tab_pipeline:
@@ -1767,6 +1893,9 @@ def main():
 
     with tab_analytics:
         render_analytics(api_base, run_id, status)
+
+    with tab_exec:
+        render_executive_summary()
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:
