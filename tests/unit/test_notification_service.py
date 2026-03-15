@@ -53,3 +53,12 @@ def test_send_alert_attempts_smtp_as_final_email_fallback() -> None:
     assert "resend" in channels
     assert "sendgrid_not_configured" in reasons
     assert "smtp_not_configured" in reasons
+
+
+def test_send_alert_emits_warning_when_resend_credentials_invalid() -> None:
+    class _NoResendSettings(_FakeSettings):
+        RESEND_API_KEY = ""
+
+    svc = NotificationService(settings=_NoResendSettings(), dry_run=True)
+    out = svc.send_alert(message="hello", title="status", enable_sms=False, enable_email=True)
+    assert any("Provider Credentials Invalid" in w for w in out.get("warnings", []))

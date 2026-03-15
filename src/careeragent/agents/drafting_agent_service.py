@@ -246,6 +246,29 @@ def optimize_resume_keywords(*, resume_md: str, jd_text: str, profile_skills: Li
     return enriched, missing
 
 
+def _split_words(text: str) -> List[str]:
+    return [w.lower() for w in re.findall(r"[a-zA-Z][a-zA-Z0-9+/.-]{2,}", str(text or ""))]
+
+
+def _top_relevant_projects(profile: Dict[str, Any], jd_text: str, *, limit: int = 4) -> List[Dict[str, Any]]:
+    """Rank past experience entries against JD keywords for contextual synthesis."""
+    jd_terms = set(_split_words(jd_text))
+    ranked: List[Tuple[int, Dict[str, Any]]] = []
+    for e in profile.get("experience") or []:
+        haystack = " ".join(
+            [
+                str(e.get("title") or ""),
+                str(e.get("company") or ""),
+                " ".join([str(b) for b in (e.get("bullets") or [])]),
+            ]
+        )
+        tokens = _split_words(haystack)
+        overlap = len(jd_terms.intersection(tokens))
+        ranked.append((overlap, e))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in ranked[: max(1, limit)] if item[1]]
+
+
 class DraftingAgentService:
     """Description: Generate ATS-friendly resume + US-style story cover letter.
     Layer: L6
@@ -384,19 +407,29 @@ class DraftingAgentService:
             ],
         }
         years_experience = _estimate_experience_years(clean_profile.get("experience") or [])
-        requires_senior_portfolio = years_experience >= 10
+        requires_senior_portfolio = years_experience > 8
+        prioritize_projects = _top_relevant_projects(clean_profile, jd, limit=4)
+        project_focus_hint = (
+            "Include a dedicated '## Key Projects' section with 3-4 deep-dive entries near the top (after Skills)."
+            if years_experience > 8
+            else "Keep projects concise: include only 1-2 tightly relevant project highlights and emphasize skills evidence."
+            if years_experience < 3
+            else "Include 2-3 project highlights tied directly to the target JD priorities."
+        )
 
         prompt = (
             "You are an expert US resume writer specializing in ATS-optimized resumes for tech professionals.\n\n"
             "TASK: Generate a tailored ATS resume + story-based cover letter as STRICT JSON.\n\n"
-            "STRICT RULES FOR RESUME:\n"
+            "STRICT RULES FOR RESUME (COGNITIVE INTELLIGENCE):\n"
             "1. ATS-safe Markdown only: NO tables, NO columns, NO images.\n"
             "2. Section ORDER: # CandidateName → contact line → ## SUMMARY → ## SKILLS → ## EXPERIENCE → ## EDUCATION\n"
             "3. Every experience entry uses ### Role | Company | Date range format + bullet points.\n"
             "4. Skills: include ALL candidate skills + any JD skills the candidate plausibly has.\n"
             "5. Do NOT invent employers, degrees, or specific metrics. Use 'improved' without inventing numbers.\n\n"
             "9. Strict No-URL Policy: Remove all URLs from body sections. URLs are allowed only in the header contact line.\n"
-            "10. Experience-to-Project Mapping: If candidate has 10+ years experience, synthesize at least 3-4 distinct projects from profile experience bullets.\n\n"
+            "10. Experience-Aware Scaling: If total experience >8 years, MUST include '## Key Projects' with 3-4 deep-dive entries; if <3 years, include only 1-2 projects and focus on skills.\n"
+            "11. Professional Narrative Rule: STRICTLY PROHIBITED from STAR-style headers/labels like 'Situation:', 'Task:', 'Action:', 'Result:'. Use strong action verbs (Spearheaded, Optimized, Architected, Led, Built) in natural narrative bullets.\n"
+            "12. Contextual Synthesis Rule: Cross-reference Master Resume with JD and pull historically relevant projects to the top when JD priorities match (e.g., fraud detection experience from earlier roles).\n\n"
             "STRICT RULES FOR COVER LETTER:\n"
             "6. Story structure: Opening → Action paragraph → Result paragraph → Challenge/growth paragraph → Close\n"
             "7. Pick ONE strong project from experience and map to JD's biggest technical challenge.\n"
@@ -406,6 +439,8 @@ class DraftingAgentService:
             f"CANDIDATE_PROFILE:\n{json.dumps(clean_profile, indent=2)}\n\n"
             f"EXPERIENCE_YEARS_ESTIMATE: {years_experience}\n"
             f"REQUIRES_SENIOR_PORTFOLIO: {requires_senior_portfolio}\n\n"
+            f"PROJECT_FOCUS_DIRECTIVE: {project_focus_hint}\n\n"
+            f"PRIORITIZED_RELEVANT_PROJECTS: {json.dumps(prioritize_projects, indent=2)}\n\n"
             f"TARGET_ROLE: {title}\n\n"
             f"JOB_DESCRIPTION:\n{jd[:8000]}\n"
         )
@@ -477,6 +512,9 @@ def _sanitize_resume_markdown(resume_md: str, *, profile: Dict[str, Any], title:
 
     txt = "\n".join(deduped).strip()
 
+    # Ban STAR headers and similar AI-template labels.
+    txt = re.sub(r"^\s*(Situation|Task|Action|Result)\s*:\s*", "", txt, flags=re.I | re.M)
+
     # Ensure clean section headers with ATS-friendly title casing.
     txt = re.sub(r"^##\s*professional summary\s*$", "## Summary", txt, flags=re.I | re.M)
     txt = re.sub(r"^##\s*technical skills\s*$", "## Skills", txt, flags=re.I | re.M)
@@ -533,6 +571,10 @@ def _build_fallback_resume(profile: Dict[str, Any], title: str, jd: str) -> str:
     skills_block = "\n".join(f"- {s}" for s in skills[:20])
 
     exp_lines = []
+    relevant_projects = _top_relevant_projects(profile, jd, limit=4)
+    years_experience = _estimate_experience_years(profile.get("experience") or [])
+    project_target = 4 if years_experience > 8 else 2 if years_experience < 3 else 3
+
     for e in (profile.get("experience") or [])[:5]:
         head = " | ".join([x for x in [e.get("title"), e.get("company"), f"{e.get('start_date') or ''} - {e.get('end_date') or 'Present'}"] if x])
         exp_lines.append(f"### {head}" if head else "### Experience")
@@ -549,11 +591,23 @@ def _build_fallback_resume(profile: Dict[str, Any], title: str, jd: str) -> str:
     if not edu_lines:
         edu_lines = ["- Education details available upon request."]
 
+    project_lines: List[str] = []
+    for idx, p in enumerate(relevant_projects[:project_target], start=1):
+        project_header = " | ".join([x for x in [p.get("title") or f"Project {idx}", p.get("company") or ""] if x])
+        project_lines.append(f"### {project_header}".rstrip())
+        for bullet in (p.get("bullets") or ["Optimized delivery outcomes aligned to target role requirements."])[:3]:
+            project_lines.append(f"- {bullet}")
+    if not project_lines:
+        project_lines = ["### Project Spotlight", "- Architected solutions aligned to the role requirements and business goals."]
+
     return (
         f"# {name}\n"
         f"{c_line}\n\n"
         f"## Summary\n{summary}\n\n"
         f"## Skills\n{skills_block}\n\n"
+        "## Key Projects\n"
+        + "\n".join(project_lines)
+        + "\n\n"
         "## Experience\n"
         + "\n".join(exp_lines)
         + "\n\n## Education\n"

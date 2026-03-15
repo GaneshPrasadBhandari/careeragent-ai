@@ -69,6 +69,22 @@ class NotificationService:
         except Exception as e:
             return {"sent": False, "channel": "resend", "error": str(e)}
 
+    def _validate_resend_credentials(self) -> Dict[str, Any]:
+        api_key = str(getattr(self._settings, "RESEND_API_KEY", "") or "").strip()
+        if not api_key:
+            return {
+                "ok": False,
+                "warning": "⚠️ Notification Error: Provider Credentials Invalid",
+                "reason": "missing_resend_api_key",
+            }
+        if not api_key.startswith("re_"):
+            return {
+                "ok": False,
+                "warning": "⚠️ Notification Error: Provider Credentials Invalid",
+                "reason": "malformed_resend_api_key",
+            }
+        return {"ok": True, "reason": "resend_key_present"}
+
     def _send_smtp(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
         host = str(getattr(self._settings, "SMTP_HOST", "") or "").strip()
         username = str(getattr(self._settings, "SMTP_USERNAME", "") or getattr(self._settings, "SMTP_USER", "") or "").strip()
@@ -166,7 +182,11 @@ class NotificationService:
         enable_sms: bool = True,
     ) -> Dict[str, Any]:
         email_results: list[Dict[str, Any]] = []
+        warnings: list[str] = []
         sms_res: Dict[str, Any] = {"sent": False, "skipped": True, "reason": "sms_disabled"}
+        resend_validation = self._validate_resend_credentials()
+        if not resend_validation.get("ok"):
+            warnings.append(str(resend_validation.get("warning") or "").strip())
 
         if enable_email:
             gmail_res = self._send_gmail(subject=title, body=message, to_addr=to_email)
@@ -191,11 +211,21 @@ class NotificationService:
         payload = message.encode("utf-8")
 
         if self._dry_run:
-            return {"sent": False, "dry_run": True, "url": url, "message": message, "email": email_results, "gmail": (email_results[0] if email_results else {}), "sms": sms_res}
+            return {
+                "sent": False,
+                "dry_run": True,
+                "url": url,
+                "message": message,
+                "email": email_results,
+                "gmail": (email_results[0] if email_results else {}),
+                "sms": sms_res,
+                "warnings": [w for w in warnings if w],
+                "resend_validation": resend_validation,
+            }
 
         try:
             r = httpx.post(url, data=payload, headers=headers, timeout=15.0)
-            return {
+            out = {
                 "sent": r.status_code < 300,
                 "status_code": r.status_code,
                 "url": url,
@@ -203,5 +233,21 @@ class NotificationService:
                 "gmail": (email_results[0] if email_results else {}),
                 "sms": sms_res,
             }
+            resend_attempt = next((x for x in email_results if x.get("channel") == "resend"), {})
+            if resend_attempt and not resend_attempt.get("sent"):
+                warnings.append("⚠️ Notification Error: Provider Credentials Invalid")
+            if warnings:
+                out["warnings"] = [w for w in warnings if w]
+            out["resend_validation"] = resend_validation
+            return out
         except Exception as e:
-            return {"sent": False, "error": str(e), "url": url, "email": email_results, "gmail": (email_results[0] if email_results else {}), "sms": sms_res}
+            return {
+                "sent": False,
+                "error": str(e),
+                "url": url,
+                "email": email_results,
+                "gmail": (email_results[0] if email_results else {}),
+                "sms": sms_res,
+                "warnings": [w for w in warnings if w],
+                "resend_validation": resend_validation,
+            }
