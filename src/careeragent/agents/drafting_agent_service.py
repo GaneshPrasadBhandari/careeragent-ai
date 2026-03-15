@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,6 +22,9 @@ from careeragent.core.state import AgentState, ArtifactRef
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills, normalize_skill
 from careeragent.tools.llm_tools import GeminiClient
 from careeragent.tools.web_tools import stable_key
+
+
+PROJECT_EXTRACTION_TIMEOUT_SECONDS = 30
 
 
 # ─────────────────────────────────────────────
@@ -408,7 +412,19 @@ class DraftingAgentService:
         }
         years_experience = _estimate_experience_years(clean_profile.get("experience") or [])
         requires_senior_portfolio = years_experience > 8
-        prioritize_projects = _top_relevant_projects(clean_profile, jd, limit=4)
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                prioritize_projects = pool.submit(
+                    _top_relevant_projects,
+                    clean_profile,
+                    jd,
+                    limit=4,
+                ).result(timeout=PROJECT_EXTRACTION_TIMEOUT_SECONDS)
+        except FuturesTimeoutError:
+            return fallback_resume, fallback_cover
+        except Exception:
+            # Stability > intelligence: recover with standard draft immediately.
+            return fallback_resume, fallback_cover
         project_focus_hint = (
             "Include a dedicated '## Key Projects' section with 3-4 deep-dive entries near the top (after Skills)."
             if years_experience > 8

@@ -213,7 +213,10 @@ def _is_plausible_job_link(url: str) -> bool:
     parsed = urlparse(low)
     host, path, query = parsed.netloc, parsed.path, parsed.query
     if "linkedin.com" in host:
-        return "/jobs/view" in path
+        # Relaxed filter: keep ambiguous LinkedIn URLs (let downstream parser decide).
+        if "/in/" in path and "/jobs" not in path:
+            return False
+        return True
     if "indeed.com" in host:
         return "/viewjob" in path
     if "glassdoor.com" in host:
@@ -479,7 +482,8 @@ class LeadScoutService:
                 recovered_ok, recovered_url = await self._linkedin_fresh_context_resolve(url)
                 if recovered_ok and _is_plausible_job_link(recovered_url):
                     return True, recovered_url, "ok_linkedin_cookie_reset"
-                return False, recovered_url or final_url or url, "linkedin_feed_redirect"
+                # Keep uncertain LinkedIn redirect results so L2 parser can classify later.
+                return True, recovered_url or final_url or url, "linkedin_feed_redirect_kept_for_l2"
             return True, final_url or url, "ok"
         except Exception as exc:
             return False, url, f"resolve_error:{type(exc).__name__}"

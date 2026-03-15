@@ -535,6 +535,22 @@ def _inject_css() -> None:
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
+
+    /* Universal live-feed visibility override (L0 critical fix). */
+    div[data-testid="stMarkdownContainer"] pre,
+    div[data-testid="stMarkdownContainer"] code,
+    .stCodeBlock,
+    code span,
+    pre span {
+        color: #39FF14 !important;
+        background-color: #000000 !important;
+        -webkit-text-fill-color: #39FF14 !important;
+    }
+    .live-feed-log {
+        color: #39FF14 !important;
+        background-color: #000000 !important;
+        font-weight: bold !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
