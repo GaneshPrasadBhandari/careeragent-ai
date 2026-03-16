@@ -501,8 +501,30 @@ def _detect_submission_success_signal(job_url: str, job: dict) -> dict:
     """
     low_url = str(job_url or "").lower()
     corpus = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "title", "company")).lower()
-    success_text = any(x in corpus for x in ("thank you for applying", "application submitted", "thanks for applying"))
-    success_redirect = any(x in low_url for x in ("/application/complete", "/apply/complete", "thank-you", "submission-confirmed"))
+    success_text = any(
+        x in corpus
+        for x in (
+            "thank you for applying",
+            "thanks for applying",
+            "application submitted",
+            "application received",
+            "we received your application",
+            "your application has been submitted",
+            "submission successful",
+            "successfully submitted",
+        )
+    )
+    success_redirect = any(
+        x in low_url
+        for x in (
+            "/application/complete",
+            "/apply/complete",
+            "thank-you",
+            "submission-confirmed",
+            "application-submitted",
+            "apply/success",
+        )
+    )
     return {
         "success_state": bool(success_text or success_redirect),
         "success_text_detected": bool(success_text),
@@ -1117,11 +1139,11 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
                 "signals": [],
             }
             if direct_url and candidate_email and success_signal.get("success_state"):
-                application_status = "submitted_confirmed"
-                next_action = "submission_confirmed_screenshot_captured"
+                application_status = "✅ Applied & Verified"
+                next_action = "none"
                 verification_status = "confirmed_success_state"
             elif direct_url and candidate_email:
-                application_status = "submitted_pending_verification"
+                application_status = "Pending"
                 next_action = "confirm_submission_in_ats_portal"
                 verification_status = "pending_employer_confirmation"
             elif direct_url:
