@@ -30,6 +30,7 @@ LLM_QUERY_TIMEOUT_SECONDS = 8.0
 SEARCH_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SEARCH_TIMEOUT_SECONDS", "120.0"))
 RANKING_TIMEOUT_SECONDS = 300.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
+JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -355,14 +356,14 @@ class LeadScoutService:
         for i, q in enumerate(queries):
             log.info("  Query[%d]: %s", i, q)
 
-        # Run all queries concurrently
-        tasks: list[asyncio.Task[list[JobLead]]] = []
+        # Run source tasks (single-worker by default for Render free-tier stability).
+        source_coros = []
         for query in queries:
-            tasks.append(asyncio.create_task(self._search_serper_organic(query, location, remote, serper_key=serper_key)))
-            tasks.append(asyncio.create_task(self._search_tavily(query, location, remote, tavily_key=tavily_key)))
-            tasks.append(asyncio.create_task(self._search_remotive(query, location, remote)))
+            source_coros.append(self._search_serper_organic(query, location, remote, serper_key=serper_key))
+            source_coros.append(self._search_tavily(query, location, remote, tavily_key=tavily_key))
+            source_coros.append(self._search_remotive(query, location, remote))
 
-        results = await self._gather_non_blocking(tasks, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS)
+        results = await self._run_source_tasks(source_coros, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS)
 
         leads: list[JobLead] = []
         for batch in results:
@@ -404,12 +405,12 @@ class LeadScoutService:
                 limit=12,
             )
             if tier2_queries:
-                tier2_tasks: list[asyncio.Task[list[JobLead]]] = []
+                tier2_coros = []
                 for query in tier2_queries:
-                    tier2_tasks.append(asyncio.create_task(self._search_serper_organic(query, location, remote, serper_key=serper_key)))
-                    tier2_tasks.append(asyncio.create_task(self._search_tavily(query, location, remote, tavily_key=tavily_key)))
-                    tier2_tasks.append(asyncio.create_task(self._search_remotive(query, location, remote)))
-                for batch in await self._gather_non_blocking(tier2_tasks, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS):
+                    tier2_coros.append(self._search_serper_organic(query, location, remote, serper_key=serper_key))
+                    tier2_coros.append(self._search_tavily(query, location, remote, tavily_key=tavily_key))
+                    tier2_coros.append(self._search_remotive(query, location, remote))
+                for batch in await self._run_source_tasks(tier2_coros, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS):
                     for lead in batch:
                         diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
                     leads.extend(batch)
@@ -455,6 +456,22 @@ class LeadScoutService:
 
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+
+    async def _run_source_tasks(self, coros: list[asyncio.Future], *, timeout_seconds: float) -> list[list[JobLead]]:
+        if JOB_SCRAPER_MAX_WORKERS <= 1:
+            results: list[list[JobLead]] = []
+            for coro in coros:
+                try:
+                    batch = await asyncio.wait_for(coro, timeout=timeout_seconds)
+                except Exception as exc:
+                    log.warning("LeadScout source error: %s", exc)
+                    continue
+                if isinstance(batch, list):
+                    results.append(batch)
+            return results
+
+        tasks = [asyncio.create_task(c) for c in coros]
+        return await self._gather_non_blocking(tasks, timeout_seconds=timeout_seconds)
 
     async def _gather_non_blocking(self, tasks: list[asyncio.Task[list[JobLead]]], *, timeout_seconds: float) -> list[list[JobLead]]:
         """Collect completed tasks without blocking on the slowest source."""
@@ -878,6 +895,7 @@ class LeadScoutService:
     def _build_queries(self, intent_plan: dict) -> list[str]:
         roles    = intent_plan.get("target_roles", [])
         keywords = intent_plan.get("keywords", [])
+        extracted_skills = intent_plan.get("extracted_skills", [])
         profile  = intent_plan.get("extracted_profile", {})
 
         # Gather all skills
@@ -885,7 +903,7 @@ class LeadScoutService:
         if isinstance(profile.get("skills"), list):
             profile_skills = [str(s) for s in profile["skills"]]
 
-        all_keywords = list(dict.fromkeys(keywords + profile_skills))
+        all_keywords = list(dict.fromkeys([*keywords, *extracted_skills, *profile_skills]))
         core_skills = [str(k).strip() for k in all_keywords if str(k).strip()][:21]
 
         # Domain bucketing

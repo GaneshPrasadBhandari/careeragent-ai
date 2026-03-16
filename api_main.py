@@ -58,12 +58,23 @@ _backend_bootstrap_thread = threading.Thread(target=_init_backend_background, da
 _backend_bootstrap_thread.start()
 
 
+def _ensure_lazy_warmup() -> None:
+    global _backend_bootstrap_thread
+    if _backend_ready or _backend_error is not None:
+        return
+    if _backend_bootstrap_thread.is_alive():
+        return
+    _backend_bootstrap_thread = threading.Thread(target=_init_backend_background, daemon=True)
+    _backend_bootstrap_thread.start()
+
+
 async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI entrypoint
     if scope.get("type") != "http":
         return
 
     path = str(scope.get("path") or "/")
     if _is_health_path(path):
+        _ensure_lazy_warmup()
         headers, body = _json_response(200, {"status": "online"})
         await send({"type": "http.response.start", "status": 200, "headers": headers})
         await send({"type": "http.response.body", "body": body})

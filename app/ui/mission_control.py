@@ -701,13 +701,20 @@ DEFAULT_OUTPUTS = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _api_get(api_base: str, path: str, timeout: int = 5) -> Optional[dict]:
+    last_error = ""
     for candidate in _candidate_api_bases(api_base):
         try:
             r = requests.get(f"{candidate.rstrip('/')}{path}", timeout=timeout)
             if r.status_code == 200:
+                st.session_state["last_backend_error"] = ""
                 return r.json()
-        except Exception:
+            body = (r.text or "")[:500]
+            last_error = f"HTTP {r.status_code} from {candidate}{path}: {body}"
+        except Exception as exc:
+            last_error = f"Request failed for {candidate}{path}: {exc}"
             continue
+    if last_error:
+        st.session_state["last_backend_error"] = last_error
     return None
 
 
@@ -883,6 +890,7 @@ def _init_session():
         "refresh_sec":    5,
         "api_base":       _default_api_base(),
         "last_poll":      0.0,
+        "last_backend_error": "",
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
     }
@@ -1970,7 +1978,8 @@ def main():
                 st.session_state["hunt_running"] = False
 
     if run_id and not status:
-        st.warning("Run started, but live status is not available yet. This usually means backend polling failed temporarily — please verify API URL/health and keep Live Update enabled.")
+        backend_err = st.session_state.get("last_backend_error") or "Run started, but live status is not available yet."
+        st.error(backend_err)
 
     # ── Extract layer data ────────────────────────────────────────────────────
     layers_data = []
