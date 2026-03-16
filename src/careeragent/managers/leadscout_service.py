@@ -202,7 +202,7 @@ def _is_valid_job_url(url: str) -> bool:
     low = str(url or "").lower()
     if not low:
         return False
-    blacklist = ("/jobs?", "/job/index.htm?sc.keyword", "search?q=", "results?")
+    blacklist = ("/jobs?", "/job/index.htm?sc.keyword", "search?", "search?q=", "results?")
     if any(token in low for token in blacklist):
         return False
     if any(token in low for token in ["/search", "/jobs/demo", "?q="]):
