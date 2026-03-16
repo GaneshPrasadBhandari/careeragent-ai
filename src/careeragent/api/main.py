@@ -14,6 +14,7 @@ Fixes:
 from __future__ import annotations
 
 import asyncio
+import gc
 import contextlib
 from collections import Counter
 import json
@@ -294,6 +295,7 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "langgraph":        _langgraph_status(run_id),
         "llm_stack":        _llm_stack_snapshot(),
         "discovery_diagnostics": {},
+        "last_heartbeat_at": None,
     }
 
 
@@ -651,13 +653,13 @@ def _now() -> str:
 
 
 def _calc_progress(state: dict) -> float:
-    """Weighted progress based on layer weights."""
-    total = sum(ld["weight"] for ld in LAYER_DEFS)
-    done  = sum(
-        ld["weight"] for ld in LAYER_DEFS
+    """Progress in deterministic 10% layer increments (L0..L9)."""
+    done_layers = sum(
+        1
+        for ld in LAYER_DEFS
         if state["layers"][ld["id"]]["status"] in ("ok", "error", "skipped")
     )
-    return round(done / total * 100, 1)
+    return float(min(100, done_layers * 10))
 
 
 def _default_step_meta(
@@ -688,6 +690,19 @@ def _log_agent(state: dict, layer_id: int, msg: str, *, meta: dict | None = None
     entry = f"[{agent}] {msg}"
     state["agent_log"].append({"ts": _now(), "msg": entry, "layer": layer_id, "meta": meta or _default_step_meta()})
     log.info("AgentFeed L%d: %s", layer_id, msg)
+
+
+def _heartbeat(state: dict, layer_id: int, *, detail: str = "") -> None:
+    msg = f"Heartbeat: L{layer_id} still running"
+    if detail:
+        msg += f" ({detail})"
+    state["last_heartbeat_at"] = _now()
+    _log_agent(
+        state,
+        layer_id,
+        msg,
+        meta=_default_step_meta(tools_used=["heartbeat"], attempt_count=1),
+    )
 
 
 def _derive_reasoning(job: dict, profile: dict) -> tuple[list[str], list[str]]:
@@ -1421,17 +1436,34 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
     Updates _runs[run_id] at every step so /status polls see real progress.
     """
     state = _runs[run_id]
+    heartbeat_tasks: dict[int, asyncio.Task[Any]] = {}
+
+    def _cancel_heartbeat(layer_id: int) -> None:
+        task = heartbeat_tasks.pop(layer_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    async def _heartbeat_loop(layer_id: int) -> None:
+        while True:
+            await asyncio.sleep(30)
+            if state["layers"][layer_id].get("status") != "running":
+                return
+            _heartbeat(state, layer_id, detail="long-running step")
+            _persist_state(run_id)
 
     async def mark_running(layer_id: int, msg: str = "", **meta) -> None:
+        _cancel_heartbeat(layer_id)
         state["layers"][layer_id]["status"]     = "running"
         state["layers"][layer_id]["started_at"] = _now()
         state["layers"][layer_id]["meta"].update(_default_step_meta(**meta))
         state["progress_pct"]                   = _calc_progress(state)
         if msg:
             _log_agent(state, layer_id, msg, meta=state["layers"][layer_id]["meta"])
+        heartbeat_tasks[layer_id] = asyncio.create_task(_heartbeat_loop(layer_id))
         _persist_state(run_id)
 
     async def mark_ok(layer_id: int, msg: str = "", **meta) -> None:
+        _cancel_heartbeat(layer_id)
         state["layers"][layer_id]["status"]      = "ok"
         state["layers"][layer_id]["finished_at"] = _now()
         base_meta = state["layers"][layer_id].get("meta", {})
@@ -1451,6 +1483,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         _persist_state(run_id)
 
     async def mark_error(layer_id: int, err: str, **meta) -> None:
+        _cancel_heartbeat(layer_id)
         state["layers"][layer_id]["status"]      = "error"
         state["layers"][layer_id]["finished_at"] = _now()
         state["layers"][layer_id]["error"]       = err
@@ -1536,6 +1569,13 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         try:
             if scout:
                 intent = _build_intent(state["profile"], state["config"])
+                state.setdefault("layer_debug", {}).setdefault("L3", {})["intent_bridge"] = {
+                    "target_roles": intent.get("target_roles", []),
+                    "extracted_skills": intent.get("extracted_skills", []),
+                    "keywords": intent.get("keywords", []),
+                }
+                if not intent.get("extracted_skills"):
+                    _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
                 leads  = await asyncio.wait_for(
                     scout.search_jobs(intent), timeout=DISCOVERY_TIMEOUT_SECONDS
                 )
@@ -1686,6 +1726,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         log.error("Pipeline run %s FATAL ERROR:\n%s", run_id, tb)
         state["status"] = "error"
         state["errors"].append(str(exc))
+        _persist_state(run_id)
+    finally:
+        for layer_id in list(heartbeat_tasks.keys()):
+            _cancel_heartbeat(layer_id)
+        gc.collect()
         _persist_state(run_id)
 
 
@@ -2346,10 +2391,12 @@ def _extract_profile_from_text(text: str) -> dict:
 
 @traceable(name="api.build_intent")
 def _build_intent(profile: dict, config: dict) -> dict:
-    roles = config.get("target_roles") or ["AI Engineer", "Machine Learning Engineer"]
+    profile = profile if isinstance(profile, dict) else {}
+    config = config if isinstance(config, dict) else {}
+    roles = [str(r).strip() for r in (config.get("target_roles") or []) if str(r).strip()] or ["AI Engineer", "Machine Learning Engineer"]
 
     # Pass ALL skills, not just 8 — LeadScout needs these for multi-query bucketing
-    all_skills = profile.get("skills", [])
+    all_skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
 
     # Also derive extra keywords from raw_text if available
     extra_kw: list[str] = []
@@ -2364,6 +2411,7 @@ def _build_intent(profile: dict, config: dict) -> dict:
 
     return {
         "target_roles":      roles,
+        "extracted_skills":  all_skills,
         "keywords":          list(dict.fromkeys(all_skills + extra_kw)),  # ALL skills
         "extracted_profile": profile,   # full profile for LeadScout query bucketing
         "geo_preferences":   config.get("geo_preferences", {"remote": True, "locations": ["United States"]}),
@@ -3004,6 +3052,7 @@ async def get_status(run_id: str):
         "resume_scores":    state.get("resume_scores", {}),
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
+        "last_heartbeat_at": state.get("last_heartbeat_at"),
         "created_at":       state["created_at"],
         "completed_at":     state["completed_at"],
     }
