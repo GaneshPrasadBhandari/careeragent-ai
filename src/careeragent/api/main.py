@@ -14,6 +14,7 @@ Fixes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import Counter
 import json
 import logging
@@ -169,6 +170,30 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
 )
 log = logging.getLogger("api")
+
+L4_L5_TRANSITION_TIMEOUT_SECONDS = float(os.getenv("L4_L5_TRANSITION_TIMEOUT_SECONDS", "300"))
+KEEPALIVE_INTERVAL_SECONDS = float(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))
+
+
+def _public_base_url() -> str:
+    explicit = str(os.getenv("BACKEND_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    return "http://127.0.0.1:8000"
+
+
+async def _keepalive_ping_loop() -> None:
+    base = _public_base_url()
+    health_url = f"{base}/health"
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.get(health_url)
+            log.info("KeepAlive ping %s -> %s", health_url, resp.status_code)
+        except Exception as exc:
+            log.warning("KeepAlive ping failed for %s: %s", health_url, exc)
+        await asyncio.sleep(max(60.0, KEEPALIVE_INTERVAL_SECONDS))
+
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR      = Path(__file__).resolve().parent.parent.parent.parent  # project root
@@ -1497,7 +1522,12 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             else:
                 state.setdefault("discovery_diagnostics", {})["used_demo_fallback"] = False
 
-            state["job_leads"]       = leads[: int(state["config"].get("max_jobs", 100))]
+            min_raw_jobs = max(80, int(state["config"].get("max_jobs", 100) or 100))
+            if len(leads) < min_raw_jobs:
+                _log_agent(state, 3, f"Discovery below target ({len(leads)}<{min_raw_jobs}); appending resilient fallback leads.")
+                leads = (leads or []) + _stub_leads(state["profile"], max_jobs=min_raw_jobs)
+                leads = _dedupe_jobs(leads)[:min_raw_jobs]
+            state["job_leads"]       = leads[:min_raw_jobs]
             state["jobs_discovered"] = len(state["job_leads"])
             state["layer_debug"]["L3"] = {
                 "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
@@ -1580,47 +1610,18 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         # ── L5: Evaluator + Ranking + HITL ───────────────────────────────────
         await mark_running(5, "Ranking jobs by interview probability…", tools_used=["ranking_evaluator"], attempt_count=1)
         await asyncio.sleep(0.4)
-        qualified  = _select_qualified_jobs(scored, float(threshold))
-        state["jobs_approved"] = len(qualified)
-        qualified = sorted(
-            qualified,
-            key=lambda j: float(j.get("interview_probability_percent") or 0.0),
-            reverse=True,
-        )
-        gap = _gap_analysis(state.get("profile") or {}, scored, threshold=float(threshold))
-        source_domains = {
-            (urlparse(str(j.get("url") or "")).netloc or "unknown").replace("www.", "")
-            for j in qualified
-        }
-        state["layer_debug"]["L5"] = {
-            "qualified_jobs": qualified,
-            "threshold": threshold,
-            "gap_analysis": gap,
-            "source_diversity": {
-                "unique_domains": sorted(source_domains),
-                "count": len(source_domains),
-            },
-        }
-        _record_eval(
-            state,
-            layer_id=5,
-            target_id="ranking_gate",
-            score=(len(qualified) / max(1, len(scored))) if scored else 0.0,
-            threshold=0.3,
-            feedback=[
-                f"qualified={len(qualified)}",
-                f"scored={len(scored)}",
-                f"unique_domains={len(source_domains)}",
-            ],
-        )
-        await mark_ok(
-            5,
-            f"{len(qualified)} jobs qualified and approved ✓",
-            qualified=len(qualified),
-        )
-        state["layers"][5]["output"] = f"{len(qualified)} jobs ranked"
+        try:
+            await asyncio.wait_for(
+                _run_l4_l5_transition(state, threshold=float(threshold)),
+                timeout=L4_L5_TRANSITION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            _log_agent(state, 5, f"L4→L5 transition timed out after {int(L4_L5_TRANSITION_TIMEOUT_SECONDS)}s.")
+            await mark_error(5, f"L4→L5 transition timeout after {int(L4_L5_TRANSITION_TIMEOUT_SECONDS)}s")
+            _persist_state(run_id)
+            return
 
-        state["approved_jobs"] = qualified
+        qualified = state.get("approved_jobs") or []
 
         if (state.get("layer_debug", {}).get("L5", {}).get("gap_analysis", {}) or {}).get("triggered"):
             state["status"] = "pending_human_input"
@@ -1650,6 +1651,60 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         state["status"] = "error"
         state["errors"].append(str(exc))
         _persist_state(run_id)
+
+
+async def _run_l4_l5_transition(state: dict, *, threshold: float) -> None:
+    """Run L4->L5 hand-off with explicit payload retention/logging."""
+    scored = state.get("scored_jobs") or []
+    state.setdefault("layer_debug", {}).setdefault("L4", {})["handoff_to_l5"] = {
+        "scored_jobs_count": len(scored),
+        "ts": _now(),
+    }
+    _log_agent(state, 4, f"Hand-off L4→L5 with {len(scored)} scored jobs.")
+
+    qualified = _select_qualified_jobs(scored, float(threshold))
+    state["jobs_approved"] = len(qualified)
+    qualified = sorted(
+        qualified,
+        key=lambda j: float(j.get("interview_probability_percent") or 0.0),
+        reverse=True,
+    )
+    gap = _gap_analysis(state.get("profile") or {}, scored, threshold=float(threshold))
+    source_domains = {
+        (urlparse(str(j.get("url") or "")).netloc or "unknown").replace("www.", "")
+        for j in qualified
+    }
+    state["layer_debug"]["L5"] = {
+        "qualified_jobs": qualified,
+        "threshold": threshold,
+        "gap_analysis": gap,
+        "handoff_received": {"from": "L4", "scored_jobs_count": len(scored), "ts": _now()},
+        "source_diversity": {
+            "unique_domains": sorted(source_domains),
+            "count": len(source_domains),
+        },
+    }
+    _record_eval(
+        state,
+        layer_id=5,
+        target_id="ranking_gate",
+        score=(len(qualified) / max(1, len(scored))) if scored else 0.0,
+        threshold=0.3,
+        feedback=[
+            f"qualified={len(qualified)}",
+            f"scored={len(scored)}",
+            f"unique_domains={len(source_domains)}",
+        ],
+    )
+    _layer_ok(
+        state,
+        5,
+        f"{len(qualified)} jobs qualified and approved ✓",
+        qualified=len(qualified),
+    )
+    state["layers"][5]["output"] = f"{len(qualified)} jobs ranked"
+    state["approved_jobs"] = qualified
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2696,7 +2751,13 @@ async def lifespan(app: FastAPI):
     log.info("CareerAgent API starting up…")
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    yield
+    keepalive_task = asyncio.create_task(_keepalive_ping_loop())
+    try:
+        yield
+    finally:
+        keepalive_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await keepalive_task
     log.info("CareerAgent API shutting down…")
 
 
