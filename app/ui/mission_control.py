@@ -760,9 +760,21 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 )
                 if r.status_code == 200:
                     return r.json().get("run_id")
-                last_err = f"Backend error {r.status_code}: {r.text[:200]}"
+                payload = {}
+                try:
+                    payload = r.json() if r.text else {}
+                except Exception:
+                    payload = {}
+                status_value = str(payload.get("status") or "").strip().lower()
+                is_initializing = status_value == "initializing"
+                retry_after = int(payload.get("retry_after") or 5) if is_initializing else 5
+                if is_initializing:
+                    st.info("⏳ AI Engine Warming Up...")
+                    last_err = "Backend initializing"
+                else:
+                    last_err = f"Backend error {r.status_code}: {r.text[:200]}"
                 body_text = (r.text or "").lower()
-                should_warm_retry = r.status_code == 503 or "backend_unavailable" in body_text
+                should_warm_retry = is_initializing or r.status_code == 503 or "backend_unavailable" in body_text
                 if should_warm_retry and attempt < 10:
                     st.toast("Waking up AI Engine...")
                     # Opportunistic warm-up probe before retrying.
@@ -770,7 +782,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                         requests.get(f"{resolved_base.rstrip('/')}/health", timeout=5)
                     except Exception:
                         pass
-                    time.sleep(5)
+                    time.sleep(max(1, retry_after))
                     continue
                 if r.status_code in {502, 504} and attempt < 10:
                     time.sleep(min(2.5 * attempt, 10.0))

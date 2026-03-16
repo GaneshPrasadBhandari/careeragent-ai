@@ -2201,6 +2201,34 @@ def _parse_resume_sync(resume_path: Path) -> dict:
     text = ""
     suffix = resume_path.suffix.lower()
 
+    # Lazy-import parser only when L1/L2 execution actually needs it.
+    # This avoids parser dependency load during API cold-start.
+    try:
+        from careeragent.agents.parser_agent_service import ParserAgentService as ResumeParser
+    except Exception:
+        ResumeParser = None
+
+    if ResumeParser is not None:
+        try:
+            parser = ResumeParser()
+            extracted, _mode = parser.parse_from_upload(
+                filename=resume_path.name,
+                file_bytes=resume_path.read_bytes(),
+            )
+            profile = {
+                "name": extracted.name,
+                "email": extracted.email,
+                "phone": extracted.phone,
+                "skills": list(extracted.skills or []),
+                "experience": list(extracted.experience or []),
+                "education": list(extracted.education or []),
+                "summary": extracted.summary or "",
+            }
+            if profile.get("skills") or profile.get("experience"):
+                return profile
+        except Exception:
+            pass
+
     if suffix == ".pdf":
         try:
             import pdfplumber
@@ -2928,7 +2956,7 @@ async def start_hunt(
         except RuntimeError:
             background_tasks.add_task(run_pipeline, run_id, save_path)
             log.info("Run %s scheduled via FastAPI BackgroundTasks fallback", run_id)
-        return {"run_id": run_id, "status": "started", "message": "Pipeline launched"}
+        return {"run_id": run_id, "task_id": run_id, "status": "started", "message": "Pipeline launched"}
     except HTTPException:
         raise
     except Exception as exc:

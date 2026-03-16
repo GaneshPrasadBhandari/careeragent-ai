@@ -1,16 +1,17 @@
 """Lightweight compatibility entrypoint for ``uvicorn api_main:app``.
 
-Provides immediate health responses while lazily loading the full backend app.
+Provides immediate health responses while a global background initializer loads
+``careeragent.api.main``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import gc
 import importlib
 import json
 import logging
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,7 @@ for p in (str(_REPO_ROOT), str(_SRC)):
 
 _backend_app: Any | None = None
 _backend_error: Exception | None = None
-_backend_lock = asyncio.Lock()
-_INIT_TIMEOUT_SECONDS = 180
+_backend_ready = False
 logger = logging.getLogger(__name__)
 
 
@@ -42,31 +42,20 @@ def _json_response(status_code: int, payload: dict[str, Any]) -> tuple[list[list
     return headers, body
 
 
-async def _load_backend() -> Any:
-    global _backend_app, _backend_error
+def _init_backend_background() -> None:
+    """Initialize the heavy backend app in a dedicated global background task."""
+    global _backend_app, _backend_error, _backend_ready
+    try:
+        gc.collect()
+        _backend_app = importlib.import_module("careeragent.api.main").app
+        _backend_ready = True
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to initialize careeragent.api.main: %s", exc)
+        _backend_error = exc
 
-    if _backend_app is not None:
-        return _backend_app
-    if _backend_error is not None:
-        raise _backend_error
 
-    async with _backend_lock:
-        if _backend_app is not None:
-            return _backend_app
-        if _backend_error is not None:
-            raise _backend_error
-
-        try:
-            gc.collect()
-            _backend_app = await asyncio.wait_for(
-                asyncio.to_thread(lambda: importlib.import_module("careeragent.api.main").app),
-                timeout=_INIT_TIMEOUT_SECONDS,
-            )
-            return _backend_app
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to initialize careeragent.api.main: %s", exc)
-            _backend_error = exc
-            raise
+_backend_bootstrap_thread = threading.Thread(target=_init_backend_background, daemon=True)
+_backend_bootstrap_thread.start()
 
 
 async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI entrypoint
@@ -80,9 +69,14 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI e
         await send({"type": "http.response.body", "body": body})
         return
 
-    try:
-        backend_app = await _load_backend()
-    except Exception as exc:  # noqa: BLE001
+    if not _backend_ready or _backend_app is None:
+        if _backend_error is None:
+            headers, body = _json_response(503, {"status": "initializing", "retry_after": 5})
+            await send({"type": "http.response.start", "status": 503, "headers": headers})
+            await send({"type": "http.response.body", "body": body})
+            return
+    if _backend_error is not None:
+        exc = _backend_error
         error_name = type(exc).__name__
         headers, body = _json_response(
             503,
@@ -97,9 +91,9 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI e
         await send({"type": "http.response.body", "body": body})
         return
 
-    await backend_app(scope, receive, send)
+    await _backend_app(scope, receive, send)
 
 
 if __name__ == "__main__":
     uvicorn = importlib.import_module("uvicorn")
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    uvicorn.run(app, host="0.0.0.0", port=10000, workers=1)
