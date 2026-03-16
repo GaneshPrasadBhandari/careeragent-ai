@@ -172,7 +172,10 @@ logging.basicConfig(
 log = logging.getLogger("api")
 
 L4_L5_TRANSITION_TIMEOUT_SECONDS = float(os.getenv("L4_L5_TRANSITION_TIMEOUT_SECONDS", "300"))
+DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_TIMEOUT_SECONDS", "300"))
 KEEPALIVE_INTERVAL_SECONDS = float(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))
+HEALTH_PAYLOAD = {"status": "ok", "service": "careeragent-api"}
+HEALTH_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
 
 
 def _public_base_url() -> str:
@@ -1501,7 +1504,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             if scout:
                 intent = _build_intent(state["profile"], state["config"])
                 leads  = await asyncio.wait_for(
-                    scout.search_jobs(intent), timeout=90
+                    scout.search_jobs(intent), timeout=DISCOVERY_TIMEOUT_SECONDS
                 )
                 state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
             else:
@@ -1551,7 +1554,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
-            await mark_error(3, "Discovery timeout after 90s")
+            await mark_error(3, f"Discovery timeout after {int(DISCOVERY_TIMEOUT_SECONDS)}s")
             state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
             state["jobs_discovered"] = len(state["job_leads"])
         except Exception as exc:
@@ -2781,19 +2784,19 @@ app.add_middleware(
 
 @app.get("/")
 async def root_health():
-    return {"status": "ok", "service": "careeragent-api", "runs_active": len(_runs)}
+    return JSONResponse(content=HEALTH_PAYLOAD, headers=HEALTH_HEADERS)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "online"}
+    return JSONResponse(content=HEALTH_PAYLOAD, headers=HEALTH_HEADERS)
 
 
 @app.get("/healthz")
 @app.get("/ready")
 @app.get("/readyz")
 async def readiness():
-    return {"status": "ok", "service": "careeragent-api", "runs_active": len(_runs)}
+    return JSONResponse(content=HEALTH_PAYLOAD, headers=HEALTH_HEADERS)
 
 
 @app.post("/mcp/invoke")

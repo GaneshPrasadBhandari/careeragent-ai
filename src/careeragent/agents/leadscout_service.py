@@ -36,6 +36,8 @@ JSEARCH_KEY    = os.getenv("JSEARCH_API_KEY", "")
 
 REQUEST_TIMEOUT = 20
 SCRAPE_TIMEOUT  = 30
+MIN_DISCOVERY_READY_JOBS = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
+MAX_DISCOVERY_PASSES = int(os.getenv("MAX_DISCOVERY_PASSES", "3"))
 SESSION_STATE_DIR = Path(os.getenv("CAREERAGENT_SESSION_STATE_DIR", ".careeragent_session"))
 
 
@@ -84,7 +86,7 @@ class LeadScoutService:
     # ── Canonical entry point ───────────────────────────────────────────────
 
     async def search_jobs(self, intent_plan: dict) -> list[dict]:
-        queries  = self._build_queries(intent_plan)
+        queries, adjacent_titles = self._build_queries(intent_plan)
         location = self._resolve_location(intent_plan)
         remote   = intent_plan.get("geo_preferences", {}).get("remote", True)
 
@@ -95,7 +97,80 @@ class LeadScoutService:
         for i, q in enumerate(queries):
             log.debug("  Query[%d]: %s", i, q)
 
-        # Run all queries across all sources concurrently
+        leads: list[JobLead] = []
+        source_errors: dict[str, int] = {}
+        quota_targets = self._build_source_quota_targets()
+        recency_hours = float(intent_plan.get("recency_hours") or 24.0)
+        extra_queries: list[str] = []
+        for pass_idx in range(max(1, MAX_DISCOVERY_PASSES)):
+            pass_queries = queries if pass_idx == 0 else extra_queries
+            if not pass_queries:
+                break
+
+            pass_leads, pass_errors = await self._collect_source_batches(
+                pass_queries,
+                location=location,
+                remote=remote,
+                top_roles=intent_plan.get("target_roles", [])[:3],
+            )
+            leads.extend(pass_leads)
+            for src, count in pass_errors.items():
+                source_errors[src] = source_errors.get(src, 0) + count
+
+            unique = self._dedupe_leads(leads)
+            filtered = self._filter_unavailable_jobs(unique)
+            filtered = self._filter_by_recency(filtered, recency_hours=recency_hours)
+            quota_applied = self._enforce_source_quotas(filtered, quota_targets=quota_targets)
+
+            if len(quota_applied) >= MIN_DISCOVERY_READY_JOBS:
+                break
+
+            if pass_idx + 1 < MAX_DISCOVERY_PASSES:
+                extra_queries = [
+                    f"{title} {'remote' if remote else location}".strip()
+                    for title in adjacent_titles
+                ]
+                # Broaden with older postings on follow-up pass.
+                recency_hours = max(recency_hours, 72.0)
+                log.info(
+                    "LeadScout continuing pass %d/%d to hit minimum %d jobs (currently %d)",
+                    pass_idx + 2,
+                    MAX_DISCOVERY_PASSES,
+                    MIN_DISCOVERY_READY_JOBS,
+                    len(quota_applied),
+                )
+
+        unique = self._dedupe_leads(leads)
+        filtered = self._filter_unavailable_jobs(unique)
+        filtered = self._filter_by_recency(filtered, recency_hours=recency_hours)
+        quota_applied = self._enforce_source_quotas(filtered, quota_targets=quota_targets)
+
+        source_counts = self._count_sources(quota_applied)
+        self.last_search_telemetry = {
+            "source_counts": source_counts,
+            "source_errors": source_errors,
+            "source_quota_targets": quota_targets,
+            "adjacent_titles": adjacent_titles,
+            "raw": len(leads),
+            "unique": len(unique),
+            "usable": len(quota_applied),
+            "minimum_target": MIN_DISCOVERY_READY_JOBS,
+        }
+
+        log.info(
+            "LeadScout found %d usable leads (%d unique / %d raw)",
+            len(quota_applied), len(unique), len(leads),
+        )
+        return [l.to_dict() for l in quota_applied[: self.max_per_source * 4]]
+
+    async def _collect_source_batches(
+        self,
+        queries: list[str],
+        *,
+        location: str,
+        remote: bool,
+        top_roles: list[str],
+    ) -> tuple[list[JobLead], dict[str, int]]:
         tasks = []
         for query in queries:
             tasks.append(self._search_serper(query, location, remote))
@@ -103,8 +178,6 @@ class LeadScoutService:
             tasks.append(self._search_adzuna(query, location))
             tasks.append(self._search_jsearch(query, location, remote))
 
-        # Add ATS scraping for top roles
-        top_roles = intent_plan.get("target_roles", [])[:3]
         if self.enable_playwright:
             for role in top_roles:
                 tasks.append(self._scrape_linkedin(role))
@@ -113,7 +186,6 @@ class LeadScoutService:
                 tasks.append(self._scrape_lever(role))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-
         leads: list[JobLead] = []
         source_errors: dict[str, int] = {}
         for idx, batch in enumerate(results):
@@ -124,36 +196,17 @@ class LeadScoutService:
                 continue
             if isinstance(batch, list):
                 leads.extend(batch)
+        return leads, source_errors
 
-        # Deduplicate by URL
+    @staticmethod
+    def _dedupe_leads(leads: list[JobLead]) -> list[JobLead]:
         seen, unique = set(), []
         for lead in leads:
             key = lead.url.strip().rstrip("/")
             if key and key not in seen:
                 seen.add(key)
                 unique.append(lead)
-
-        recency_hours = float(intent_plan.get("recency_hours") or 24.0)
-        filtered = self._filter_unavailable_jobs(unique)
-        filtered = self._filter_by_recency(filtered, recency_hours=recency_hours)
-        quota_targets = self._build_source_quota_targets()
-        quota_applied = self._enforce_source_quotas(filtered, quota_targets=quota_targets)
-
-        source_counts = self._count_sources(quota_applied)
-        self.last_search_telemetry = {
-            "source_counts": source_counts,
-            "source_errors": source_errors,
-            "source_quota_targets": quota_targets,
-            "raw": len(leads),
-            "unique": len(unique),
-            "usable": len(quota_applied),
-        }
-
-        log.info(
-            "LeadScout found %d usable leads (%d unique / %d raw)",
-            len(quota_applied), len(unique), len(leads),
-        )
-        return [l.to_dict() for l in quota_applied[: self.max_per_source * 4]]
+        return unique
 
     # Aliases
     find_jobs   = search_jobs
@@ -288,7 +341,7 @@ class LeadScoutService:
 
     # ── Query builder — THE KEY FIX ─────────────────────────────────────────
 
-    def _build_queries(self, intent_plan: dict) -> list[str]:
+    def _build_queries(self, intent_plan: dict) -> tuple[list[str], list[str]]:
         """
         Build multiple targeted queries instead of one weak generic query.
         Mines the full extracted_profile for roles, skills, and seniority.
@@ -326,6 +379,7 @@ class LeadScoutService:
         ])]
 
         queries = []
+        adjacent_titles = self._derive_adjacent_titles(all_keywords[:21], roles)
 
         # Query 1: Top role + AI/ML core skills
         if roles:
@@ -356,6 +410,11 @@ class LeadScoutService:
         if data_terms:
             queries.append(f"Machine Learning Engineer {' '.join(data_terms[:3])}")
 
+        # Query 7-11: Cognitive expansion titles from extracted skills.
+        for title in adjacent_titles:
+            skill_slice = " ".join((ai_ml_terms + cloud_terms + data_terms)[:2])
+            queries.append(f"{title} {skill_slice}".strip())
+
         # Deduplicate and cap
         seen_q: set[str] = set()
         final: list[str] = []
@@ -364,14 +423,37 @@ class LeadScoutService:
             if q and q not in seen_q:
                 seen_q.add(q)
                 final.append(q)
-                if len(final) >= 6:
+                if len(final) >= 11:
                     break
 
         # Fallback: never return empty
         if not final:
             final = ["AI Engineer Python remote", "Machine Learning Engineer remote"]
 
-        return final
+        return final, adjacent_titles
+
+    def _derive_adjacent_titles(self, skills: list[str], roles: list[str]) -> list[str]:
+        """Generate five adjacent job titles from up to 21 extracted skills."""
+        normalized = " ".join(str(s).lower() for s in skills[:21])
+        catalog: list[tuple[str, tuple[str, ...]]] = [
+            ("MLOps Engineer", ("mlops", "kubernetes", "docker", "ci/cd", "deployment", "airflow")),
+            ("Applied AI Engineer", ("llm", "genai", "langchain", "rag", "prompt", "openai")),
+            ("AI Platform Engineer", ("aws", "azure", "gcp", "platform", "sagemaker", "bedrock", "vertex")),
+            ("Data Scientist", ("python", "sql", "pandas", "analytics", "statistics", "experimentation")),
+            ("Machine Learning Engineer", ("machine learning", "pytorch", "tensorflow", "model", "feature")),
+            ("NLP Engineer", ("nlp", "bert", "transformer", "embedding", "token")),
+            ("Analytics Engineer", ("bi", "dbt", "snowflake", "warehouse", "dashboard")),
+            ("Backend AI Engineer", ("api", "fastapi", "backend", "microservice", "python")),
+        ]
+        ranked = sorted(
+            catalog,
+            key=lambda item: sum(1 for token in item[1] if token in normalized),
+            reverse=True,
+        )
+        picks = [title for title, _ in ranked[:5]]
+        if roles:
+            picks.insert(0, f"{roles[0]} Platform")
+        return list(dict.fromkeys(picks))[:5]
 
     def _detect_seniority(self, profile: dict, roles: list[str]) -> str:
         """Detect seniority level from profile experience."""
