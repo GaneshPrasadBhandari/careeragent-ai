@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 from collections import Counter
 import json
+import hashlib
 import logging
 import os
 import re
@@ -212,6 +213,8 @@ for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR, FEEDBACK_DIR, DEV_HIDDEN_DIR]:
 
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
 _runs: dict[str, dict] = {}   # run_id → state dict
+RESUME_PARSE_CACHE: dict[str, dict] = {}
+RESUME_PARSE_CACHE_MAX = int(os.getenv("RESUME_PARSE_CACHE_MAX", "24"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -736,10 +739,35 @@ def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
 
 
 def _interview_call_percent(job: dict) -> float:
-    score = float(job.get("score") or 0.0)
-    ats = float(job.get("ats_proxy") or score)
-    recency_bonus = 0.08 if int(job.get("posted_hours_ago") or 24) <= 24 else 0.02
+    score_raw = job.get("score")
+    ats_raw = job.get("ats_proxy")
+    try:
+        score = float(score_raw if score_raw is not None else 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    try:
+        ats = float(ats_raw if ats_raw is not None else score)
+    except (TypeError, ValueError):
+        ats = score
+
+    recency_hours_raw = job.get("posted_hours_ago")
+    try:
+        recency_hours = int(recency_hours_raw if recency_hours_raw is not None else 24)
+    except (TypeError, ValueError):
+        recency_hours = 24
+
+    recency_bonus = 0.08 if recency_hours <= 24 else 0.02
     pct = (0.65 * score + 0.30 * ats + recency_bonus) * 100
+
+    match_pct_raw = job.get("overall_match_percent")
+    try:
+        match_pct = float(match_pct_raw if match_pct_raw is not None else (score * 100.0))
+    except (TypeError, ValueError):
+        match_pct = score * 100.0
+
+    if match_pct >= 70.0:
+        pct = max(pct, 55.0)
+
     return round(max(1.0, min(99.0, pct)), 1)
 
 
@@ -2118,6 +2146,22 @@ def _build_cover_letter_text(profile: dict, job: dict) -> str:
     ).strip()
 
 
+
+
+def _resume_cache_key(resume_path: Path) -> str:
+    try:
+        raw = resume_path.read_bytes()
+    except Exception:
+        raw = f"{resume_path}:{resume_path.stat().st_mtime if resume_path.exists() else ''}".encode("utf-8", errors="ignore")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _remember_resume_parse(cache_key: str, profile: dict) -> None:
+    RESUME_PARSE_CACHE[cache_key] = dict(profile or {})
+    if len(RESUME_PARSE_CACHE) > RESUME_PARSE_CACHE_MAX:
+        oldest_key = next(iter(RESUME_PARSE_CACHE.keys()))
+        RESUME_PARSE_CACHE.pop(oldest_key, None)
+
 @traceable(name="api.parse_resume")
 async def _parse_resume(resume_path: Path, timeout_s: float = 25.0) -> dict:
     """Extract profile from uploaded resume file with a hard timeout guard.
@@ -2127,17 +2171,25 @@ async def _parse_resume(resume_path: Path, timeout_s: float = 25.0) -> dict:
     enforcing a timeout keeps pipeline progression deterministic.
     """
     effective_timeout = max(1.0, float(timeout_s))
+    cache_key = _resume_cache_key(resume_path)
+    cached = RESUME_PARSE_CACHE.get(cache_key)
+    if cached:
+        return dict(cached)
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_parse_resume_sync, resume_path), timeout=effective_timeout)
+        profile = await asyncio.wait_for(asyncio.to_thread(_parse_resume_sync, resume_path), timeout=effective_timeout)
+        _remember_resume_parse(cache_key, profile)
+        return profile
     except asyncio.TimeoutError:
         log.warning("Resume parse timed out after %.1fs for %s; using fallback extractor", effective_timeout, resume_path.name)
         profile = _extract_profile_from_text(_fallback_resume_text(resume_path))
         profile["parse_warning"] = f"resume_parse_timeout_{int(effective_timeout)}s"
+        _remember_resume_parse(cache_key, profile)
         return profile
     except Exception as exc:
         log.warning("Resume parse failed for %s (%s); using fallback extractor", resume_path.name, exc)
         profile = _extract_profile_from_text(_fallback_resume_text(resume_path))
         profile["parse_warning"] = f"resume_parse_error:{type(exc).__name__}"
+        _remember_resume_parse(cache_key, profile)
         return profile
 
 

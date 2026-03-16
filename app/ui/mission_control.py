@@ -17,8 +17,10 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 import uuid
+import hashlib
 from html import escape
 from pathlib import Path
 from typing import Optional
@@ -237,6 +239,66 @@ def _ensure_beta_feedback_db() -> Path:
             """
         )
     return BETA_DB_PATH
+
+
+def _release_feedback_vault_locks() -> None:
+    """Best-effort unlock/checkpoint so a new hunt isn't blocked by feedback writes."""
+    db_paths = [
+        _ensure_beta_feedback_db(),
+        Path("logs/careeragent_tracking.db"),
+    ]
+    for db_path in db_paths:
+        if not db_path.exists():
+            continue
+        try:
+            with sqlite3.connect(db_path, timeout=1.0, isolation_level=None) as con:
+                con.execute("PRAGMA busy_timeout = 500")
+                con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                con.execute("PRAGMA optimize")
+        except Exception:
+            continue
+
+
+def _reset_start_hunt_state() -> None:
+    """Clear previous run/session artifacts before launching a new hunt."""
+    st.session_state["run_id"] = None
+    st.session_state["run_status"] = None
+    st.session_state["hunt_running"] = False
+    st.session_state["last_poll"] = 0.0
+    st.session_state["live_feed_log"] = []
+
+    for key in list(st.session_state.keys()):
+        low = str(key).lower()
+        if "discovery" in low or "job_cache" in low:
+            st.session_state.pop(key, None)
+
+    _release_feedback_vault_locks()
+
+
+def _submit_feedback_background(api_base: str, run_id: str, source: str, text: str) -> None:
+    """Send feedback asynchronously so UI responds instantly."""
+
+    def _worker() -> None:
+        try:
+            _api_post(api_base, f"/hunt/{run_id}/feedback", json={"source": source, "text": text}, timeout=25)
+        except Exception as exc:
+            log.warning("Background feedback submission failed for run %s: %s", run_id, exc)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_resume_parse(resume_bytes: bytes, resume_filename: str) -> dict:
+    """Cache lightweight resume parsing metadata by file content hash."""
+    digest = hashlib.sha256(resume_bytes).hexdigest()[:16] if resume_bytes else ""
+    preview = ""
+    if resume_filename.lower().endswith((".txt", ".md")):
+        preview = (resume_bytes.decode("utf-8", errors="ignore"))[:4000]
+    return {
+        "digest": digest,
+        "size_kb": round(len(resume_bytes or b"") / 1024, 1),
+        "preview": preview,
+    }
 
 
 def _track_public_beta_session() -> dict:
@@ -1543,12 +1605,8 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
             fb_submitted = st.form_submit_button("Submit feedback")
         if fb_submitted:
             if fb_text.strip():
-                try:
-                    _api_post(api_base, f"/hunt/{run_id}/feedback", json={"source": fb_source, "text": fb_text.strip()}, timeout=25)
-                    st.success("Feedback saved and added to self-learning signals.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to submit feedback: {e}")
+                _submit_feedback_background(api_base, run_id, fb_source, fb_text.strip())
+                st.success("Thank you — your feedback was received and is saving in the background.")
             else:
                 st.warning("Feedback text is required.")
     else:
@@ -1830,11 +1888,12 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         resume_bytes    = resume_file.read() if resume_file else None
         resume_filename = resume_file.name   if resume_file else None
-        if resume_file:
-            st.caption(f"Uploaded: {resume_filename} ({round(len(resume_bytes or b'')/1024,1)}KB)")
-            if resume_filename.lower().endswith((".txt", ".md")) and resume_bytes:
+        resume_meta = _cached_resume_parse(resume_bytes, resume_filename or "resume.pdf") if resume_file and resume_bytes else None
+        if resume_file and resume_meta:
+            st.caption(f"Uploaded: {resume_filename} ({resume_meta.get('size_kb', 0)}KB)")
+            if resume_filename.lower().endswith((".txt", ".md")) and resume_meta.get("preview"):
                 with st.expander("Preview uploaded resume"):
-                    st.code((resume_bytes.decode("utf-8", errors="ignore"))[:4000])
+                    st.code(resume_meta.get("preview") or "")
 
         # ── Start Hunt button ─────────────────────────────────────────────────
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None))
@@ -1846,6 +1905,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         # ── Handle Start Hunt ─────────────────────────────────────────────────
         if start_clicked and resume_bytes:
+            _reset_start_hunt_state()
             with st.spinner("Launching pipeline…"):
                 run_id = _api_start_hunt(api_base, resume_bytes, resume_filename or "resume.pdf", config)
             if run_id:

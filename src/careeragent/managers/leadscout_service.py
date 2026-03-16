@@ -27,8 +27,9 @@ log = logging.getLogger("leadscout")
 
 REQUEST_TIMEOUT = 20.0
 LLM_QUERY_TIMEOUT_SECONDS = 8.0
-SEARCH_TASK_TIMEOUT_SECONDS = 25.0
+SEARCH_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SEARCH_TIMEOUT_SECONDS", "120.0"))
 RANKING_TIMEOUT_SECONDS = 300.0
+MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -306,9 +307,19 @@ class LeadScoutService:
             "fallback_reason": None,
         }
 
+    def reset_state(self) -> None:
+        """Reset transient state before each hunt run."""
+        self.last_search_diagnostics = {
+            "providers": {},
+            "counts": {},
+            "fallback_reason": None,
+            "session_reset": True,
+        }
+
     # ── Entry point ─────────────────────────────────────────────────────────
 
     async def search_jobs(self, intent_plan: dict) -> list[dict]:
+        self.reset_state()
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
         queries  = self._build_queries(intent_plan)
@@ -351,27 +362,7 @@ class LeadScoutService:
             tasks.append(asyncio.create_task(self._search_tavily(query, location, remote, tavily_key=tavily_key)))
             tasks.append(asyncio.create_task(self._search_remotive(query, location, remote)))
 
-        done, pending = await asyncio.wait(tasks, timeout=SEARCH_TASK_TIMEOUT_SECONDS)
-        if pending:
-            log.warning(
-                "LeadScout timed out waiting for %d source tasks after %.1fs; continuing with partial results.",
-                len(pending),
-                SEARCH_TASK_TIMEOUT_SECONDS,
-            )
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-
-        results: list[list[JobLead]] = []
-        for task in done:
-            if task.cancelled():
-                continue
-            try:
-                batch = task.result()
-            except Exception as exc:
-                log.warning("LeadScout source error: %s", exc)
-                continue
-            results.append(batch)
+        results = await self._gather_non_blocking(tasks, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS)
 
         leads: list[JobLead] = []
         for batch in results:
@@ -405,17 +396,47 @@ class LeadScoutService:
         unique = self._filter_by_recency(unique, recency_hours=recency_hours)
         unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
 
-        target_count = int(intent_plan.get("max_jobs") or 80)
+        target_count = max(MIN_DISCOVERY_JOBS_TARGET, int(intent_plan.get("max_jobs") or 80))
         if len(unique) < target_count:
-            # If live providers produced little/no data, avoid flooding ranking with many
-            # repetitive query URLs that are not direct application pages.
-            backfill_target = target_count if unique else min(target_count, 30)
-            unique = self._backfill_curated_search_urls(unique, intent_plan=intent_plan, target_count=backfill_target)
-            if backfill_target < target_count:
-                diagnostics["fallback_reason"] = (
-                    f"Live providers returned low volume; limited non-direct query backfill to {backfill_target} rows "
-                    "to keep rankings actionable."
-                )
+            # Tier 2 search: force adjacent-title expansion before allowing loop exit.
+            tier2_queries = self._adjacent_queries_from_skills(
+                [str(k) for k in (intent_plan.get("keywords") or []) if str(k).strip()],
+                limit=12,
+            )
+            if tier2_queries:
+                tier2_tasks: list[asyncio.Task[list[JobLead]]] = []
+                for query in tier2_queries:
+                    tier2_tasks.append(asyncio.create_task(self._search_serper_organic(query, location, remote, serper_key=serper_key)))
+                    tier2_tasks.append(asyncio.create_task(self._search_tavily(query, location, remote, tavily_key=tavily_key)))
+                    tier2_tasks.append(asyncio.create_task(self._search_remotive(query, location, remote)))
+                for batch in await self._gather_non_blocking(tier2_tasks, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS):
+                    for lead in batch:
+                        diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
+                    leads.extend(batch)
+                # Rebuild uniqueness set with tier2 results.
+                seen_urls, seen_composite, unique = set(), set(), []
+                for lead in leads:
+                    normalized_url = _normalize_result_url(lead.url)
+                    lead.url = normalized_url or lead.url
+                    if normalized_url and normalized_url in seen_urls:
+                        continue
+                    composite_key = _composite_lead_key(lead)
+                    if composite_key in seen_composite:
+                        continue
+                    if normalized_url:
+                        seen_urls.add(normalized_url)
+                    seen_composite.add(composite_key)
+                    unique.append(lead)
+                unique = self._annotate_posting_age(unique)
+                unique = self._filter_by_role_relevance(unique, intent_plan=intent_plan)
+                unique = self._filter_by_recency(unique, recency_hours=recency_hours)
+                unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
+
+        if len(unique) < target_count:
+            unique = self._backfill_curated_search_urls(unique, intent_plan=intent_plan, target_count=target_count)
+            diagnostics["fallback_reason"] = (
+                f"Tier-2 expansion executed; curated backfill used to satisfy minimum discovery floor of {target_count}."
+            )
 
         try:
             unique = await asyncio.wait_for(
@@ -434,6 +455,33 @@ class LeadScoutService:
 
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+
+    async def _gather_non_blocking(self, tasks: list[asyncio.Task[list[JobLead]]], *, timeout_seconds: float) -> list[list[JobLead]]:
+        """Collect completed tasks without blocking on the slowest source."""
+        results: list[list[JobLead]] = []
+        if not tasks:
+            return results
+        try:
+            for finished in asyncio.as_completed(tasks, timeout=timeout_seconds):
+                try:
+                    batch = await finished
+                except Exception as exc:
+                    log.warning("LeadScout source error: %s", exc)
+                    continue
+                if isinstance(batch, list):
+                    results.append(batch)
+        except asyncio.TimeoutError:
+            pending = [t for t in tasks if not t.done()]
+            if pending:
+                log.warning(
+                    "LeadScout timed out waiting for %d source tasks after %.1fs; continuing with partial results.",
+                    len(pending),
+                    timeout_seconds,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+        return results
 
     def _next_user_agent(self) -> str:
         if not self._ua_pool:
