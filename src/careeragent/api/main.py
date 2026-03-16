@@ -662,6 +662,23 @@ def _calc_progress(state: dict) -> float:
     return float(min(100, done_layers * 10))
 
 
+def _stage_progress_floor(layer_id: int) -> float:
+    """Deterministic progress floor at stage transition start."""
+    floors = {
+        0: 5.0,
+        1: 10.0,
+        2: 20.0,
+        3: 40.0,
+        4: 50.0,
+        5: 60.0,
+        6: 75.0,
+        7: 85.0,
+        8: 95.0,
+        9: 100.0,
+    }
+    return float(floors.get(int(layer_id), 0.0))
+
+
 def _default_step_meta(
     *,
     tools_used: list[str] | None = None,
@@ -1088,7 +1105,11 @@ def _layer_running(state: dict, layer_id: int, msg: str = "", **meta: Any) -> No
     state["layers"][layer_id]["status"] = "running"
     state["layers"][layer_id]["started_at"] = _now()
     state["layers"][layer_id]["meta"].update(_default_step_meta(**meta))
-    state["progress_pct"] = _calc_progress(state)
+    state["progress_pct"] = max(
+        float(state.get("progress_pct") or 0.0),
+        _stage_progress_floor(layer_id),
+        _calc_progress(state),
+    )
     if msg:
         _log_agent(state, layer_id, msg, meta=state["layers"][layer_id]["meta"])
 
@@ -1456,7 +1477,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         state["layers"][layer_id]["status"]     = "running"
         state["layers"][layer_id]["started_at"] = _now()
         state["layers"][layer_id]["meta"].update(_default_step_meta(**meta))
-        state["progress_pct"]                   = _calc_progress(state)
+        state["progress_pct"]                   = max(
+            float(state.get("progress_pct") or 0.0),
+            _stage_progress_floor(layer_id),
+            _calc_progress(state),
+        )
         if msg:
             _log_agent(state, layer_id, msg, meta=state["layers"][layer_id]["meta"])
         heartbeat_tasks[layer_id] = asyncio.create_task(_heartbeat_loop(layer_id))
@@ -2953,6 +2978,8 @@ async def mcp_invoke_passthrough_trailing(body: dict):
     return await mcp_invoke_passthrough(body)
 
 @app.post("/hunt/start")
+@app.post("/start_hunt")
+@app.post("/start_hunt/")
 @traceable(name="api.start_hunt")
 async def start_hunt(
     background_tasks: BackgroundTasks,
