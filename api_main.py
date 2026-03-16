@@ -1,20 +1,14 @@
-"""Compatibility entrypoint for users running ``uvicorn api_main:app``.
+"""Lightweight compatibility entrypoint for ``uvicorn api_main:app``.
 
-Primary behavior:
-- Forward to canonical FastAPI app at ``careeragent.api.main``.
-
-Fallback behavior (dependency-missing environments):
-- If FastAPI/uvicorn is missing, expose an importable ASGI ``app`` and provide
-  a tiny stdlib HTTP server for local diagnostics.
+Provides immediate health responses while lazily loading the full backend app.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
-import os
 import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +18,9 @@ for p in (str(_REPO_ROOT), str(_SRC)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-
-_FALLBACK_ENABLED = False
-_FALLBACK_ERROR: ModuleNotFoundError | None = None
+_backend_app: Any | None = None
+_backend_error: Exception | None = None
+_backend_lock = asyncio.Lock()
 
 
 def _is_health_path(path: str) -> bool:
@@ -34,85 +28,69 @@ def _is_health_path(path: str) -> bool:
     return normalized in {"/", "/health", "/healthz", "/ready", "/readyz"}
 
 
-def _fallback_payload(status_code: int) -> bytes:
-    error_name = _FALLBACK_ERROR.name if _FALLBACK_ERROR else "unknown"
-    return json.dumps(
-        {
-            "status": "online" if status_code == 200 else "error",
-            "error": None if status_code == 200 else "backend_dependency_missing",
-            "mode": "fallback",
-            "backend_dependency_missing": True,
-            "missing_module": error_name,
-            "hint": "Install backend dependencies (e.g. `pip install -e .` or `uv sync`).",
-        }
-    ).encode("utf-8")
+def _json_response(status_code: int, payload: dict[str, Any]) -> tuple[list[list[bytes]], bytes]:
+    body = json.dumps(payload).encode("utf-8")
+    headers = [
+        [b"content-type", b"application/json"],
+        [b"cache-control", b"no-store, no-cache, must-revalidate"],
+        [b"content-length", str(len(body)).encode("ascii")],
+    ]
+    return headers, body
 
 
-def _dependency_missing_app(error: ModuleNotFoundError):
-    async def _app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # pragma: no cover - runtime guard
-        if scope.get("type") != "http":
-            return
+async def _load_backend() -> Any:
+    global _backend_app, _backend_error
 
-        path = str(scope.get("path") or "/")
-        status = 200 if _is_health_path(path) else 503
-        body = _fallback_payload(status)
-        await send(
-            {
-                "type": "http.response.start",
-                "status": status,
-                "headers": [
-                    [b"content-type", b"application/json"],
-                    [b"content-length", str(len(body)).encode("ascii")],
-                ],
-            }
-        )
+    if _backend_app is not None:
+        return _backend_app
+    if _backend_error is not None:
+        raise _backend_error
+
+    async with _backend_lock:
+        if _backend_app is not None:
+            return _backend_app
+        if _backend_error is not None:
+            raise _backend_error
+
+        try:
+            _backend_app = importlib.import_module("careeragent.api.main").app
+            return _backend_app
+        except Exception as exc:  # noqa: BLE001
+            _backend_error = exc
+            raise
+
+
+async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI entrypoint
+    if scope.get("type") != "http":
+        return
+
+    path = str(scope.get("path") or "/")
+    if _is_health_path(path):
+        headers, body = _json_response(200, {"status": "online"})
+        await send({"type": "http.response.start", "status": 200, "headers": headers})
         await send({"type": "http.response.body", "body": body})
+        return
 
-    return _app
-
-
-def _run_fallback_http(host: str = "127.0.0.1", port: int = 8000) -> None:
-    class _Handler(BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
-            status = 200 if _is_health_path(self.path) else 503
-            body = _fallback_payload(status)
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, fmt: str, *args: Any) -> None:
-            return
-
-    server = ThreadingHTTPServer((host, port), _Handler)
-    print(f"Fallback backend running on http://{host}:{port}")
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:  # pragma: no cover - manual shutdown path
-        print("Fallback backend stopped.")
-    finally:
-        server.server_close()
+        backend_app = await _load_backend()
+    except Exception as exc:  # noqa: BLE001
+        error_name = type(exc).__name__
+        headers, body = _json_response(
+            503,
+            {
+                "status": "error",
+                "error": "backend_unavailable",
+                "message": "Backend app failed to initialize",
+                "exception": error_name,
+            },
+        )
+        await send({"type": "http.response.start", "status": 503, "headers": headers})
+        await send({"type": "http.response.body", "body": body})
+        return
 
-
-try:
-    app = importlib.import_module("careeragent.api.main").app
-except ModuleNotFoundError as exc:
-    _FALLBACK_ENABLED = True
-    _FALLBACK_ERROR = exc
-    app = _dependency_missing_app(exc)
+    await backend_app(scope, receive, send)
 
 
 if __name__ == "__main__":
-    host = str(os.getenv("HOST") or os.getenv("API_HOST") or "0.0.0.0")
-    port = int(str(os.getenv("PORT") or os.getenv("API_PORT") or "10000"))
-    if _FALLBACK_ENABLED:
-        _run_fallback_http(host=host, port=port)
-    else:
-        try:
-            uvicorn = importlib.import_module("uvicorn")
-            uvicorn.run("api_main:app", host=host, port=port, reload=False)
-        except ModuleNotFoundError:
-            # Keep the service reachable in constrained envs where uvicorn
-            # cannot be installed (e.g. blocked package index/proxy).
-            _run_fallback_http(host=host, port=port)
+    uvicorn = importlib.import_module("uvicorn")
+    uvicorn.run(app, host="0.0.0.0", port=10000)

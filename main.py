@@ -1040,7 +1040,8 @@ def run_pipeline(initial: AgentState) -> dict[str, Any]:
             if fn is node_l5_evaluator:
                 if route_after_evaluator(state) == "retry_discovery":
                     # bounded retries
-                    while True:
+                    max_iterations = int(state.get("max_iterations") or 3)
+                    while int(state.get("iteration") or 0) < max_iterations:
                         state["iteration"] = int(state.get("iteration") or 0) + 1
                         state.update(node_l3_discovery_and_extraction(state))
                         state.update(node_l5_matcher_and_ranker(state))
