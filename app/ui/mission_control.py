@@ -452,15 +452,16 @@ def _inject_css() -> None:
         color: #FACC15 !important;
     }
 
-    /* ── Matrix terminal override (L0 visibility) ── */
+    /* ── Code/log readability override ── */
     .stCode, .live-feed-log {
-        color: #00FF00 !important;
-        background-color: #000000 !important;
+        color: #1B263B !important;
+        background-color: #FFFFFF !important;
         font-family: 'Courier New', monospace;
-        border: 1px solid #333;
+        border: 1px solid #D9DEE5;
     }
     .live-feed-log *, .stCode * {
-        color: #00FF00 !important;
+        color: #1B263B !important;
+        -webkit-text-fill-color: #1B263B !important;
         font-family: 'Courier New', monospace !important;
     }
 
@@ -536,20 +537,19 @@ def _inject_css() -> None:
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Universal live-feed visibility override (L0 critical fix). */
+    /* Global readability for markdown/code blocks */
     div[data-testid="stMarkdownContainer"] pre,
     div[data-testid="stMarkdownContainer"] code,
     .stCodeBlock,
-    code span,
-    pre span {
-        color: #39FF14 !important;
-        background-color: #000000 !important;
-        -webkit-text-fill-color: #39FF14 !important;
-    }
-    .live-feed-log {
-        color: #39FF14 !important;
-        background-color: #000000 !important;
-        font-weight: bold !important;
+    pre,
+    pre *,
+    code,
+    code *,
+    .stMarkdown,
+    .stMarkdown * {
+        color: #1B263B !important;
+        -webkit-text-fill-color: #1B263B !important;
+        background-color: #FFFFFF !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -791,6 +791,7 @@ def render_stat_cards(status: Optional[dict]) -> None:
     approved   = status.get("jobs_approved",     0) if status else 0
     cand_name  = status.get("candidate_name",    "—") if status else "—"
     skills_n   = status.get("skills_extracted",  0) if status else 0
+
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1392,6 +1393,7 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
         """, unsafe_allow_html=True)
         return
 
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Jobs Discovered", status.get("jobs_discovered", 0))
@@ -1555,9 +1557,15 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
         st.warning("**Pipeline Errors:**\n" + "\n".join(f"- {e}" for e in errors))
 
 
-def render_executive_summary() -> None:
+def render_executive_summary(*, is_admin: bool) -> None:
+    if not is_admin:
+        st.warning("🔒 Executive Summary is restricted to Admin Mode.")
+        return
+
     st.markdown("### Executive Summary — Public Beta Feedback")
     rows = _read_beta_feedback()
+    st.markdown("#### Feedback Database")
+    st.caption("Admin-only visibility for archive management and records.")
     st.markdown("#### Feedback Review")
     st.caption("Live review dashboard backed by analytics/feedback_archive.db for beta-demo triage.")
     clear_col, info_col = st.columns([1, 2])
@@ -1573,11 +1581,13 @@ def render_executive_summary() -> None:
         st.info("No public beta feedback has been submitted yet.")
         return
     st.caption("Sortable table for leadership demo reviews. Visual Sentiment uses rating-based color coding.")
+    st.markdown("#### 🏦 Beta Feedback Vault")
     st.dataframe(rows, use_container_width=True, hide_index=True)
     total = len(rows)
     positive = sum(1 for r in rows if str(r.get("Visual Sentiment","")).startswith("🟢"))
     neutral = sum(1 for r in rows if str(r.get("Visual Sentiment","")).startswith("🟡"))
     issues = sum(1 for r in rows if str(r.get("Visual Sentiment","")).startswith("🔴"))
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Feedback", total)
     c2.metric("Positive", positive)
@@ -1589,9 +1599,9 @@ def render_executive_summary() -> None:
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str], dict]:
+def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str], dict, bool]:
     """
-    Returns (api_base, resume_bytes, resume_filename, run_id, config)
+    Returns (api_base, resume_bytes, resume_filename, run_id, config, is_admin)
     """
     with st.sidebar:
         st.markdown("""
@@ -1600,6 +1610,9 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             <div style="font-size:12px;color:#5C677D;margin-top:2px">Autonomous Job Hunt Engine</div>
         </div>
         """, unsafe_allow_html=True)
+
+        admin_key = st.text_input("Admin Key", type="password", help="Required for Executive Summary and technical logs")
+        is_admin = admin_key == "ganesh2026"
 
         # ── API Base URL ──────────────────────────────────────────────────────
         api_base = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
@@ -1792,7 +1805,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         if st.session_state.get("run_id"):
             st.caption(f"Run ID: `{st.session_state['run_id']}`")
 
-    return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config
+    return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config, is_admin
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1805,7 +1818,7 @@ def main():
     _inject_css()
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
-    api_base, _resume_bytes, _filename, run_id, _config = render_sidebar()
+    api_base, _resume_bytes, _filename, run_id, _config, is_admin = render_sidebar()
 
     # ── Poll backend for status ───────────────────────────────────────────────
     status = st.session_state.get("run_status")
@@ -1889,14 +1902,18 @@ def main():
     render_progress_bar(status, layers_data)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics, tab_exec = st.tabs([
+    tab_labels = [
         "📋  Pipeline Layers",
         "💼  Job Board",
         "🧩  Match Analysis",
         "🎓  Learning Center",
         "📊  Analytics",
-        "🧾  Executive Summary",
-    ])
+    ]
+    if is_admin:
+        tab_labels.append("🧾  Executive Summary")
+    tabs = st.tabs(tab_labels)
+    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:5]
+    tab_exec = tabs[5] if is_admin else None
 
     with tab_pipeline:
         st.markdown('<div class="section-header">Layer Details — click to expand</div>',
@@ -1916,8 +1933,10 @@ def main():
         render_hitl_controls(api_base, run_id, status)
         render_stepwise_details(status)
         render_json_downloads(status)
-        with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
-            st.json(status or {"info": "No run status yet"})
+        if is_admin:
+            st.markdown("#### Raw JSON Logs")
+            with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
+                st.json(status or {"info": "No run status yet"})
 
     with tab_jobs:
         render_job_board(api_base, run_id, status)
@@ -1955,8 +1974,9 @@ def main():
     with tab_analytics:
         render_analytics(api_base, run_id, status)
 
-    with tab_exec:
-        render_executive_summary()
+    if is_admin and tab_exec is not None:
+        with tab_exec:
+            render_executive_summary(is_admin=is_admin)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:
