@@ -189,11 +189,14 @@ def _public_base_url() -> str:
 async def _keepalive_ping_loop() -> None:
     base = _public_base_url()
     health_url = f"{base}/health"
-    while True:
+    keepalive_enabled = KEEPALIVE_INTERVAL_SECONDS > 0
+    while keepalive_enabled:
         try:
             async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.get(health_url)
             log.info("KeepAlive ping %s -> %s", health_url, resp.status_code)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             log.warning("KeepAlive ping failed for %s: %s", health_url, exc)
         await asyncio.sleep(max(60.0, KEEPALIVE_INTERVAL_SECONDS))
