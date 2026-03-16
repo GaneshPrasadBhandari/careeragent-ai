@@ -6,8 +6,10 @@ Provides immediate health responses while lazily loading the full backend app.
 from __future__ import annotations
 
 import asyncio
+import gc
 import importlib
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,8 @@ for p in (str(_REPO_ROOT), str(_SRC)):
 _backend_app: Any | None = None
 _backend_error: Exception | None = None
 _backend_lock = asyncio.Lock()
+_INIT_TIMEOUT_SECONDS = 180
+logger = logging.getLogger(__name__)
 
 
 def _is_health_path(path: str) -> bool:
@@ -53,9 +57,14 @@ async def _load_backend() -> Any:
             raise _backend_error
 
         try:
-            _backend_app = importlib.import_module("careeragent.api.main").app
+            gc.collect()
+            _backend_app = await asyncio.wait_for(
+                asyncio.to_thread(lambda: importlib.import_module("careeragent.api.main").app),
+                timeout=_INIT_TIMEOUT_SECONDS,
+            )
             return _backend_app
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to initialize careeragent.api.main: %s", exc)
             _backend_error = exc
             raise
 

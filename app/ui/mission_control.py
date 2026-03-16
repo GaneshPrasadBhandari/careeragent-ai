@@ -748,10 +748,10 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
         try:
             endpoint = f"{resolved_base.rstrip('/')}/hunt/start"
 
-            # Free-tier Render API services can return 502/503 for up to ~90s during
-            # cold start. Keep retrying with bounded exponential backoff so the first
-            # Start Hunt click can still succeed without forcing a manual retry.
-            for attempt in range(1, 6):
+            # Be patient with free-tier cold starts during L1 parsing/profile extraction.
+            # Retry up to 10 times when backend returns 503 or explicit
+            # "backend_unavailable" sentinel.
+            for attempt in range(1, 11):
                 r = requests.post(
                     endpoint,
                     files={"resume": (filename, resume_bytes, "application/octet-stream")},
@@ -761,12 +761,18 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 if r.status_code == 200:
                     return r.json().get("run_id")
                 last_err = f"Backend error {r.status_code}: {r.text[:200]}"
-                if r.status_code in {502, 503, 504} and attempt < 5:
+                body_text = (r.text or "").lower()
+                should_warm_retry = r.status_code == 503 or "backend_unavailable" in body_text
+                if should_warm_retry and attempt < 10:
+                    st.toast("Waking up AI Engine...")
                     # Opportunistic warm-up probe before retrying.
                     try:
                         requests.get(f"{resolved_base.rstrip('/')}/health", timeout=5)
                     except Exception:
                         pass
+                    time.sleep(5)
+                    continue
+                if r.status_code in {502, 504} and attempt < 10:
                     time.sleep(min(2.5 * attempt, 10.0))
                     continue
                 break
