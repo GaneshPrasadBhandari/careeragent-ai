@@ -8,11 +8,23 @@ import importlib.util
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parent
+
+
 def _ensure_streamlit_installed() -> None:
-    """Bootstrap Streamlit if environment is missing UI deps."""
-    if importlib.util.find_spec("streamlit"):
-        return
-    print("Streamlit is not installed. Bootstrapping UI dependencies...")
+    """Bootstrap real Streamlit if environment is missing UI deps.
+
+    A lightweight repo-local `streamlit` shim exists for constrained environments;
+    it should not be treated as a full installation for normal app launch.
+    """
+    spec = importlib.util.find_spec("streamlit")
+    if spec and spec.origin:
+        origin_path = Path(spec.origin).resolve()
+        is_repo_shim = origin_path.parent == (REPO_ROOT / "streamlit")
+        if not is_repo_shim:
+            return
+
+    print("Real Streamlit not detected. Bootstrapping UI dependencies...")
     subprocess.check_call([
         sys.executable,
         "-m",
@@ -30,7 +42,7 @@ def main() -> int:
     Input: None
     Output: exit code
     """
-    root = Path(__file__).resolve().parent
+    root = REPO_ROOT
     _ensure_streamlit_installed()
 
     env = os.environ.copy()
