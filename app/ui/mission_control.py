@@ -1295,11 +1295,16 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
     min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5)
     only_remote = st.checkbox("Show remote only in board", value=False)
 
+    allowed_statuses = {"ready", "approved"}
     filtered = [
         j for j in jobs
         if j.get("score", 0) >= min_score
         and float(j.get("interview_probability_percent") or 0.0) >= float(min_interview)
         and (not only_remote or j.get("remote"))
+        and (
+            not str(j.get("status") or "").strip()
+            or str(j.get("status") or "").strip().lower() in allowed_statuses
+        )
     ]
     st.caption(f"Showing {len(filtered)} / {len(jobs)} jobs")
 
