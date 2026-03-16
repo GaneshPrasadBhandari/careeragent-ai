@@ -38,7 +38,7 @@ def _fallback_payload(status_code: int) -> bytes:
     error_name = _FALLBACK_ERROR.name if _FALLBACK_ERROR else "unknown"
     return json.dumps(
         {
-            "status": "ok" if status_code == 200 else "error",
+            "status": "online" if status_code == 200 else "error",
             "error": None if status_code == 200 else "backend_dependency_missing",
             "mode": "fallback",
             "backend_dependency_missing": True,
@@ -105,7 +105,7 @@ except ModuleNotFoundError as exc:
 
 if __name__ == "__main__":
     host = str(os.getenv("HOST") or os.getenv("API_HOST") or "0.0.0.0")
-    port = int(str(os.getenv("PORT") or os.getenv("API_PORT") or "8000"))
+    port = int(str(os.getenv("PORT") or os.getenv("API_PORT") or "10000"))
     if _FALLBACK_ENABLED:
         _run_fallback_http(host=host, port=port)
     else:

@@ -174,7 +174,7 @@ log = logging.getLogger("api")
 L4_L5_TRANSITION_TIMEOUT_SECONDS = float(os.getenv("L4_L5_TRANSITION_TIMEOUT_SECONDS", "300"))
 DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_TIMEOUT_SECONDS", "300"))
 KEEPALIVE_INTERVAL_SECONDS = float(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))
-HEALTH_PAYLOAD = {"status": "ok", "service": "careeragent-api"}
+HEALTH_PAYLOAD = {"status": "online"}
 HEALTH_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
 
 
@@ -516,9 +516,11 @@ def _is_direct_application_url(url: str) -> bool:
     low = str(url or "").strip().lower()
     if not low:
         return False
+    if any(x in low for x in ["/jobs?", "/job/index.htm?sc.keyword", "search?q=", "results?"]):
+        return False
     if any(x in low for x in ["/jobs/search", "?q=", "/jobs?q=", "/job/jobs.htm"]):
         return False
-    return any(x in low for x in ["/jobs/view", "/viewjob", "joblistingid=", "/jobs/", "/job/"])
+    return any(x in low for x in ["/jobs/view", "/viewjob", "joblistingid=", "/jobs/", "/job/", "greenhouse.io", "lever.co"])
 
 
 def _detect_submission_success_signal(job_url: str, job: dict) -> dict:

@@ -94,25 +94,18 @@ def _normalize_result_url(url: str) -> str:
     # Normalize to https to avoid browser "connection is not private" for legacy http links.
     base = f"https://{parsed.netloc}{path}"
 
-    # Keep required job-identifying query params for job boards where the
-    # canonical listing link depends on them (e.g., Indeed/Glassdoor).
-    host = parsed.netloc.lower()
-    query_map = parse_qs(parsed.query, keep_blank_values=False)
-    keep_params: list[str] = []
-    if "indeed.com" in host:
-        keep_params = ["jk", "vjs"]
-    elif "glassdoor.com" in host:
-        keep_params = ["jl", "joblistingid"]
-
-    if keep_params:
-        compact = "&".join(
-            f"{key}={query_map[key][0]}"
-            for key in keep_params
-            if query_map.get(key) and str(query_map[key][0]).strip()
-        )
-        if compact:
-            return f"{base}?{compact}"
+    # Canonicalize URLs by stripping query/fragments (tracking params, campaign tags).
+    # This ensures the same job reached via different query strings dedupes reliably.
     return base
+
+
+def _normalize_job_title(title: str) -> str:
+    return re.sub(r"\s+", " ", str(title or "").strip().lower())
+
+
+def _composite_lead_key(lead: "JobLead") -> tuple[str, str]:
+    company = re.sub(r"\s+", " ", str(lead.company or "").strip().lower())
+    return company, _normalize_job_title(lead.title)
 
 
 def _clean_company_name(raw: str) -> str:
@@ -203,9 +196,12 @@ def _curated_query_url(domain_path: str, query: str) -> str:
     return f"https://{host}?q={query}"
 
 
-def _is_plausible_job_link(url: str) -> bool:
+def _is_valid_job_url(url: str) -> bool:
     low = str(url or "").lower()
     if not low:
+        return False
+    blacklist = ("/jobs?", "/job/index.htm?sc.keyword", "search?q=", "results?")
+    if any(token in low for token in blacklist):
         return False
     if any(token in low for token in ["/search", "/jobs/demo", "?q="]):
         return False
@@ -213,21 +209,21 @@ def _is_plausible_job_link(url: str) -> bool:
     parsed = urlparse(low)
     host, path, query = parsed.netloc, parsed.path, parsed.query
     if "linkedin.com" in host:
-        # Relaxed filter: keep ambiguous LinkedIn URLs (let downstream parser decide).
-        if "/in/" in path and "/jobs" not in path:
-            return False
-        return True
+        return "/jobs/view" in path
     if "indeed.com" in host:
         return "/viewjob" in path
     if "glassdoor.com" in host:
         return "joblistingid=" in query or "-job" in path
     if "greenhouse.io" in host:
-        return "/jobs/" in path
+        return "/jobs/" in path or "/embed/job_app" in path
     if "lever.co" in host:
         return "/jobs/" in path
     if any(d in host for d in ("workday", "myworkdayjobs", "icims.com", "jobvite.com", "smartrecruiters.com", "ziprecruiter.com", "myvisajobs.com")):
         return "/job" in path
-    return True
+    return any(
+        token in host
+        for token in ("greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com", "icims.com", "jobvite.com", "smartrecruiters.com")
+    ) and any(token in path for token in ("/job", "/jobs/", "/recruiting/"))
 
 
 def _is_supported_mirror_board_url(url: str) -> bool:
@@ -387,13 +383,21 @@ class LeadScoutService:
         if leads:
             leads = await self._validate_and_retry_links(leads, serper_key=serper_key)
 
-        # Deduplicate by canonical URL
-        seen, unique = set(), []
+        # Deduplicate by canonical URL + per-session composite identity
+        # (company + normalized title) to drop repeated board mirrors.
+        seen_urls, seen_composite, unique = set(), set(), []
         for lead in leads:
-            key = lead.url.strip().rstrip("/")
-            if key and key not in seen:
-                seen.add(key)
-                unique.append(lead)
+            normalized_url = _normalize_result_url(lead.url)
+            lead.url = normalized_url or lead.url
+            if normalized_url and normalized_url in seen_urls:
+                continue
+            composite_key = _composite_lead_key(lead)
+            if composite_key in seen_composite:
+                continue
+            if normalized_url:
+                seen_urls.add(normalized_url)
+            seen_composite.add(composite_key)
+            unique.append(lead)
 
         recency_hours = float(intent_plan.get("recency_hours") or 24.0)
         unique = self._annotate_posting_age(unique)
@@ -457,7 +461,7 @@ class LeadScoutService:
                     final_url = str(page.url)
                 await context.close()
                 await browser.close()
-                return _is_plausible_job_link(final_url), final_url
+                return _is_valid_job_url(final_url), final_url
         except Exception:
             return False, url
 
@@ -480,7 +484,7 @@ class LeadScoutService:
                 return False, final_url or url, f"blocked_or_error_http_{response.status_code}"
             if "linkedin.com" in final_url.lower() and "/feed" in final_url.lower():
                 recovered_ok, recovered_url = await self._linkedin_fresh_context_resolve(url)
-                if recovered_ok and _is_plausible_job_link(recovered_url):
+                if recovered_ok and _is_valid_job_url(recovered_url):
                     return True, recovered_url, "ok_linkedin_cookie_reset"
                 # Keep uncertain LinkedIn redirect results so L2 parser can classify later.
                 return True, recovered_url or final_url or url, "linkedin_feed_redirect_kept_for_l2"
@@ -507,7 +511,7 @@ class LeadScoutService:
             data = resp.json()
             for row in data.get("organic", []):
                 url = _normalize_result_url(row.get("link", ""))
-                if url and _is_supported_mirror_board_url(url) and _is_plausible_job_link(url):
+                if url and _is_supported_mirror_board_url(url) and _is_valid_job_url(url):
                     return url
             return ""
         except Exception:
@@ -527,7 +531,7 @@ class LeadScoutService:
                 continue
 
             ok, final_url, reason = await self._resolve_redirect_or_block(url)
-            if ok and _is_plausible_job_link(final_url):
+            if ok and _is_valid_job_url(final_url):
                 lead.url = final_url
                 repaired.append(lead)
                 continue
@@ -999,7 +1003,7 @@ class LeadScoutService:
                     continue
                 if not any(d in url for d in JOB_BOARD_DOMAINS):
                     continue
-                if not _is_plausible_job_link(url):
+                if not _is_valid_job_url(url):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
@@ -1049,7 +1053,7 @@ class LeadScoutService:
                     continue
                 if not any(d in url for d in JOB_BOARD_DOMAINS):
                     continue
-                if not _is_plausible_job_link(url):
+                if not _is_valid_job_url(url):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
