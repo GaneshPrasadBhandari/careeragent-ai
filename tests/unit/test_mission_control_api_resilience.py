@@ -14,9 +14,17 @@ def _load_functions():
     class _St:
         def __init__(self):
             self.errors = []
+            self.infos = []
+            self.toasts = []
 
         def error(self, message):
             self.errors.append(str(message))
+
+        def info(self, message):
+            self.infos.append(str(message))
+
+        def toast(self, message):
+            self.toasts.append(str(message))
 
     parse = __import__('urllib.parse', fromlist=['urlparse', 'urlunparse'])
     scope = {
@@ -146,3 +154,34 @@ def test_api_start_hunt_reports_error_after_retries(monkeypatch):
     run_id = scope['_api_start_hunt']('http://api', b'data', 'resume.pdf', {'a': 1})
     assert run_id is None
     assert any('Backend error 503' in msg for msg in scope['st'].errors)
+
+
+def test_api_start_hunt_handles_initializing_signal_then_succeeds():
+    scope = _load_functions()
+
+    class Resp:
+        def __init__(self, code, payload=None, text=''):
+            self.status_code = code
+            self._payload = payload or {}
+            self.text = text or json.dumps(self._payload)
+
+        def json(self):
+            return self._payload
+
+    class RequestsStub:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, *args, **kwargs):
+            return Resp(200, payload={'status': 'ok'})
+
+        def post(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return Resp(503, payload={'status': 'initializing', 'retry_after': 1})
+            return Resp(200, payload={'run_id': 'run_after_warm'})
+
+    scope['requests'] = RequestsStub()
+    run_id = scope['_api_start_hunt']('http://api', b'data', 'resume.pdf', {'a': 1})
+    assert run_id == 'run_after_warm'
+    assert any('Warming Up' in msg for msg in scope['st'].infos)
