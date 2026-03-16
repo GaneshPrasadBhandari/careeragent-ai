@@ -28,7 +28,7 @@ log = logging.getLogger("leadscout")
 REQUEST_TIMEOUT = 20.0
 LLM_QUERY_TIMEOUT_SECONDS = 8.0
 SEARCH_TASK_TIMEOUT_SECONDS = 25.0
-RANKING_TIMEOUT_SECONDS = 8.0
+RANKING_TIMEOUT_SECONDS = 300.0
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -834,6 +834,7 @@ class LeadScoutService:
             profile_skills = [str(s) for s in profile["skills"]]
 
         all_keywords = list(dict.fromkeys(keywords + profile_skills))
+        core_skills = [str(k).strip() for k in all_keywords if str(k).strip()][:21]
 
         # Domain bucketing
         ai_ml = [k for k in all_keywords if any(t in k.lower() for t in [
@@ -871,6 +872,9 @@ class LeadScoutService:
             for role in roles[:2]:
                 queries.append(f"Generative AI {role} LLM")
 
+        for adj in self._adjacent_queries_from_skills(core_skills, limit=5):
+            queries.append(adj)
+
         seen_q: set[str] = set()
         final: list[str] = []
         for q in queries:
@@ -882,6 +886,48 @@ class LeadScoutService:
                     break
 
         return final or ["AI Engineer Python remote", "AI Solution Architect remote"]
+
+    def _adjacent_queries_from_skills(self, skills: list[str], *, limit: int = 5) -> list[str]:
+        bucket_map = {
+            "mlops": ["MLOps Engineer", "Machine Learning Platform Engineer"],
+            "kubernetes": ["Platform Engineer", "Cloud Platform Engineer"],
+            "docker": ["DevOps Engineer", "Site Reliability Engineer"],
+            "aws": ["Cloud Engineer", "Solutions Architect"],
+            "azure": ["Azure AI Engineer", "Cloud Solutions Architect"],
+            "gcp": ["Cloud Engineer", "Data Platform Engineer"],
+            "langchain": ["LLM Engineer", "AI Application Engineer"],
+            "langgraph": ["Agentic AI Engineer", "AI Platform Engineer"],
+            "rag": ["Retrieval Engineer", "Applied AI Engineer"],
+            "pytorch": ["ML Engineer", "Applied Scientist"],
+            "tensorflow": ["ML Engineer", "Applied Scientist"],
+            "airflow": ["Data Engineer", "ML Platform Engineer"],
+            "spark": ["Data Engineer", "Data Platform Engineer"],
+            "kafka": ["Streaming Data Engineer", "Backend Engineer"],
+            "terraform": ["Cloud Infrastructure Engineer", "DevOps Engineer"],
+            "snowflake": ["Analytics Engineer", "Data Engineer"],
+            "databricks": ["Data Engineer", "ML Engineer"],
+            "python": ["Backend Engineer", "Automation Engineer"],
+            "sql": ["Data Engineer", "Analytics Engineer"],
+            "nlp": ["NLP Engineer", "Applied Scientist"],
+            "llm": ["LLM Engineer", "Generative AI Engineer"],
+            "genai": ["Generative AI Engineer", "Applied AI Engineer"],
+        }
+        adjacent: list[str] = []
+        seen: set[str] = set()
+        for raw in skills[:21]:
+            s = str(raw or "").strip().lower()
+            if not s:
+                continue
+            for key, expansions in bucket_map.items():
+                if key in s:
+                    for role in expansions:
+                        q = f"{role} remote United States"
+                        if q.lower() not in seen:
+                            seen.add(q.lower())
+                            adjacent.append(q)
+                            if len(adjacent) >= limit:
+                                return adjacent
+        return adjacent[:limit]
 
     def _detect_seniority(self, profile: dict, roles: list[str]) -> str:
         combined = " ".join([

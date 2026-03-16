@@ -4,6 +4,8 @@ from typing import Any, Dict, List
 
 from careeragent.core.state import AgentState
 
+TRANSITION_TIMEOUT_SECONDS = 300
+
 
 class RankerAgentService:
     """Description: Deterministic ranker.
@@ -17,6 +19,7 @@ class RankerAgentService:
         jobs.sort(key=lambda x: float(x.get("overall_match_percent") or 0.0), reverse=True)
 
         ranking: List[Dict[str, Any]] = []
+        state.meta["l4_l5_transition_timeout_seconds"] = TRANSITION_TIMEOUT_SECONDS
         for i, j in enumerate(jobs[:60], start=1):
             jj = dict(j)
             jj["rank"] = i

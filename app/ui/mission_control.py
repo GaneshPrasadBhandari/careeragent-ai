@@ -364,10 +364,53 @@ def _inject_css() -> None:
 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%) !important;
-        border-right: 1px solid #334155;
+        background: #101216 !important;
+        border-right: 1px solid #1F2937;
     }
-    section[data-testid="stSidebar"] * { color: #c9d1d9 !important; }
+    section[data-testid="stSidebar"] * { color: #E5E7EB !important; }
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] *,
+    section[data-testid="stSidebar"] .stCaption,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] h4,
+    section[data-testid="stSidebar"] h5,
+    section[data-testid="stSidebar"] h6 {
+        background: transparent !important;
+        color: #FFFFFF !important;
+    }
+    section[data-testid="stSidebar"] .stTextInput > div > div > input,
+    section[data-testid="stSidebar"] .stTextArea textarea,
+    section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"],
+    section[data-testid="stSidebar"] .stFileUploader,
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
+    section[data-testid="stSidebar"] .stSlider,
+    section[data-testid="stSidebar"] .stTextInput > div,
+    section[data-testid="stSidebar"] .stTextArea > div,
+    section[data-testid="stSidebar"] .stSelectbox > div {
+        background: transparent !important;
+        border-color: #334155 !important;
+        box-shadow: none !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+        border: 1px dashed #334155 !important;
+        border-radius: 10px !important;
+    }
+    section[data-testid="stSidebar"] hr {
+        border-color: #1F2937 !important;
+    }
+    .sidebar-warmup {
+        border: 1px solid #334155;
+        background: rgba(17, 24, 39, 0.92);
+        color: #F9FAFB;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        font-size: 13px;
+        font-weight: 600;
+    }
 
     /* ── Stat card ── */
     .stat-card {
@@ -551,9 +594,7 @@ def _inject_css() -> None:
     pre,
     pre *,
     code,
-    code *,
-    .stMarkdown,
-    .stMarkdown * {
+    code * {
         color: #1B263B !important;
         -webkit-text-fill-color: #1B263B !important;
         background-color: #FFFFFF !important;
@@ -1387,7 +1428,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
     _render_learning_recommendations(missing)
 
 
-def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict]) -> None:
+def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict], *, is_admin: bool) -> None:
     """Analytics tab."""
     if not status or status.get("progress_pct", 0) < 90:
         st.markdown("""
@@ -1410,43 +1451,44 @@ def render_analytics(api_base: str, run_id: Optional[str], status: Optional[dict
     with c4:
         st.metric("Interview Calls (Predicted)", len(status.get("interviews", []) or []))
 
-    st.markdown("#### 🤖 LLM + Agent Tooling in this run")
-    llm_stack = status.get("llm_stack") or {}
-    if llm_stack:
-        stack_rows = []
-        for purpose, detail in llm_stack.items():
-            stack_rows.append({
-                "Purpose": purpose,
-                "Provider": detail.get("provider", "-"),
-                "Model": detail.get("model", "-"),
-                "Reason": detail.get("why", ""),
-            })
-        st.dataframe(stack_rows, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No LLM stack metadata captured yet.")
+    if is_admin:
+        st.markdown("#### 🤖 LLM + Agent Tooling in this run")
+        llm_stack = status.get("llm_stack") or {}
+        if llm_stack:
+            stack_rows = []
+            for purpose, detail in llm_stack.items():
+                stack_rows.append({
+                    "Purpose": purpose,
+                    "Provider": detail.get("provider", "-"),
+                    "Model": detail.get("model", "-"),
+                    "Reason": detail.get("why", ""),
+                })
+            st.dataframe(stack_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No LLM stack metadata captured yet.")
 
-    lcol1, lcol2 = st.columns(2)
-    with lcol1:
-        langsmith = status.get("langsmith", {}) or {}
-        st.markdown("**LangSmith tracing**")
-        if langsmith.get("enabled"):
-            st.success("Active")
-        else:
-            st.warning("Tracing currently not active (missing key or tracing env flag).")
-        if langsmith.get("dashboard_url"):
-            st.markdown(f"[Open LangSmith project]({langsmith.get('dashboard_url')})")
-        if langsmith.get("run_url"):
-            st.link_button("View Trace", langsmith.get("run_url"), use_container_width=False)
-        if langsmith.get("note"):
-            st.caption(langsmith.get("note"))
-    with lcol2:
-        langgraph = status.get("langgraph", {}) or {}
-        st.markdown("**LangGraph tracing**")
-        if langgraph.get("enabled") and langgraph.get("dashboard_url"):
-            st.markdown(f"[Open LangGraph run trace]({langgraph.get('dashboard_url')})")
-        else:
-            st.caption(langgraph.get("note") or "LangGraph trace URL is not configured.")
-            st.code("Set LANGGRAPH_STUDIO_URL=https://smith.langchain.com/o/<workspace>/projects/<project>")
+        lcol1, lcol2 = st.columns(2)
+        with lcol1:
+            langsmith = status.get("langsmith", {}) or {}
+            st.markdown("**LangSmith tracing**")
+            if langsmith.get("enabled"):
+                st.success("Active")
+            else:
+                st.warning("Tracing currently not active (missing key or tracing env flag).")
+            if langsmith.get("dashboard_url"):
+                st.markdown(f"[Open LangSmith project]({langsmith.get('dashboard_url')})")
+            if langsmith.get("run_url"):
+                st.link_button("View Trace", langsmith.get("run_url"), use_container_width=False)
+            if langsmith.get("note"):
+                st.caption(langsmith.get("note"))
+        with lcol2:
+            langgraph = status.get("langgraph", {}) or {}
+            st.markdown("**LangGraph tracing**")
+            if langgraph.get("enabled") and langgraph.get("dashboard_url"):
+                st.markdown(f"[Open LangGraph run trace]({langgraph.get('dashboard_url')})")
+            else:
+                st.caption(langgraph.get("note") or "LangGraph trace URL is not configured.")
+                st.code("Set LANGGRAPH_STUDIO_URL=https://smith.langchain.com/o/<workspace>/projects/<project>")
 
     applications = status.get("apply_results") or []
     st.markdown("#### 📌 Application tracking")
@@ -1611,17 +1653,22 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
     """
     with st.sidebar:
         st.markdown("""
-        <div style="padding:12px 0 20px">
-            <div style="font-size:18px;font-weight:700;color:#1B263B">🎯 CareerAgent-AI</div>
-            <div style="font-size:12px;color:#5C677D;margin-top:2px">Autonomous Job Hunt Engine</div>
+        <div style="padding:12px 0 20px;background:transparent">
+            <div style="font-size:18px;font-weight:700;color:#FFFFFF">🎯 CareerAgent-AI</div>
+            <div style="font-size:12px;color:#CBD5E1;margin-top:2px">Autonomous Job Hunt Engine</div>
         </div>
         """, unsafe_allow_html=True)
 
-        admin_key = st.text_input("Admin Key", type="password", help="Required for Executive Summary and technical logs")
+        admin_key = st.text_input("🔐 Hidden Admin Gate", type="password", help="Enter admin key to unlock protected controls")
         is_admin = admin_key == "ganesh2026"
 
         # ── API Base URL ──────────────────────────────────────────────────────
-        api_base = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
+        api_base = st.text_input(
+            "Backend URL",
+            value=st.session_state["api_base"],
+            key="api_base_input",
+            disabled=not is_admin,
+        )
         resolved_api_base = _resolve_api_base(api_base)
         st.session_state["api_base"] = resolved_api_base
         api_base = resolved_api_base
@@ -1635,6 +1682,20 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         dot    = "●"
         st.markdown(f'<div style="font-size:13px;color:{color}">{dot} {label}</div>',
                     unsafe_allow_html=True)
+
+        if "warmup_started_at" not in st.session_state:
+            st.session_state["warmup_started_at"] = time.time()
+        warmup_remaining = max(0.0, 10.0 - (time.time() - float(st.session_state.get("warmup_started_at") or 0.0)))
+        if warmup_remaining > 0:
+            st.markdown(
+                f'<div class="sidebar-warmup">⚡ System Warming Up — initial backend handshake in progress ({int(warmup_remaining)}s).</div>',
+                unsafe_allow_html=True,
+            )
+        elif not is_healthy:
+            st.markdown(
+                '<div class="sidebar-warmup">⚡ System Warming Up — backend cold start detected. Please wait while services wake up.</div>',
+                unsafe_allow_html=True,
+            )
 
         st.divider()
 
@@ -1857,7 +1918,7 @@ def main():
         """, unsafe_allow_html=True)
         langsmith = (status or {}).get("langsmith", {}) if status else {}
         fallback_url = f"https://smith.langchain.com/projects?name={langsmith.get('project') or 'careeragent-ai-beta'}"
-        if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
+        if is_admin and langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
             link = langsmith.get("dashboard_url") or fallback_url
             st.markdown(f"[🧭 LangSmith dashboard]({link})")
 
@@ -1963,7 +2024,7 @@ def main():
             _render_learning_recommendations(missing_for_learning)
 
     with tab_analytics:
-        render_analytics(api_base, run_id, status)
+        render_analytics(api_base, run_id, status, is_admin=is_admin)
 
     if is_admin and tab_exec is not None:
         with tab_exec:

@@ -22,6 +22,7 @@ _INTERVIEW_CHANCE_THRESHOLD = 0.55   # was 0.70 — too high when JDs are 403-bl
 _MIN_SCORED_JOBS = 2                  # minimum number of scored jobs to PROCEED
 _MIN_MATCH_PCT = 35.0                 # minimum overall_match_percent for a viable job
 _MIN_VIABLE_JOBS = 1                  # at least 1 job above _MIN_MATCH_PCT to PROCEED
+EVALUATOR_TRANSITION_TIMEOUT_SECONDS = 300
 
 
 def _top_interview_chance(jobs_scored: List[Dict[str, Any]]) -> float:
@@ -71,6 +72,7 @@ class Phase2EvaluatorAgentService:
 
         feedback: List[str] = []
         score = min(1.0, top_chance)
+        state.meta["l4_l5_transition_timeout_seconds"] = EVALUATOR_TRANSITION_TIMEOUT_SECONDS
 
         # ── Force PROCEED when retries exhausted ──────────────────────────
         # This prevents an infinite loop. The HITL ranking review will catch issues.
