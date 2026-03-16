@@ -28,6 +28,8 @@ from urllib.parse import urlparse, urlunparse
 import requests
 import streamlit as st
 
+BACKEND_URL = os.getenv("BACKEND_URL", "https://careeragent-dashboard.onrender.com")
+
 
 class LiveFeedHandler(logging.Handler):
     """Capture orchestrator/agent info logs and mirror them into Mission Control feed."""
@@ -67,11 +69,11 @@ def _install_live_feed_logger() -> None:
 def _default_api_base() -> str:
     api_base = os.getenv("API_BASE_URL")
     if api_base:
-        return api_base.rstrip("/")
+        return _resolve_api_base(api_base)
 
-    api_url = os.getenv("API_URL") or os.getenv("BACKEND_URL")
+    api_url = os.getenv("API_URL") or BACKEND_URL
     if api_url:
-        return api_url.rstrip("/")
+        return _resolve_api_base(api_url)
 
     api_hostport = os.getenv("API_HOSTPORT")
     if api_hostport:
@@ -111,14 +113,15 @@ def _default_api_base() -> str:
         if inferred:
             return f"https://{inferred}.onrender.com"
 
-    return _resolve_api_base("http://localhost:8000")
+    return _resolve_api_base(BACKEND_URL)
 
 
 def _resolve_api_base(raw_value: str) -> str:
     """Normalize backend URL and recover common Render dashboard/API mixups."""
     clean = str(raw_value or "").strip()
+    fallback = str(BACKEND_URL or "").strip() or "http://localhost:8000"
     if not clean:
-        return "http://localhost:8000"
+        clean = fallback
 
     if not clean.startswith(("http://", "https://")):
         host_hint = clean.split("/", 1)[0].split(":", 1)[0].strip().lower()
@@ -137,7 +140,7 @@ def _resolve_api_base(raw_value: str) -> str:
     if any(path.startswith(prefix) for prefix in known_endpoint_prefixes):
         path = ""
 
-    normalized = urlunparse((parsed.scheme, host, path.rstrip("/"), "", "", "")).rstrip("/")
+    normalized = urlunparse((parsed.scheme or "https", host, path.rstrip("/"), "", "", "")).rstrip("/")
     return normalized or "http://localhost:8000"
 
 
@@ -330,15 +333,15 @@ def _inject_css() -> None:
     /* ── Global ── */
     html, body, [class*="css"] {
         font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
-        background-color: #F3F6FB;
-        color: #1B263B;
+        background-color: #FFFFFF;
+        color: #000000;
     }
     .stApp,
     [data-testid="stAppViewContainer"],
     [data-testid="stMain"],
     [data-testid="stMainBlockContainer"] {
-        background-color: #F3F6FB;
-        color: #1B263B;
+        background-color: #FFFFFF;
+        color: #000000;
     }
 
     /* Force readable text in main area (prevents white-on-white in dark browser mode) */
@@ -348,7 +351,7 @@ def _inject_css() -> None:
     [data-testid="stMain"] [data-testid="stMarkdownContainer"] span,
     [data-testid="stMain"] label,
     [data-testid="stMain"] .stCaption {
-        color: #1B263B !important;
+        color: #000000 !important;
     }
 
     [data-testid="stMain"] [data-baseweb="tab-list"] button {
@@ -607,28 +610,28 @@ def _api_post(api_base: str, path: str, timeout: int = 20, **kwargs) -> requests
 
 def _api_health(api_base: str) -> bool:
     candidates = _candidate_api_bases(api_base)
-
     health_paths = ("/health", "/ready", "/")
 
-    # Render cold starts can take 30-90s; keep health probes resilient without
-    # blocking too long on a single request.
-    for timeout, wait_s in ((3, 0.25), (5, 0.5), (8, 1.0), (12, 2.0)):
-        for candidate in candidates:
-            for path in health_paths:
-                resp = _api_get(candidate, path, timeout=timeout)
-                if resp is not None and (
-                    resp.get("status") in {"ok", "healthy"}
-                    or resp.get("ok") is True
-                    or str(resp.get("service") or "").strip().lower() == "careeragent-api"
-                ):
+    # Connection guard budget: do not block health checks beyond 5s per probe.
+    for candidate in candidates:
+        for path in health_paths:
+            resp = _api_get(candidate, path, timeout=5)
+            if resp is not None and (
+                resp.get("status") in {"ok", "healthy", "online"}
+                or resp.get("ok") is True
+                or str(resp.get("service") or "").strip().lower() == "careeragent-api"
+            ):
+                return True
+            try:
+                if requests.get(f"{candidate}{path}", timeout=5).status_code == 200:
                     return True
-                try:
-                    if requests.get(f"{candidate}{path}", timeout=timeout).status_code == 200:
-                        return True
-                except Exception:
-                    pass
-        time.sleep(wait_s)
+            except Exception:
+                pass
     return False
+
+
+def _show_connection_guard() -> None:
+    st.info("🚀 Agent is waking up... Please wait 30 seconds.")
 
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
@@ -654,21 +657,21 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 if r.status_code in {502, 503, 504} and attempt < 8:
                     # Opportunistic warm-up probe before retrying.
                     try:
-                        requests.get(f"{resolved_base.rstrip('/')}/health", timeout=8)
+                        requests.get(f"{resolved_base.rstrip('/')}/health", timeout=5)
                     except Exception:
                         pass
                     time.sleep(min(3.0 * attempt, 18.0))
                     continue
                 break
-        except requests.exceptions.ConnectionError:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             last_err = f"Cannot connect to backend candidate: {resolved_base}"
             continue
         except Exception as exc:
-            st.error(f"Start hunt error: {exc}")
+            st.warning(f"Start hunt request issue: {exc}")
             return None
 
-    if last_err and "Cannot connect" in last_err:
-        st.error("🔴 Cannot connect to backend. Start API with `python api_main.py` (or `uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload`).")
+    if last_err and ("Cannot connect" in last_err or any(code in last_err for code in (" 502", " 503", " 504"))):
+        _show_connection_guard()
     else:
         st.error(last_err or "Backend error: no response payload.")
     return None
@@ -1768,22 +1771,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None))
 
         if not is_healthy:
-            if st.session_state.get("hunt_running") and st.session_state.get("run_id"):
-                st.info("Backend is waking up (Render cold start). Run is queued and status will appear shortly.")
-            else:
-                st.markdown(
-                    """
-                    <div style="margin-top:8px;padding:10px 12px;border-radius:8px;background:#3A1D20;border:1px solid #7F1D1D;color:#FECACA;font-size:13px;line-height:1.45;">
-                        <strong>⚠ Backend health check failed.</strong><br/>
-                        Local run command:<br/>
-                        <code style="color:#FDE68A;">python api_main.py</code> (fallback-safe) <br/>
-                        Optional full FastAPI mode:<br/>
-                        <code style="color:#FDE68A;">uv run uvicorn careeragent.api.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload</code><br/>
-                        On Render, verify the API service is <em>deployed</em> and this dashboard points to its URL. Cold starts can take 30-90s; Start Hunt will still try with retries.
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            _show_connection_guard()
         elif resume_bytes is None:
             st.caption("Upload your resume to begin.")
 
@@ -1799,7 +1787,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                 st.success(f"✓ Run started: `{run_id}`")
                 st.rerun()
             else:
-                st.error("Failed to start run — check backend logs.")
+                _show_connection_guard()
 
         # ── Show current run ID ───────────────────────────────────────────────
         if st.session_state.get("run_id"):

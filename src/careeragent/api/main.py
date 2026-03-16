@@ -2724,10 +2724,14 @@ async def root_health():
 
 
 @app.get("/health")
+async def health():
+    return {"status": "online"}
+
+
 @app.get("/healthz")
 @app.get("/ready")
 @app.get("/readyz")
-async def health():
+async def readiness():
     return {"status": "ok", "service": "careeragent-api", "runs_active": len(_runs)}
 
 
