@@ -28,7 +28,7 @@ from urllib.parse import urlparse, urlunparse
 import requests
 import streamlit as st
 
-BACKEND_URL = os.getenv("BACKEND_URL", "https://careeragent-dashboard.onrender.com")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://careeragent-api.onrender.com")
 
 
 class LiveFeedHandler(logging.Handler):
@@ -71,7 +71,8 @@ def _default_api_base() -> str:
     if api_base:
         return _resolve_api_base(api_base)
 
-    api_url = os.getenv("API_URL") or BACKEND_URL
+    default_backend = str(os.getenv("BACKEND_URL") or "https://careeragent-api.onrender.com").strip()
+    api_url = os.getenv("API_URL") or default_backend
     if api_url:
         return _resolve_api_base(api_url)
 
@@ -113,13 +114,13 @@ def _default_api_base() -> str:
         if inferred:
             return f"https://{inferred}.onrender.com"
 
-    return _resolve_api_base(BACKEND_URL)
+    return _resolve_api_base(default_backend)
 
 
 def _resolve_api_base(raw_value: str) -> str:
     """Normalize backend URL and recover common Render dashboard/API mixups."""
     clean = str(raw_value or "").strip()
-    fallback = str(BACKEND_URL or "").strip() or "http://localhost:8000"
+    fallback = str(os.getenv("BACKEND_URL") or "https://careeragent-api.onrender.com").strip() or "http://localhost:8000"
     if not clean:
         clean = fallback
 
@@ -333,15 +334,15 @@ def _inject_css() -> None:
     /* ── Global ── */
     html, body, [class*="css"] {
         font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
-        background-color: #FFFFFF;
-        color: #000000;
+        background-color: #F8FAFC;
+        color: #0F172A;
     }
     .stApp,
     [data-testid="stAppViewContainer"],
     [data-testid="stMain"],
     [data-testid="stMainBlockContainer"] {
-        background-color: #FFFFFF;
-        color: #000000;
+        background-color: #F8FAFC;
+        color: #0F172A;
     }
 
     /* Force readable text in main area (prevents white-on-white in dark browser mode) */
@@ -363,8 +364,8 @@ def _inject_css() -> None:
 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {
-        background: #1B263B !important;
-        border-right: 1px solid #1e1e2e;
+        background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%) !important;
+        border-right: 1px solid #334155;
     }
     section[data-testid="stSidebar"] * { color: #c9d1d9 !important; }
 
@@ -375,6 +376,7 @@ def _inject_css() -> None:
         border-radius: 10px;
         padding: 16px 20px;
         min-height: 80px;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
     }
     .stat-label { font-size: 11px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.08em; }
     .stat-value { font-size: 28px; font-weight: 700; color: #1B263B; margin: 4px 0 2px; }
@@ -390,11 +392,12 @@ def _inject_css() -> None:
         border-radius: 10px;
         padding: 16px 20px 20px;
         margin: 12px 0;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
     }
     .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     .progress-title  { font-size: 12px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.1em; }
     .progress-pct    { font-size: 20px; font-weight: 700; color: #1B263B; }
-    .progress-track  { background: #1e1e2e; border-radius: 6px; height: 8px; width: 100%; }
+    .progress-track  { background: #E2E8F0; border-radius: 6px; height: 8px; width: 100%; }
     .progress-fill   { height: 8px; border-radius: 6px; transition: width 0.5s ease;
                         background: linear-gradient(90deg, #1B263B 0%, #2D6A4F 100%); }
 
@@ -405,11 +408,12 @@ def _inject_css() -> None:
         border-radius: 10px;
         padding: 14px 18px;
         margin-bottom: 8px;
+        box-shadow: 0 1px 8px rgba(15, 23, 42, 0.04);
     }
     .layer-card.running { border-left: 3px solid #388bfd; }
     .layer-card.ok      { border-left: 3px solid #3fb950; }
     .layer-card.error   { border-left: 3px solid #f85149; }
-    .layer-card.waiting { border-left: 3px solid #21262d; }
+    .layer-card.waiting { border-left: 3px solid #94A3B8; }
     .layer-card.skipped { border-left: 3px solid #8b949e; }
 
     .layer-header   { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -428,8 +432,8 @@ def _inject_css() -> None:
     .meta-key   { color: #6e7681; }
     .meta-val   { color: #334155; }
     .layer-desc    { font-size: 12px; color: #6e7681; margin: 4px 0; }
-    .layer-output  { font-size: 12px; color: #8b949e; margin-top: 8px; padding-top: 8px;
-                     border-top: 1px solid #1e1e2e; }
+    .layer-output  { font-size: 12px; color: #64748B; margin-top: 8px; padding-top: 8px;
+                     border-top: 1px solid #E2E8F0; }
     .output-label  { color: #6e7681; font-size: 11px; text-transform: uppercase; }
     .output-val    { color: #334155; margin-top: 2px; }
 
@@ -644,23 +648,23 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
             # Free-tier Render API services can return 502/503 for up to ~90s during
             # cold start. Keep retrying with bounded exponential backoff so the first
             # Start Hunt click can still succeed without forcing a manual retry.
-            for attempt in range(1, 9):
+            for attempt in range(1, 6):
                 r = requests.post(
                     endpoint,
                     files={"resume": (filename, resume_bytes, "application/octet-stream")},
                     data={"config": json.dumps(config)},
-                    timeout=60,
+                    timeout=30,
                 )
                 if r.status_code == 200:
                     return r.json().get("run_id")
                 last_err = f"Backend error {r.status_code}: {r.text[:200]}"
-                if r.status_code in {502, 503, 504} and attempt < 8:
+                if r.status_code in {502, 503, 504} and attempt < 5:
                     # Opportunistic warm-up probe before retrying.
                     try:
                         requests.get(f"{resolved_base.rstrip('/')}/health", timeout=5)
                     except Exception:
                         pass
-                    time.sleep(min(3.0 * attempt, 18.0))
+                    time.sleep(min(2.5 * attempt, 10.0))
                     continue
                 break
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
@@ -670,10 +674,9 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
             st.warning(f"Start hunt request issue: {exc}")
             return None
 
-    if last_err and ("Cannot connect" in last_err or any(code in last_err for code in (" 502", " 503", " 504"))):
+    if last_err and ("Cannot connect" in last_err):
         _show_connection_guard()
-    else:
-        st.error(last_err or "Backend error: no response payload.")
+    st.error(last_err or "Backend error: no response payload.")
     return None
 
 
