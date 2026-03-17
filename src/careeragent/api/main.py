@@ -1478,7 +1478,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
     async def _heartbeat_loop(layer_id: int) -> None:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(10)
             if state["layers"][layer_id].get("status") != "running":
                 return
             _heartbeat(state, layer_id, detail="long-running step")
@@ -1707,6 +1707,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["jobs_discovered"] = len(state["job_leads"])
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
+        state["job_leads"] = _dedupe_jobs(state.get("job_leads") or [])
+        gc.collect()
         await mark_running(4, f"Scoring {state['jobs_discovered']} jobs against your profile…", tools_used=["matcher", "scorer"], attempt_count=1)
         await asyncio.sleep(0.5)
         try:
@@ -1877,9 +1879,15 @@ async def _run_l4_l5_transition(state: dict, *, threshold: float) -> None:
 def _persist_state(run_id: str) -> None:
     try:
         _runs[run_id]["updated_at"] = _now()
-        state_file = LOGS_DIR / f"state_{run_id}.json"
         data = {k: v for k, v in _runs[run_id].items() if k not in ("job_leads",)}
-        state_file.write_text(json.dumps(data, indent=2, default=str))
+        blob = json.dumps(data, indent=2, default=str)
+        state_files = [
+            LOGS_DIR / f"state_{run_id}.json",
+            Path(tempfile.gettempdir()) / f"state_{run_id}.json",
+        ]
+        for state_file in state_files:
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            state_file.write_text(blob, encoding="utf-8")
     except Exception as exc:
         log.debug("State persist error: %s", exc)
 
@@ -3091,6 +3099,10 @@ async def start_hunt(
     except json.JSONDecodeError:
         cfg = {}
 
+    preferred_run_id = _sanitize_run_id(str(cfg.get("client_run_id") or ""))
+    if preferred_run_id:
+        run_id = preferred_run_id
+
     try:
         # Save uploaded file
         suffix = Path(resume.filename or "resume.pdf").suffix or ".pdf"
@@ -3129,11 +3141,27 @@ async def start_hunt(
 
 @app.get("/hunt/{run_id}/status")
 @traceable(name="api.get_status")
-async def get_status(run_id: str):
+async def get_status(
+    run_id: str,
+    wait_for_heartbeat: int = 0,
+    max_wait_seconds: int = 120,
+    since_heartbeat: str = "",
+):
     """Poll this endpoint for real-time progress updates."""
     run_id = _sanitize_run_id(run_id)
     state = _refresh_run_state(run_id)
     _try_recover_stalled_run(run_id, state)
+
+    if int(wait_for_heartbeat or 0) == 1:
+        deadline = time.monotonic() + max(0, min(int(max_wait_seconds or 0), 120))
+        baseline = str(since_heartbeat or "").strip()
+        while time.monotonic() < deadline:
+            state = _refresh_run_state(run_id)
+            incoming = str(state.get("last_heartbeat_at") or "")
+            if incoming and incoming != baseline:
+                break
+            await asyncio.sleep(1)
+
     state = _refresh_run_state(run_id)
     return {
         "run_id":           state["run_id"],

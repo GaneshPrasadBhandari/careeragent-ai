@@ -8,6 +8,7 @@ Uses Serper /search organic + Tavily as primary sources.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ DISCOVERY_CACHED_JOB_INJECTION_COUNT = int(os.getenv("DISCOVERY_CACHED_JOB_INJEC
 LLM_QUERY_TIMEOUT_SECONDS = 8.0
 SEARCH_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SEARCH_TIMEOUT_SECONDS", "120.0"))
 RANKING_TIMEOUT_SECONDS = 300.0
+PROGRESS_HEARTBEAT_SECONDS = 5.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
 CACHED_JOBS_FILE = Path(__file__).resolve().parents[3] / "data" / "raw" / "cached_jobs.json"
@@ -100,6 +102,13 @@ def _normalize_result_url(url: str) -> str:
     path = parsed.path.rstrip("/")
     # Normalize to https to avoid browser "connection is not private" for legacy http links.
     base = f"https://{parsed.netloc}{path}"
+
+    host = (parsed.netloc or "").lower()
+    query = parse_qs(parsed.query or "")
+    if "indeed.com" in host and query.get("jk"):
+        return f"{base}?jk={query['jk'][0]}"
+    if "glassdoor.com" in host and query.get("jl"):
+        return f"{base}?jl={query['jl'][0]}"
 
     # Canonicalize URLs by stripping query/fragments (tracking params, campaign tags).
     # This ensures the same job reached via different query strings dedupes reliably.
@@ -232,6 +241,11 @@ def _is_valid_job_url(url: str) -> bool:
         for token in ("greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com", "icims.com", "jobvite.com", "smartrecruiters.com")
     ) and any(token in path for token in ("/job", "/jobs/", "/recruiting/"))
 
+
+
+def _is_plausible_job_link(url: str) -> bool:
+    """Backward-compatible alias used in unit tests."""
+    return _is_valid_job_url(url)
 
 def _is_supported_mirror_board_url(url: str) -> bool:
     low = str(url or "").lower()
@@ -375,24 +389,43 @@ class LeadScoutService:
 
         fetched_jobs = 0
         started_at = time.monotonic()
+        stop_progress_heartbeat = False
+
+        def _emit_progress(payload_leads: list[JobLead] | None = None) -> None:
+            if not progress_callback:
+                return
+            payload = [lead.to_dict() for lead in (payload_leads or [])]
+            try:
+                progress_callback(fetched_jobs, payload)
+            except Exception as exc:
+                log.debug("LeadScout progress callback error: %s", exc)
+
+        async def _progress_heartbeat() -> None:
+            while not stop_progress_heartbeat:
+                await asyncio.sleep(PROGRESS_HEARTBEAT_SECONDS)
+                _emit_progress([])
+
+        heartbeat_task = asyncio.create_task(_progress_heartbeat()) if progress_callback else None
 
         def _handle_batch_progress(batch_size: int, batch_payload: list[JobLead]) -> None:
             nonlocal fetched_jobs
             if batch_size <= 0:
                 return
             fetched_jobs += int(batch_size)
-            if progress_callback:
-                payload = [lead.to_dict() for lead in batch_payload]
-                try:
-                    progress_callback(fetched_jobs, payload)
-                except Exception as exc:
-                    log.debug("LeadScout progress callback error: %s", exc)
+            _emit_progress(batch_payload)
 
-        results = await self._run_source_tasks(
-            source_coros,
-            timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
-            batch_progress_callback=_handle_batch_progress,
-        )
+        try:
+            results = await self._run_source_tasks(
+                source_coros,
+                timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
+                batch_progress_callback=_handle_batch_progress,
+            )
+        finally:
+            stop_progress_heartbeat = True
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
 
         leads: list[JobLead] = []
         for batch in results:
@@ -972,10 +1005,28 @@ class LeadScoutService:
             rows = json.loads(CACHED_JOBS_FILE.read_text(encoding="utf-8"))
         except Exception:
             return []
+
+        target_roles = [str(r).strip().lower() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
+        keywords = [str(k).strip().lower() for k in (intent_plan.get("keywords") or []) if str(k).strip()]
+        score_terms = target_roles + keywords
+
+        def _row_score(row: dict) -> int:
+            hay = " ".join(
+                [
+                    str(row.get("title") or ""),
+                    str(row.get("description") or ""),
+                    str(row.get("company") or ""),
+                ]
+            ).lower()
+            if not score_terms:
+                return 1
+            return sum(3 if term in str(row.get("title") or "").lower() else 1 for term in score_terms if term and term in hay)
+
+        ranked_rows = sorted((row for row in rows if isinstance(row, dict)), key=_row_score, reverse=True)
         location = self._resolve_location(intent_plan)
         remote = bool(intent_plan.get("geo_preferences", {}).get("remote", True))
         cached: list[JobLead] = []
-        for idx, row in enumerate(rows[:limit], start=1):
+        for idx, row in enumerate(ranked_rows, start=1):
             title = str((row or {}).get("title") or "Software Engineer").strip()
             company = str((row or {}).get("company") or "Cached Company").strip()
             url = _normalize_result_url(str((row or {}).get("url") or ""))
@@ -994,6 +1045,8 @@ class LeadScoutService:
                     posted_date=str((row or {}).get("posted_date") or ""),
                 )
             )
+            if len(cached) >= limit:
+                break
         return cached
 
     # Aliases

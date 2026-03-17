@@ -31,6 +31,28 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised by unit tests
 logger = logging.getLogger(__name__)
 
 
+def _load_env_file() -> None:
+    """Parse `.env` without importing heavy dotenv dependencies."""
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key or key in os.environ:
+                continue
+            os.environ[key] = value.strip().strip('"').strip("'")
+    except Exception as exc:  # pragma: no cover - env parsing should never block startup
+        logger.debug("Skipping .env bootstrap due to parse error: %s", exc)
+
+
+_load_env_file()
+
+
 def _disable_langchain_tracing_due_to_error(exc: Exception) -> None:
     """Fail-safe: disable tracing when LangSmith auth/ingest errors surface."""
     msg = f"{type(exc).__name__}: {exc}".lower()
