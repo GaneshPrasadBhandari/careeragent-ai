@@ -26,6 +26,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import fcntl
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -1676,6 +1677,14 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 diagnostics=state.get("discovery_diagnostics", {}),
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
+            if len(leads) > 0:
+                state["pending_action"] = None
+                state.setdefault("layer_debug", {}).setdefault("L3", {})["handoff_to_l4"] = {
+                    "auto_triggered": True,
+                    "raw_jobs": len(leads),
+                    "ts": _now(),
+                }
+                _log_agent(state, 3, f"Discovery complete with {len(leads)} jobs. Auto-advancing to L4 scoring.")
         except asyncio.TimeoutError:
             await mark_error(3, f"Discovery timeout after {int(DISCOVERY_TIMEOUT_SECONDS)}s")
             partial = _dedupe_jobs(state.get("job_leads") or [])
@@ -1789,6 +1798,9 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         log.error("Pipeline run %s FATAL ERROR:\n%s", run_id, tb)
         state["status"] = "error"
         state["errors"].append(str(exc))
+        _append_error_log(run_id, tb)
+        state.setdefault("layer_debug", {}).setdefault("L9", {})["error_log_file"] = str(LOGS_DIR / f"error_{run_id}.txt")
+        state.setdefault("layer_debug", {}).setdefault("L9", {})["last_traceback"] = tb
         _persist_state(run_id)
     finally:
         for layer_id in list(heartbeat_tasks.keys()):
@@ -1859,10 +1871,27 @@ def _persist_state(run_id: str) -> None:
     try:
         _runs[run_id]["updated_at"] = _now()
         state_file = LOGS_DIR / f"state_{run_id}.json"
+        lock_file = LOGS_DIR / f"state_{run_id}.lock"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
         data = {k: v for k, v in _runs[run_id].items() if k not in ("job_leads",)}
-        state_file.write_text(json.dumps(data, indent=2, default=str))
+        tmp_file = state_file.with_suffix(".json.tmp")
+        with lock_file.open("a+", encoding="utf-8") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            tmp_file.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+            os.replace(tmp_file, state_file)
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
     except Exception as exc:
         log.debug("State persist error: %s", exc)
+
+
+def _append_error_log(run_id: str, text: str) -> None:
+    error_file = LOGS_DIR / f"error_{run_id}.txt"
+    try:
+        error_file.parent.mkdir(parents=True, exist_ok=True)
+        with error_file.open("a", encoding="utf-8") as fh:
+            fh.write(text.rstrip() + "\n")
+    except Exception as exc:
+        log.debug("Error log append failed for %s: %s", run_id, exc)
 
 
 def _update_run_status(run_id: str, **fields: Any) -> None:
@@ -1912,7 +1941,12 @@ def _refresh_run_state(run_id: str) -> dict:
     disk_state: dict | None = None
     if state_file.exists():
         try:
-            disk_state = json.loads(state_file.read_text())
+            lock_file = LOGS_DIR / f"state_{run_id}.lock"
+            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            with lock_file.open("a+", encoding="utf-8") as lock_fh:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_SH)
+                disk_state = json.loads(state_file.read_text(encoding="utf-8"))
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         except Exception as exc:
             log.debug("State reload error for %s: %s", run_id, exc)
 
@@ -3114,6 +3148,14 @@ async def get_status(
             await asyncio.sleep(1)
 
     state = _refresh_run_state(run_id)
+    error_file = LOGS_DIR / f"error_{run_id}.txt"
+    error_tail: list[str] = []
+    if error_file.exists():
+        try:
+            lines = error_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+            error_tail = lines[-120:]
+        except Exception:
+            error_tail = []
     return {
         "run_id":           state["run_id"],
         "status":           state["status"],
@@ -3147,6 +3189,8 @@ async def get_status(
         "resume_scores":    state.get("resume_scores", {}),
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
+        "error_log_tail":   error_tail,
+        "error_log_file":   str(error_file) if error_file.exists() else None,
         "last_heartbeat_at": state.get("last_heartbeat_at"),
         "created_at":       state["created_at"],
         "completed_at":     state["completed_at"],

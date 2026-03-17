@@ -8,6 +8,7 @@ Uses Serper /search organic + Tavily as primary sources.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
@@ -35,6 +36,7 @@ MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
 BATCH_COMMIT_SIZE = 5
 CHECKPOINT_PATH = "/tmp/discovery_checkpoint.json"
+CHECKPOINT_LOCK_PATH = f"{CHECKPOINT_PATH}.lock"
 
 os.environ.setdefault("PLAYWRIGHT_BROWSER_TYPE", "chromium")
 
@@ -363,9 +365,12 @@ class LeadScoutService:
         }
         tmp_path = f"{CHECKPOINT_PATH}.tmp"
         try:
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp_path, CHECKPOINT_PATH)
+            with open(CHECKPOINT_LOCK_PATH, "a+", encoding="utf-8") as lock_fh:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                with open(tmp_path, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh)
+                os.replace(tmp_path, CHECKPOINT_PATH)
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         except Exception as exc:
             log.warning("LeadScout checkpoint write failed: %s", exc)
 
