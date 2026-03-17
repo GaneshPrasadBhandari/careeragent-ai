@@ -31,6 +31,16 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised by unit tests
 logger = logging.getLogger(__name__)
 
 
+def _disable_langchain_tracing_due_to_error(exc: Exception) -> None:
+    """Fail-safe: disable tracing when LangSmith auth/ingest errors surface."""
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    if "langsmith" not in msg and "langchain" not in msg:
+        return
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    os.environ["LANGSMITH_TRACING"] = "false"
+    logger.warning("LangSmith/LangChain tracing disabled after initialization error: %s", exc)
+
+
 def _dependency_missing_app(exc: ModuleNotFoundError) -> Callable[..., Any]:
     """ASGI fallback used when FastAPI dependency is unavailable."""
 
@@ -125,7 +135,14 @@ else:
         global _backend_app, _backend_error, _backend_ready
         try:
             gc.collect()
-            _backend_app = importlib.import_module("careeragent.api.main").app
+            try:
+                _backend_app = importlib.import_module("careeragent.api.main").app
+            except Exception as exc:  # noqa: BLE001
+                _disable_langchain_tracing_due_to_error(exc)
+                if os.getenv("LANGCHAIN_TRACING_V2", "true").lower() == "false":
+                    _backend_app = importlib.import_module("careeragent.api.main").app
+                else:
+                    raise
             _backend_ready = True
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to initialize careeragent.api.main: %s", exc)
