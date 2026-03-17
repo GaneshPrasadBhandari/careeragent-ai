@@ -40,5 +40,5 @@ def test_api_get_status_uses_long_polling_and_tracks_heartbeat():
     assert out is not None
     assert "wait_for_heartbeat=1" in called["path"]
     assert "max_wait_seconds=12" in called["path"]
-    assert called["timeout"] == 15
+    assert called["timeout"] == 120
     assert scope["st"].session_state["last_heartbeat_at"] == "2026-01-01T00:00:10+00:00"
