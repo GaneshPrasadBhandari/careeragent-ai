@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sqlite3
+import fcntl
 import threading
 import time
 import uuid
@@ -33,14 +34,18 @@ import streamlit as st
 BACKEND_URL = os.getenv("BACKEND_URL", "https://careeragent-api.onrender.com")
 
 DISCOVERY_CHECKPOINT_PATH = Path("/tmp/discovery_checkpoint.json")
+DISCOVERY_CHECKPOINT_LOCK_PATH = Path("/tmp/discovery_checkpoint.json.lock")
 
 
 def _load_discovery_checkpoint() -> Optional[dict]:
     try:
         if not DISCOVERY_CHECKPOINT_PATH.exists():
             return None
-        with DISCOVERY_CHECKPOINT_PATH.open("r", encoding="utf-8") as fh:
-            payload = json.load(fh)
+        with DISCOVERY_CHECKPOINT_LOCK_PATH.open("a+", encoding="utf-8") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_SH)
+            with DISCOVERY_CHECKPOINT_PATH.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         if not isinstance(payload, dict):
             return None
         jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
@@ -835,7 +840,10 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
     if not raw:
         return None
     if raw.get("last_heartbeat_at"):
-        st.session_state["last_heartbeat_at"] = raw.get("last_heartbeat_at")
+        incoming_hb = str(raw.get("last_heartbeat_at") or "")
+        if incoming_hb != str(st.session_state.get("last_heartbeat_at") or ""):
+            st.session_state["last_heartbeat_received_at"] = time.time()
+        st.session_state["last_heartbeat_at"] = incoming_hb
 
     # Backward/alternate backend compatibility: normalize common field variants.
     if "progress_pct" not in raw and "progress_percent" in raw:
@@ -915,6 +923,8 @@ def _init_session():
         "api_base":       _default_api_base(),
         "last_poll":      0.0,
         "last_heartbeat_at": "",
+        "last_heartbeat_received_at": 0.0,
+        "forced_refresh_count": 0,
         "last_backend_error": "",
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
@@ -1345,6 +1355,10 @@ def render_stepwise_details(status: Optional[dict]) -> None:
         "layer_debug": layer_debug,
     }
     with st.expander("🧱 Layer Debug Logs (per layer)", expanded=False):
+        error_tail = status.get("error_log_tail") or []
+        if error_tail:
+            st.caption("error_log.txt (latest traceback tail)")
+            st.code("\n".join(error_tail), language="text")
         for lid in range(10):
             with st.expander(f"L{lid} debug", expanded=False):
                 st.json((layer_debug.get(f"L{lid}", {}) if isinstance(layer_debug, dict) else {}))
@@ -2058,6 +2072,14 @@ def main():
             # Stop auto-refresh when done
             if fresh.get("status") in ("completed", "error"):
                 st.session_state["hunt_running"] = False
+
+    if run_id and st.session_state.get("hunt_running"):
+        last_hb_seen = float(st.session_state.get("last_heartbeat_received_at") or 0.0)
+        if last_hb_seen > 0 and (now - last_hb_seen) > 15.0:
+            st.session_state["forced_refresh_count"] = int(st.session_state.get("forced_refresh_count") or 0) + 1
+            st.session_state["last_poll"] = 0.0
+            st.warning("Heartbeat lag detected (>15s). Forcing Streamlit hard refresh.")
+            st.rerun()
 
     pending_start = st.session_state.get("pending_start")
     if (not run_id) and pending_start and st.session_state.get("hunt_running") and (now - st.session_state["last_poll"] > 3.0):
