@@ -1595,10 +1595,24 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 "extracted_skills": intent.get("extracted_skills", []),
                 "keywords": intent.get("keywords", []),
             }
+
+            last_discovery_progress_chunk = -1
+
+            def _on_discovery_chunk(fetched_jobs: int) -> None:
+                nonlocal last_discovery_progress_chunk
+                chunk = int(fetched_jobs // 10)
+                if chunk <= last_discovery_progress_chunk:
+                    return
+                last_discovery_progress_chunk = chunk
+                chunk_progress = min(59.0, 40.0 + (chunk * 5.0))
+                state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), chunk_progress)
+                state["last_heartbeat_at"] = _now()
+                _log_agent(state, 3, f"Discovery in progress: {fetched_jobs} jobs fetched ({chunk_progress:.0f}%).")
+
             if not intent.get("extracted_skills"):
                 _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
             leads  = await asyncio.wait_for(
-                scout.search_jobs(intent), timeout=DISCOVERY_TIMEOUT_SECONDS
+                scout.search_jobs(intent, progress_callback=_on_discovery_chunk), timeout=DISCOVERY_TIMEOUT_SECONDS
             )
             state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
 

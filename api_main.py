@@ -79,7 +79,6 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI e
 
     path = str(scope.get("path") or "/")
     if _is_health_path(path):
-        _ensure_lazy_warmup()
         headers, body = _json_response(200, {"status": "online"})
         await send({"type": "http.response.start", "status": 200, "headers": headers})
         await send({"type": "http.response.body", "body": body})
