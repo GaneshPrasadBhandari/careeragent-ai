@@ -751,6 +751,9 @@ def _show_connection_guard() -> None:
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     candidates = _candidate_api_bases(api_base)
     last_err = None
+    client_run_id = f"{int(time.time() * 1000000):012d}"[-12:]
+    payload_config = dict(config or {})
+    payload_config.setdefault("client_run_id", client_run_id)
     for resolved_base in candidates:
         try:
             endpoint = f"{resolved_base.rstrip('/')}/hunt/start"
@@ -762,11 +765,11 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 r = requests.post(
                     endpoint,
                     files={"resume": (filename, resume_bytes, "application/octet-stream")},
-                    data={"config": json.dumps(config)},
+                    data={"config": json.dumps(payload_config)},
                     timeout=30,
                 )
                 if r.status_code == 200:
-                    return r.json().get("run_id")
+                    return r.json().get("run_id") or client_run_id
                 payload = {}
                 try:
                     payload = r.json() if r.text else {}
@@ -810,7 +813,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
     last_hb = str(st.session_state.get("last_heartbeat_at") or "")
-    path = f"/hunt/{run_id}/status?wait_for_heartbeat=1&max_wait_seconds=12&since_heartbeat={quote_plus(last_hb)}"
+    path = f"/hunt/{run_id}/status?wait_for_heartbeat=1&max_wait_seconds=120&since_heartbeat={quote_plus(last_hb)}"
     raw = _api_get(api_base, path, timeout=120)
     if not raw:
         return None
