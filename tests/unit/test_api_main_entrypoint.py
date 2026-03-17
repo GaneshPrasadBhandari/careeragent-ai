@@ -97,3 +97,42 @@ def test_gateway_pending_run_status_is_registered_before_backend_ready(monkeypat
     body = status.json()
     assert body.get("run_id") == "pending123456"
     assert body.get("status") == "queued"
+
+
+def test_pending_handshake_is_dispatched_once_backend_ready(monkeypatch) -> None:
+    api_main = _load_api_main_module()
+    api_main._backend_ready = False
+    api_main._backend_app = None
+    api_main._backend_error = None
+    monkeypatch.setattr(api_main, "_ensure_lazy_warmup", lambda: None)
+
+    client = TestClient(api_main.app)
+    run_id = "dispatch123456"
+    started = client.post(
+        "/hunt/start",
+        files={"resume": ("resume.txt", b"hello", "text/plain")},
+        data={"config": '{"client_run_id":"dispatch123456"}'},
+    )
+    assert started.status_code == 200
+    assert started.json().get("run_id") == run_id
+
+    async def fake_backend(scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b'{"run_id":"dispatch123456","status":"started"}'})
+
+    api_main._backend_app = fake_backend
+    api_main._backend_ready = True
+
+    status = client.get(f"/hunt/{run_id}/status")
+    assert status.status_code == 200
+
+    # Trigger task flush; the pending queue should clear after replay.
+    import time as _t
+    for _ in range(20):
+        if run_id not in api_main._pending_hunt_runs:
+            break
+        _t.sleep(0.02)
+        client.get("/health")
+
+    assert run_id not in api_main._pending_hunt_runs
