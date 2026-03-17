@@ -27,6 +27,11 @@ _backend_ready = False
 logger = logging.getLogger(__name__)
 
 
+def _is_hunt_start_path(path: str) -> bool:
+    normalized = (path or "/").split("?", 1)[0].rstrip("/") or "/"
+    return normalized in {"/hunt/start", "/start_hunt"}
+
+
 def _is_health_path(path: str) -> bool:
     normalized = (path or "/").split("?", 1)[0].rstrip("/") or "/"
     return normalized in {"/", "/health", "/healthz", "/ready", "/readyz"}
@@ -82,6 +87,12 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:  # ASGI e
 
     if not _backend_ready or _backend_app is None:
         if _backend_error is None:
+            _ensure_lazy_warmup()
+            if _is_hunt_start_path(path):
+                headers, body = _json_response(202, {"status": "loading_models", "retry_after": 3})
+                await send({"type": "http.response.start", "status": 202, "headers": headers})
+                await send({"type": "http.response.body", "body": body})
+                return
             headers, body = _json_response(503, {"status": "initializing", "retry_after": 5})
             await send({"type": "http.response.start", "status": 503, "headers": headers})
             await send({"type": "http.response.body", "body": body})
