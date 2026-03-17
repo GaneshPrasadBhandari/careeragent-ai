@@ -26,7 +26,6 @@ import sqlite3
 import sys
 import tempfile
 import time
-import fcntl
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -38,8 +37,6 @@ from urllib.parse import quote_plus, urlparse
 
 import importlib.machinery
 import importlib.util
-
-os.environ.setdefault("PLAYWRIGHT_BROWSER_TYPE", "chromium")
 
 
 def _repair_pydantic_shadowing() -> None:
@@ -157,7 +154,6 @@ except ModuleNotFoundError:  # pragma: no cover - constrained env fallback
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.core.config import configure_runtime_env
 from careeragent.core.settings import Settings
-from careeragent.managers.leadscout_service import LeadScoutService
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
 from careeragent.services.notification_service import NotificationService
 from careeragent.tools.llm_tools import GeminiClient
@@ -182,6 +178,12 @@ DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_TIMEOUT_SECONDS", "300"))
 KEEPALIVE_INTERVAL_SECONDS = float(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))
 HEALTH_PAYLOAD = {"status": "online"}
 HEALTH_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
+RUN_ID_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _sanitize_run_id(run_id: str) -> str:
+    cleaned = RUN_ID_SAFE_PATTERN.sub("", str(run_id or "").strip())
+    return cleaned[:64]
 
 
 def _public_base_url() -> str:
@@ -1470,7 +1472,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
     async def _heartbeat_loop(layer_id: int) -> None:
         while True:
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
             if state["layers"][layer_id].get("status") != "running":
                 return
             _heartbeat(state, layer_id, detail="long-running step")
@@ -1586,52 +1588,57 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             # Continue with empty profile rather than aborting
             state["profile"] = {"name": "Candidate", "skills": [], "experience": []}
 
-        gc.collect()
-
         # ── L3: Discovery — Hunt Job Boards ──────────────────────────────────
         await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
         _update_run_status(run_id, status="running", jobs_discovered=int(state.get("jobs_discovered") or 0))
-        scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
-        state.setdefault("discovery_diagnostics", {})
+        try:
+            from careeragent.managers.leadscout_service import LeadScoutService
+            scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
+            state.setdefault("discovery_diagnostics", {})
+        except ImportError:
+            scout = None
 
         try:
-            intent = _build_intent(state["profile"], state["config"])
-            state.setdefault("layer_debug", {}).setdefault("L3", {})["intent_bridge"] = {
-                "target_roles": intent.get("target_roles", []),
-                "extracted_skills": intent.get("extracted_skills", []),
-                "keywords": intent.get("keywords", []),
-            }
+            if scout:
+                intent = _build_intent(state["profile"], state["config"])
+                state.setdefault("layer_debug", {}).setdefault("L3", {})["intent_bridge"] = {
+                    "target_roles": intent.get("target_roles", []),
+                    "extracted_skills": intent.get("extracted_skills", []),
+                    "keywords": intent.get("keywords", []),
+                }
+                last_discovery_progress_chunk = -1
+                streamed_leads: list[dict[str, Any]] = []
 
-            last_discovery_progress_chunk = -1
-            streamed_leads: list[dict[str, Any]] = []
+                def _on_discovery_chunk(fetched_jobs: int, batch_payload: list[dict[str, Any]]) -> None:
+                    nonlocal last_discovery_progress_chunk
+                    if batch_payload:
+                        streamed_leads.extend(batch_payload)
+                        deduped = _dedupe_jobs(streamed_leads)
+                        state["job_leads"] = deduped
+                        state.setdefault("layer_debug", {}).setdefault("L3", {})["stream_batches"] = (
+                            state.get("layer_debug", {}).get("L3", {}).get("stream_batches", 0) + 1
+                        )
+                        _update_run_status(run_id, jobs_discovered=len(deduped))
 
-            def _on_discovery_chunk(fetched_jobs: int, batch_payload: list[dict[str, Any]]) -> None:
-                nonlocal last_discovery_progress_chunk
-                if batch_payload:
-                    streamed_leads.extend(batch_payload)
-                    deduped = _dedupe_jobs(streamed_leads)
-                    state["job_leads"] = deduped
-                    state.setdefault("layer_debug", {}).setdefault("L3", {})["stream_batches"] = (
-                        state.get("layer_debug", {}).get("L3", {}).get("stream_batches", 0) + 1
-                    )
-                    _update_run_status(run_id, jobs_discovered=len(deduped))
+                    chunk = int(max(0, fetched_jobs) // 10)
+                    chunk_progress = min(49.0, 40.0 + (chunk * 1.0))
+                    if chunk > last_discovery_progress_chunk:
+                        last_discovery_progress_chunk = chunk
+                        _log_agent(state, 3, f"Discovery in progress: {fetched_jobs} jobs fetched ({chunk_progress:.0f}%).")
 
-                chunk = int(max(0, fetched_jobs) // 10)
-                chunk_progress = min(49.0, 40.0 + (chunk * 1.0))
-                if chunk > last_discovery_progress_chunk:
-                    last_discovery_progress_chunk = chunk
-                    _log_agent(state, 3, f"Discovery in progress: {fetched_jobs} jobs fetched ({chunk_progress:.0f}%).")
+                    state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), chunk_progress)
+                    state["last_heartbeat_at"] = _now()
+                    _persist_state(run_id)
 
-                state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), chunk_progress)
-                state["last_heartbeat_at"] = _now()
-                _persist_state(run_id)
-
-            if not intent.get("extracted_skills"):
-                _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
-            leads  = await asyncio.wait_for(
-                scout.search_jobs(intent, progress_callback=_on_discovery_chunk), timeout=DISCOVERY_TIMEOUT_SECONDS
-            )
-            state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
+                if not intent.get("extracted_skills"):
+                    _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
+                leads  = await asyncio.wait_for(
+                    scout.search_jobs(intent, progress_callback=_on_discovery_chunk), timeout=DISCOVERY_TIMEOUT_SECONDS
+                )
+                state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
+            else:
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                state["discovery_diagnostics"] = {"providers": {}, "counts": {}, "fallback_reason": "LeadScout service unavailable"}
 
             # Recovery guard: when external providers are unavailable (or return
             # zero leads), keep the L3->L9 pipeline operational with demo leads.
@@ -1654,8 +1661,6 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 leads = _dedupe_jobs(leads)[:min_raw_jobs]
             state["job_leads"]       = leads[:min_raw_jobs]
             state["jobs_discovered"] = len(state["job_leads"])
-            if state.get("discovery_diagnostics", {}).get("source_timeout_hit"):
-                state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), 50.0)
             state["layer_debug"]["L3"] = {
                 "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
                 "sample_jobs": leads[:5],
@@ -1677,14 +1682,6 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 diagnostics=state.get("discovery_diagnostics", {}),
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
-            if len(leads) > 0:
-                state["pending_action"] = None
-                state.setdefault("layer_debug", {}).setdefault("L3", {})["handoff_to_l4"] = {
-                    "auto_triggered": True,
-                    "raw_jobs": len(leads),
-                    "ts": _now(),
-                }
-                _log_agent(state, 3, f"Discovery complete with {len(leads)} jobs. Auto-advancing to L4 scoring.")
         except asyncio.TimeoutError:
             await mark_error(3, f"Discovery timeout after {int(DISCOVERY_TIMEOUT_SECONDS)}s")
             partial = _dedupe_jobs(state.get("job_leads") or [])
@@ -1702,8 +1699,6 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             else:
                 state["job_leads"] = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
             state["jobs_discovered"] = len(state["job_leads"])
-
-        gc.collect()
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
         await mark_running(4, f"Scoring {state['jobs_discovered']} jobs against your profile…", tools_used=["matcher", "scorer"], attempt_count=1)
@@ -1753,8 +1748,6 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         )
         state["layers"][4]["output"] = f"{len(scored)} jobs scored"
 
-        gc.collect()
-
         # ── L5: Evaluator + Ranking + HITL ───────────────────────────────────
         await mark_running(5, "Ranking jobs by interview probability…", tools_used=["ranking_evaluator"], attempt_count=1)
         await asyncio.sleep(0.4)
@@ -1798,9 +1791,6 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         log.error("Pipeline run %s FATAL ERROR:\n%s", run_id, tb)
         state["status"] = "error"
         state["errors"].append(str(exc))
-        _append_error_log(run_id, tb)
-        state.setdefault("layer_debug", {}).setdefault("L9", {})["error_log_file"] = str(LOGS_DIR / f"error_{run_id}.txt")
-        state.setdefault("layer_debug", {}).setdefault("L9", {})["last_traceback"] = tb
         _persist_state(run_id)
     finally:
         for layer_id in list(heartbeat_tasks.keys()):
@@ -1871,27 +1861,10 @@ def _persist_state(run_id: str) -> None:
     try:
         _runs[run_id]["updated_at"] = _now()
         state_file = LOGS_DIR / f"state_{run_id}.json"
-        lock_file = LOGS_DIR / f"state_{run_id}.lock"
-        lock_file.parent.mkdir(parents=True, exist_ok=True)
         data = {k: v for k, v in _runs[run_id].items() if k not in ("job_leads",)}
-        tmp_file = state_file.with_suffix(".json.tmp")
-        with lock_file.open("a+", encoding="utf-8") as lock_fh:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-            tmp_file.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-            os.replace(tmp_file, state_file)
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        state_file.write_text(json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.debug("State persist error: %s", exc)
-
-
-def _append_error_log(run_id: str, text: str) -> None:
-    error_file = LOGS_DIR / f"error_{run_id}.txt"
-    try:
-        error_file.parent.mkdir(parents=True, exist_ok=True)
-        with error_file.open("a", encoding="utf-8") as fh:
-            fh.write(text.rstrip() + "\n")
-    except Exception as exc:
-        log.debug("Error log append failed for %s: %s", run_id, exc)
 
 
 def _update_run_status(run_id: str, **fields: Any) -> None:
@@ -1936,31 +1909,38 @@ def _refresh_run_state(run_id: str) -> dict:
     polling status from a different worker than the one executing background
     pipeline tasks.
     """
-    mem_state = _runs.get(run_id)
-    state_file = LOGS_DIR / f"state_{run_id}.json"
+    clean_run_id = _sanitize_run_id(run_id)
+    if not clean_run_id:
+        raise HTTPException(404, "Run ID is missing or invalid")
+
+    mem_state = _runs.get(clean_run_id)
+    state_files = [
+        LOGS_DIR / f"state_{clean_run_id}.json",
+        Path(tempfile.gettempdir()) / f"state_{clean_run_id}.json",
+    ]
     disk_state: dict | None = None
-    if state_file.exists():
+    for state_file in state_files:
+        if not state_file.exists():
+            continue
         try:
-            lock_file = LOGS_DIR / f"state_{run_id}.lock"
-            lock_file.parent.mkdir(parents=True, exist_ok=True)
-            with lock_file.open("a+", encoding="utf-8") as lock_fh:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_SH)
-                disk_state = json.loads(state_file.read_text(encoding="utf-8"))
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            candidate = json.loads(state_file.read_text(encoding="utf-8"))
+            if isinstance(candidate, dict):
+                if disk_state is None or _state_rank(candidate) >= _state_rank(disk_state):
+                    disk_state = candidate
         except Exception as exc:
-            log.debug("State reload error for %s: %s", run_id, exc)
+            log.debug("State reload error for %s from %s: %s", clean_run_id, state_file, exc)
 
     if disk_state and mem_state:
         chosen = disk_state if _state_rank(disk_state) >= _state_rank(mem_state) else mem_state
-        _runs[run_id] = chosen
+        _runs[clean_run_id] = chosen
         return chosen
 
     if disk_state:
-        _runs[run_id] = disk_state
+        _runs[clean_run_id] = disk_state
         return disk_state
 
     if mem_state is None:
-        raise HTTPException(404, f"Run {run_id} not found")
+        raise HTTPException(404, f"Run {clean_run_id} not found")
     return mem_state
 
 
@@ -2990,7 +2970,16 @@ def _to_pdf(docx_path: Path) -> Optional[Path]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Clean startup / shutdown — no crash."""
-    configure_runtime_env()
+    try:
+        configure_runtime_env()
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        if any(token in err.lower() for token in ("langsmith", "401", "404", "unauthorized", "forbidden")):
+            os.environ["LANGCHAIN_TRACING_V2"] = "false"
+            os.environ["LANGSMITH_TRACING"] = "false"
+            log.warning("LangSmith bootstrap failed (%s). Continuing with tracing disabled.", err)
+        else:
+            raise
     log.info("CareerAgent API starting up…")
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -3123,39 +3112,12 @@ async def start_hunt(
 
 @app.get("/hunt/{run_id}/status")
 @traceable(name="api.get_status")
-async def get_status(
-    run_id: str,
-    wait_for_heartbeat: bool = False,
-    max_wait_seconds: int = 0,
-    since_heartbeat: str = "",
-):
+async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
+    run_id = _sanitize_run_id(run_id)
     state = _refresh_run_state(run_id)
     _try_recover_stalled_run(run_id, state)
-
-    if wait_for_heartbeat and int(max_wait_seconds or 0) > 0:
-        wait_budget = max(1, min(30, int(max_wait_seconds)))
-        deadline = time.monotonic() + wait_budget
-        baseline_heartbeat = str(since_heartbeat or state.get("last_heartbeat_at") or "")
-        terminal_states = {"completed", "error", "failed"}
-        while time.monotonic() < deadline:
-            state = _refresh_run_state(run_id)
-            heartbeat = str(state.get("last_heartbeat_at") or "")
-            if heartbeat and heartbeat != baseline_heartbeat:
-                break
-            if str(state.get("status") or "").strip().lower() in terminal_states:
-                break
-            await asyncio.sleep(1)
-
     state = _refresh_run_state(run_id)
-    error_file = LOGS_DIR / f"error_{run_id}.txt"
-    error_tail: list[str] = []
-    if error_file.exists():
-        try:
-            lines = error_file.read_text(encoding="utf-8", errors="ignore").splitlines()
-            error_tail = lines[-120:]
-        except Exception:
-            error_tail = []
     return {
         "run_id":           state["run_id"],
         "status":           state["status"],
@@ -3189,8 +3151,6 @@ async def get_status(
         "resume_scores":    state.get("resume_scores", {}),
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
-        "error_log_tail":   error_tail,
-        "error_log_file":   str(error_file) if error_file.exists() else None,
         "last_heartbeat_at": state.get("last_heartbeat_at"),
         "created_at":       state["created_at"],
         "completed_at":     state["completed_at"],

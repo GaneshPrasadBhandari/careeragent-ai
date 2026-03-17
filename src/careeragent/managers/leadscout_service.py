@@ -8,17 +8,15 @@ Uses Serper /search organic + Tavily as primary sources.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
-import queue
 import random
 import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
 from urllib.parse import parse_qs, quote_plus, urlparse
-from typing import Any, Callable, Optional
+from typing import Optional
 
 import httpx
 
@@ -30,15 +28,9 @@ log = logging.getLogger("leadscout")
 REQUEST_TIMEOUT = 20.0
 LLM_QUERY_TIMEOUT_SECONDS = 8.0
 SEARCH_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SEARCH_TIMEOUT_SECONDS", "120.0"))
-SOURCE_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SOURCE_TIMEOUT_SECONDS", "45.0"))
 RANKING_TIMEOUT_SECONDS = 300.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
-BATCH_COMMIT_SIZE = 5
-CHECKPOINT_PATH = "/tmp/discovery_checkpoint.json"
-CHECKPOINT_LOCK_PATH = f"{CHECKPOINT_PATH}.lock"
-
-os.environ.setdefault("PLAYWRIGHT_BROWSER_TYPE", "chromium")
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -100,25 +92,13 @@ def _normalize_result_url(url: str) -> str:
 
     if parsed.scheme not in {"http", "https"}:
         return ""
-    host = (parsed.netloc or "").strip()
     path = parsed.path.rstrip("/")
+    # Normalize to https to avoid browser "connection is not private" for legacy http links.
+    base = f"https://{parsed.netloc}{path}"
 
-    query = ""
-    q = parse_qs(parsed.query or "")
-    low_host = host.lower()
-    low_path = path.lower()
-    # Keep stable job identifiers required by some boards.
-    if "indeed.com" in low_host and "/viewjob" in low_path:
-        jk = (q.get("jk") or [""])[0].strip()
-        if jk:
-            query = f"?jk={jk}"
-    elif "glassdoor.com" in low_host:
-        jid = (q.get("jobListingId") or q.get("joblistingid") or [""])[0].strip()
-        if jid:
-            query = f"?jobListingId={jid}"
-
-    # Normalize to https and strip tracking fragments/campaign params.
-    return f"https://{host}{path}{query}"
+    # Canonicalize URLs by stripping query/fragments (tracking params, campaign tags).
+    # This ensures the same job reached via different query strings dedupes reliably.
+    return base
 
 
 def _normalize_job_title(title: str) -> str:
@@ -248,11 +228,6 @@ def _is_valid_job_url(url: str) -> bool:
     ) and any(token in path for token in ("/job", "/jobs/", "/recruiting/"))
 
 
-
-def _is_plausible_job_link(url: str) -> bool:
-    """Backward-compatible alias used by tests and legacy discovery filters."""
-    return _is_valid_job_url(url)
-
 def _is_supported_mirror_board_url(url: str) -> bool:
     low = str(url or "").lower()
     return any(site in low for site in SUPPORTED_MIRROR_SITES)
@@ -313,6 +288,7 @@ class LeadScoutService:
             "headless": True,
             "args": [
                 "--disable-blink-features=AutomationControlled",
+                "--disable-gpu",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
             ],
@@ -332,7 +308,6 @@ class LeadScoutService:
             "counts": {},
             "fallback_reason": None,
         }
-        self._safe_progress_events: "queue.Queue[dict[str, Any]]" = queue.Queue()
 
     def reset_state(self) -> None:
         """Reset transient state before each hunt run."""
@@ -342,48 +317,14 @@ class LeadScoutService:
             "fallback_reason": None,
             "session_reset": True,
         }
-        self._safe_progress_events = queue.Queue()
-
-
-    def pop_buffered_progress_events(self) -> list[dict[str, Any]]:
-        """Drain callback events that were buffered after thread-unsafe UI callback failures."""
-        drained: list[dict[str, Any]] = []
-        while True:
-            try:
-                drained.append(self._safe_progress_events.get_nowait())
-            except queue.Empty:
-                break
-        return drained
-
-    def _write_discovery_checkpoint(self, leads: list[JobLead], diagnostics: Optional[dict] = None) -> None:
-        """Atomically persist partial discovery output for restart-safe resume."""
-        payload: dict[str, Any] = {
-            "jobs": [lead.to_dict() for lead in leads],
-            "count": len(leads),
-            "diagnostics": dict(diagnostics or {}),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        tmp_path = f"{CHECKPOINT_PATH}.tmp"
-        try:
-            with open(CHECKPOINT_LOCK_PATH, "a+", encoding="utf-8") as lock_fh:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-                with open(tmp_path, "w", encoding="utf-8") as fh:
-                    json.dump(payload, fh)
-                os.replace(tmp_path, CHECKPOINT_PATH)
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
-        except Exception as exc:
-            log.warning("LeadScout checkpoint write failed: %s", exc)
-
-    def _remove_discovery_checkpoint(self) -> None:
-        try:
-            if os.path.exists(CHECKPOINT_PATH):
-                os.remove(CHECKPOINT_PATH)
-        except Exception:
-            return
 
     # ── Entry point ─────────────────────────────────────────────────────────
 
-    async def search_jobs(self, intent_plan: dict, *, progress_callback: Optional[Callable[[int, list[dict]], None]] = None) -> list[dict]:
+    async def search_jobs(
+        self,
+        intent_plan: dict,
+        progress_callback: Optional[Callable[[int, list[dict[str, Any]]], None]] = None,
+    ) -> list[dict]:
         self.reset_state()
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
@@ -414,7 +355,6 @@ class LeadScoutService:
             },
             "counts": {"serper_organic": 0, "tavily": 0, "remotive": 0},
             "fallback_reason": None,
-            "source_timeout_hit": False,
         }
 
         log.info("LeadScout starting: %d queries, location='%s'", len(queries), location)
@@ -429,44 +369,23 @@ class LeadScoutService:
             source_coros.append(self._search_remotive(query, location, remote))
 
         fetched_jobs = 0
-        last_progress_chunk = 0
-
-        checkpoint_buffer: list[JobLead] = []
-        next_checkpoint_at = BATCH_COMMIT_SIZE
 
         def _handle_batch_progress(batch_size: int, batch_payload: list[JobLead]) -> None:
-            nonlocal fetched_jobs, last_progress_chunk, next_checkpoint_at
+            nonlocal fetched_jobs
             if batch_size <= 0:
                 return
             fetched_jobs += int(batch_size)
-            chunk = fetched_jobs // 10
-            checkpoint_buffer.extend(batch_payload)
-            if len(checkpoint_buffer) >= next_checkpoint_at:
-                self._write_discovery_checkpoint(checkpoint_buffer, diagnostics=diagnostics)
-                next_checkpoint_at += BATCH_COMMIT_SIZE
             if progress_callback:
                 payload = [lead.to_dict() for lead in batch_payload]
                 try:
                     progress_callback(fetched_jobs, payload)
                 except Exception as exc:
-                    # Streamlit widgets (e.g. st.empty()) can raise when called from
-                    # non-main threads. Buffer events so UI can replay safely.
-                    self._safe_progress_events.put(
-                        {
-                            "fetched_jobs": fetched_jobs,
-                            "batch": payload,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-                    log.debug("LeadScout progress callback buffered after callback error: %s", exc)
-            if chunk > last_progress_chunk:
-                last_progress_chunk = chunk
+                    log.debug("LeadScout progress callback error: %s", exc)
 
         results = await self._run_source_tasks(
             source_coros,
             timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
             batch_progress_callback=_handle_batch_progress,
-            diagnostics=diagnostics,
         )
 
         leads: list[JobLead] = []
@@ -502,8 +421,7 @@ class LeadScoutService:
         unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
 
         target_count = max(MIN_DISCOVERY_JOBS_TARGET, int(intent_plan.get("max_jobs") or 80))
-        tier2_trigger_threshold = min(20, target_count)
-        if len(unique) < tier2_trigger_threshold:
+        if len(unique) < target_count:
             # Tier 2 search: force adjacent-title expansion before allowing loop exit.
             tier2_queries = self._adjacent_queries_from_skills(
                 [str(k) for k in (intent_plan.get("keywords") or []) if str(k).strip()],
@@ -519,7 +437,6 @@ class LeadScoutService:
                     tier2_coros,
                     timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
                     batch_progress_callback=_handle_batch_progress,
-                    diagnostics=diagnostics,
                 ):
                     for lead in batch:
                         diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
@@ -564,11 +481,6 @@ class LeadScoutService:
                 diagnostics["fallback_reason"] = "Providers responded but returned no matching jobs after quality filters."
         self.last_search_diagnostics = diagnostics
 
-        if unique:
-            self._write_discovery_checkpoint(unique, diagnostics=diagnostics)
-        else:
-            self._remove_discovery_checkpoint()
-
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
 
@@ -578,40 +490,25 @@ class LeadScoutService:
         *,
         timeout_seconds: float,
         batch_progress_callback: Optional[Callable[[int, list[JobLead]], None]] = None,
-        diagnostics: Optional[dict] = None,
     ) -> list[list[JobLead]]:
-        """Run discovery providers as a sequential queue to keep memory stable on 512MB tiers."""
-        per_source_timeout = min(timeout_seconds, SOURCE_TASK_TIMEOUT_SECONDS)
-        results: list[list[JobLead]] = []
-        for coro in coros:
-            try:
-                batch = await asyncio.wait_for(coro, timeout=per_source_timeout)
-            except asyncio.TimeoutError:
-                if diagnostics is not None:
-                    diagnostics["source_timeout_hit"] = True
-                log.warning("LeadScout source timed out after %.1fs; committing partial results and continuing.", per_source_timeout)
-                continue
-            except Exception as exc:
-                log.warning("LeadScout source error: %s", exc)
-                continue
-            if isinstance(batch, list):
-                for idx in range(0, len(batch), BATCH_COMMIT_SIZE):
-                    chunk = batch[idx : idx + BATCH_COMMIT_SIZE]
-                    if not chunk:
-                        continue
-                    results.append(chunk)
+        if JOB_SCRAPER_MAX_WORKERS <= 1:
+            results: list[list[JobLead]] = []
+            for coro in coros:
+                try:
+                    batch = await asyncio.wait_for(coro, timeout=timeout_seconds)
+                except Exception as exc:
+                    log.warning("LeadScout source error: %s", exc)
+                    continue
+                if isinstance(batch, list):
+                    results.append(batch)
                     if batch_progress_callback:
-                        batch_progress_callback(len(chunk), chunk)
-        return results
+                        batch_progress_callback(len(batch), batch)
+            return results
 
-    async def _gather_non_blocking(
-        self,
-        tasks: list[asyncio.Task[list[JobLead]]],
-        *,
-        timeout_seconds: float,
-        batch_progress_callback: Optional[Callable[[int, list[JobLead]], None]] = None,
-        diagnostics: Optional[dict] = None,
-    ) -> list[list[JobLead]]:
+        tasks = [asyncio.create_task(c) for c in coros]
+        return await self._gather_non_blocking(tasks, timeout_seconds=timeout_seconds)
+
+    async def _gather_non_blocking(self, tasks: list[asyncio.Task[list[JobLead]]], *, timeout_seconds: float) -> list[list[JobLead]]:
         """Collect completed tasks without blocking on the slowest source."""
         results: list[list[JobLead]] = []
         if not tasks:
@@ -624,18 +521,10 @@ class LeadScoutService:
                     log.warning("LeadScout source error: %s", exc)
                     continue
                 if isinstance(batch, list):
-                    for idx in range(0, len(batch), BATCH_COMMIT_SIZE):
-                        chunk = batch[idx : idx + BATCH_COMMIT_SIZE]
-                        if not chunk:
-                            continue
-                        results.append(chunk)
-                        if batch_progress_callback:
-                            batch_progress_callback(len(chunk), chunk)
+                    results.append(batch)
         except asyncio.TimeoutError:
             pending = [t for t in tasks if not t.done()]
             if pending:
-                if diagnostics is not None:
-                    diagnostics["source_timeout_hit"] = True
                 log.warning(
                     "LeadScout timed out waiting for %d source tasks after %.1fs; continuing with partial results.",
                     len(pending),
@@ -643,11 +532,7 @@ class LeadScoutService:
                 )
                 for task in pending:
                     task.cancel()
-                for task in pending:
-                    try:
-                        await task
-                    except Exception:
-                        continue
+                await asyncio.gather(*pending, return_exceptions=True)
         return results
 
     def _next_user_agent(self) -> str:
@@ -665,7 +550,10 @@ class LeadScoutService:
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True, args=["--headless=new", "--no-sandbox", "--disable-blink-features=AutomationControlled"])
+                browser = await pw.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-gpu", "--disable-blink-features=AutomationControlled"],
+                )
                 context = await browser.new_context(locale="en-US")
                 page = await context.new_page()
                 await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
@@ -1231,8 +1119,6 @@ class LeadScoutService:
                     source      = "serper_organic",
                     remote      = "remote" in (r.get("snippet", "") + url).lower(),
                 ))
-                if len(leads) % 5 == 0:
-                    await asyncio.sleep(1)
             log.info("Serper organic: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:
@@ -1283,8 +1169,6 @@ class LeadScoutService:
                     source      = "tavily",
                     remote      = "remote" in (r.get("content", "") + url).lower(),
                 ))
-                if len(leads) % 5 == 0:
-                    await asyncio.sleep(1)
             log.info("Tavily: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:
@@ -1323,8 +1207,6 @@ class LeadScoutService:
                     source="remotive",
                     remote=True,
                 ))
-                if len(leads) % 5 == 0:
-                    await asyncio.sleep(1)
             log.info("Remotive: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:

@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import sqlite3
-import fcntl
 import threading
 import time
 import uuid
@@ -32,28 +31,6 @@ import requests
 import streamlit as st
 
 BACKEND_URL = os.getenv("BACKEND_URL", "https://careeragent-api.onrender.com")
-
-DISCOVERY_CHECKPOINT_PATH = Path("/tmp/discovery_checkpoint.json")
-DISCOVERY_CHECKPOINT_LOCK_PATH = Path("/tmp/discovery_checkpoint.json.lock")
-
-
-def _load_discovery_checkpoint() -> Optional[dict]:
-    try:
-        if not DISCOVERY_CHECKPOINT_PATH.exists():
-            return None
-        with DISCOVERY_CHECKPOINT_LOCK_PATH.open("a+", encoding="utf-8") as lock_fh:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_SH)
-            with DISCOVERY_CHECKPOINT_PATH.open("r", encoding="utf-8") as fh:
-                payload = json.load(fh)
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
-        if not isinstance(payload, dict):
-            return None
-        jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
-        payload["jobs"] = jobs
-        payload["count"] = int(payload.get("count") or len(jobs))
-        return payload
-    except Exception:
-        return None
 
 
 class LiveFeedHandler(logging.Handler):
@@ -796,8 +773,6 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 except Exception:
                     payload = {}
                 status_value = str(payload.get("status") or "").strip().lower()
-                if r.status_code == 202 and status_value == "loading_models":
-                    return "loading_models"
                 is_initializing = status_value == "initializing"
                 retry_after = int(payload.get("retry_after") or 5) if is_initializing else 5
                 if is_initializing:
@@ -841,8 +816,6 @@ def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
         return None
     if raw.get("last_heartbeat_at"):
         incoming_hb = str(raw.get("last_heartbeat_at") or "")
-        if incoming_hb != str(st.session_state.get("last_heartbeat_at") or ""):
-            st.session_state["last_heartbeat_received_at"] = time.time()
         st.session_state["last_heartbeat_at"] = incoming_hb
 
     # Backward/alternate backend compatibility: normalize common field variants.
@@ -924,31 +897,13 @@ def _init_session():
         "last_poll":      0.0,
         "last_heartbeat_at": "",
         "last_heartbeat_received_at": 0.0,
-        "forced_refresh_count": 0,
         "last_backend_error": "",
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
-        "pending_start":  None,
-        "checkpoint_resume_notice": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
-    if st.session_state.get("run_status") is None:
-        checkpoint = _load_discovery_checkpoint()
-        if checkpoint:
-            jobs = checkpoint.get("jobs") or []
-            st.session_state["run_status"] = {
-                "status": "running",
-                "current_layer": 3,
-                "jobs_discovered": int(checkpoint.get("count") or len(jobs)),
-                "job_leads": jobs,
-                "layers": {},
-            }
-            st.session_state["checkpoint_resume_notice"] = (
-                f"Recovered {int(checkpoint.get('count') or len(jobs))} discovered jobs from checkpoint."
-            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1036,9 +991,6 @@ def render_progress_bar(status: Optional[dict], layers_data: list[dict]) -> None
     </div>
     """, unsafe_allow_html=True)
 
-    if status and str(status.get("status") or "").strip().lower() == "loading_models":
-        st.info("Initializing AI Engines (30-60s)...")
-
     if layers_data:
         for ld in LAYERS:
             layer_state = layers_data[ld["id"]]
@@ -1047,28 +999,6 @@ def render_progress_bar(status: Optional[dict], layers_data: list[dict]) -> None
             attempts = int(meta.get("attempt_count") or 1)
             tool_txt = " & ".join([str(t) for t in tools]) if tools else "No explicit tools recorded"
             st.caption(f"Step {ld['id']}: Used {tool_txt} | {attempts} attempts")
-
-
-def render_discovery_live_counter(status: Optional[dict], layers_data: list[dict]) -> None:
-    """Live L3 counter so users can see jobs accumulating before full completion."""
-    box = st.empty()
-    if not status or not layers_data or len(layers_data) <= 3:
-        box.empty()
-        return
-
-    l3_status = str((layers_data[3] or {}).get("status") or "waiting").strip().lower()
-    jobs = int(status.get("jobs_discovered") or 0)
-    progress = float(status.get("progress_pct") or 0.0)
-
-    if l3_status == "running" or (40.0 <= progress < 50.0):
-        box.info(f"🔍 Discovery live — Jobs found so far: {jobs}")
-        return
-
-    if jobs > 0 and l3_status in {"ok", "error"}:
-        box.success(f"🔍 Discovery snapshot — Jobs found so far: {jobs}")
-        return
-
-    box.empty()
 
 
 def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> None:
@@ -1355,10 +1285,6 @@ def render_stepwise_details(status: Optional[dict]) -> None:
         "layer_debug": layer_debug,
     }
     with st.expander("🧱 Layer Debug Logs (per layer)", expanded=False):
-        error_tail = status.get("error_log_tail") or []
-        if error_tail:
-            st.caption("error_log.txt (latest traceback tail)")
-            st.code("\n".join(error_tail), language="text")
         for lid in range(10):
             with st.expander(f"L{lid} debug", expanded=False):
                 st.json((layer_debug.get(f"L{lid}", {}) if isinstance(layer_debug, dict) else {}))
@@ -2016,26 +1942,11 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             with st.spinner("Launching pipeline…"):
                 run_id = _api_start_hunt(api_base, resume_bytes, resume_filename or "resume.pdf", config)
             if run_id:
+                st.session_state["run_id"]       = run_id
+                st.session_state["run_status"]   = None
                 st.session_state["hunt_running"] = True
-                st.session_state["last_poll"] = 0.0
-                if run_id == "loading_models":
-                    st.session_state["pending_start"] = {
-                        "resume_bytes": resume_bytes,
-                        "resume_filename": resume_filename or "resume.pdf",
-                        "config": config,
-                    }
-                    st.session_state["run_id"] = None
-                    st.session_state["run_status"] = {
-                        "status": "loading_models",
-                        "progress_pct": 10.0,
-                        "layers": [{"status": "waiting", "meta": {}, "output": None, "error": None, "started_at": None, "finished_at": None} for _ in LAYERS],
-                    }
-                    st.info("Initializing AI Engines (30-60s)...")
-                else:
-                    st.session_state["pending_start"] = None
-                    st.session_state["run_id"] = run_id
-                    st.session_state["run_status"] = None
-                    st.success(f"✓ Run started: `{run_id}`")
+                st.session_state["last_poll"]    = 0.0
+                st.success(f"✓ Run started: `{run_id}`")
                 st.rerun()
             else:
                 _show_connection_guard()
@@ -2073,38 +1984,6 @@ def main():
             if fresh.get("status") in ("completed", "error"):
                 st.session_state["hunt_running"] = False
 
-    if run_id and st.session_state.get("hunt_running"):
-        last_hb_seen = float(st.session_state.get("last_heartbeat_received_at") or 0.0)
-        if last_hb_seen > 0 and (now - last_hb_seen) > 15.0:
-            st.session_state["forced_refresh_count"] = int(st.session_state.get("forced_refresh_count") or 0) + 1
-            st.session_state["last_poll"] = 0.0
-            st.warning("Heartbeat lag detected (>15s). Forcing Streamlit hard refresh.")
-            st.rerun()
-
-    pending_start = st.session_state.get("pending_start")
-    if (not run_id) and pending_start and st.session_state.get("hunt_running") and (now - st.session_state["last_poll"] > 3.0):
-        fresh_run_id = _api_start_hunt(
-            api_base,
-            pending_start.get("resume_bytes") or b"",
-            pending_start.get("resume_filename") or "resume.pdf",
-            pending_start.get("config") or {},
-        )
-        st.session_state["last_poll"] = now
-        if fresh_run_id and fresh_run_id not in {"loading_models"}:
-            st.session_state["run_id"] = fresh_run_id
-            st.session_state["pending_start"] = None
-            jump_layers = []
-            for idx, _ in enumerate(LAYERS):
-                layer_status = "ok" if idx < 3 else ("running" if idx == 3 else "waiting")
-                jump_layers.append({"status": layer_status, "meta": {}, "output": None, "error": None, "started_at": None, "finished_at": None})
-            st.session_state["run_status"] = {
-                "run_id": fresh_run_id,
-                "status": "running",
-                "progress_pct": 25.0,
-                "layers": jump_layers,
-            }
-            st.rerun()
-
     if run_id and not status:
         backend_err = st.session_state.get("last_backend_error") or "Run started, but live status is not available yet."
         st.error(backend_err)
@@ -2119,8 +1998,6 @@ def main():
 
     # ── Header ────────────────────────────────────────────────────────────────
     run_label  = f"Run: `{run_id}`  |  L0→L9 Planner-Director Pipeline" if run_id else "No active run"
-    if st.session_state.get("checkpoint_resume_notice"):
-        st.info(st.session_state.get("checkpoint_resume_notice"))
     run_state  = (status or {}).get("status", "idle")
     state_cls  = f"run-status {run_state}" if run_state in ("running","completed","error","pending_human_input") else "run-status"
 
@@ -2174,7 +2051,6 @@ def main():
 
     # ── Progress bar ─────────────────────────────────────────────────────────
     render_progress_bar(status, layers_data)
-    render_discovery_live_counter(status, layers_data)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_labels = [
