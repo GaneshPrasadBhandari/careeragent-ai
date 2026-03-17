@@ -154,6 +154,7 @@ except ModuleNotFoundError:  # pragma: no cover - constrained env fallback
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.core.config import configure_runtime_env
 from careeragent.core.settings import Settings
+from careeragent.managers.leadscout_service import LeadScoutService
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills
 from careeragent.services.notification_service import NotificationService
 from careeragent.tools.llm_tools import GeminiClient
@@ -1584,30 +1585,22 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
         # ── L3: Discovery — Hunt Job Boards ──────────────────────────────────
         await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
-        try:
-            from careeragent.managers.leadscout_service import LeadScoutService
-            scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
-            state.setdefault("discovery_diagnostics", {})
-        except ImportError:
-            scout = None
+        scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
+        state.setdefault("discovery_diagnostics", {})
 
         try:
-            if scout:
-                intent = _build_intent(state["profile"], state["config"])
-                state.setdefault("layer_debug", {}).setdefault("L3", {})["intent_bridge"] = {
-                    "target_roles": intent.get("target_roles", []),
-                    "extracted_skills": intent.get("extracted_skills", []),
-                    "keywords": intent.get("keywords", []),
-                }
-                if not intent.get("extracted_skills"):
-                    _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
-                leads  = await asyncio.wait_for(
-                    scout.search_jobs(intent), timeout=DISCOVERY_TIMEOUT_SECONDS
-                )
-                state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
-            else:
-                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
-                state["discovery_diagnostics"] = {"providers": {}, "counts": {}, "fallback_reason": "LeadScout service unavailable"}
+            intent = _build_intent(state["profile"], state["config"])
+            state.setdefault("layer_debug", {}).setdefault("L3", {})["intent_bridge"] = {
+                "target_roles": intent.get("target_roles", []),
+                "extracted_skills": intent.get("extracted_skills", []),
+                "keywords": intent.get("keywords", []),
+            }
+            if not intent.get("extracted_skills"):
+                _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
+            leads  = await asyncio.wait_for(
+                scout.search_jobs(intent), timeout=DISCOVERY_TIMEOUT_SECONDS
+            )
+            state["discovery_diagnostics"] = dict(getattr(scout, "last_search_diagnostics", {}) or {})
 
             # Recovery guard: when external providers are unavailable (or return
             # zero leads), keep the L3->L9 pipeline operational with demo leads.

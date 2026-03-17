@@ -773,6 +773,8 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 except Exception:
                     payload = {}
                 status_value = str(payload.get("status") or "").strip().lower()
+                if r.status_code == 202 and status_value == "loading_models":
+                    return "loading_models"
                 is_initializing = status_value == "initializing"
                 retry_after = int(payload.get("retry_after") or 5) if is_initializing else 5
                 if is_initializing:
@@ -893,6 +895,7 @@ def _init_session():
         "last_backend_error": "",
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
+        "pending_start":  None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -983,6 +986,9 @@ def render_progress_bar(status: Optional[dict], layers_data: list[dict]) -> None
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    if status and str(status.get("status") or "").strip().lower() == "loading_models":
+        st.info("Initializing AI Engines (30-60s)...")
 
     if layers_data:
         for ld in LAYERS:
@@ -1935,11 +1941,26 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             with st.spinner("Launching pipeline…"):
                 run_id = _api_start_hunt(api_base, resume_bytes, resume_filename or "resume.pdf", config)
             if run_id:
-                st.session_state["run_id"]       = run_id
-                st.session_state["run_status"]   = None
                 st.session_state["hunt_running"] = True
-                st.session_state["last_poll"]    = 0.0
-                st.success(f"✓ Run started: `{run_id}`")
+                st.session_state["last_poll"] = 0.0
+                if run_id == "loading_models":
+                    st.session_state["pending_start"] = {
+                        "resume_bytes": resume_bytes,
+                        "resume_filename": resume_filename or "resume.pdf",
+                        "config": config,
+                    }
+                    st.session_state["run_id"] = None
+                    st.session_state["run_status"] = {
+                        "status": "loading_models",
+                        "progress_pct": 10.0,
+                        "layers": [{"status": "waiting", "meta": {}, "output": None, "error": None, "started_at": None, "finished_at": None} for _ in LAYERS],
+                    }
+                    st.info("Initializing AI Engines (30-60s)...")
+                else:
+                    st.session_state["pending_start"] = None
+                    st.session_state["run_id"] = run_id
+                    st.session_state["run_status"] = None
+                    st.success(f"✓ Run started: `{run_id}`")
                 st.rerun()
             else:
                 _show_connection_guard()
@@ -1976,6 +1997,30 @@ def main():
             # Stop auto-refresh when done
             if fresh.get("status") in ("completed", "error"):
                 st.session_state["hunt_running"] = False
+
+    pending_start = st.session_state.get("pending_start")
+    if (not run_id) and pending_start and st.session_state.get("hunt_running") and (now - st.session_state["last_poll"] > 3.0):
+        fresh_run_id = _api_start_hunt(
+            api_base,
+            pending_start.get("resume_bytes") or b"",
+            pending_start.get("resume_filename") or "resume.pdf",
+            pending_start.get("config") or {},
+        )
+        st.session_state["last_poll"] = now
+        if fresh_run_id and fresh_run_id not in {"loading_models"}:
+            st.session_state["run_id"] = fresh_run_id
+            st.session_state["pending_start"] = None
+            jump_layers = []
+            for idx, _ in enumerate(LAYERS):
+                layer_status = "ok" if idx < 3 else ("running" if idx == 3 else "waiting")
+                jump_layers.append({"status": layer_status, "meta": {}, "output": None, "error": None, "started_at": None, "finished_at": None})
+            st.session_state["run_status"] = {
+                "run_id": fresh_run_id,
+                "status": "running",
+                "progress_pct": 25.0,
+                "layers": jump_layers,
+            }
+            st.rerun()
 
     if run_id and not status:
         backend_err = st.session_state.get("last_backend_error") or "Run started, but live status is not available yet."
