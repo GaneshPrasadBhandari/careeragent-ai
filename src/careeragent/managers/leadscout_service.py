@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
 from urllib.parse import parse_qs, quote_plus, urlparse
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -28,6 +28,7 @@ log = logging.getLogger("leadscout")
 REQUEST_TIMEOUT = 20.0
 LLM_QUERY_TIMEOUT_SECONDS = 8.0
 SEARCH_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SEARCH_TIMEOUT_SECONDS", "120.0"))
+SOURCE_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SOURCE_TIMEOUT_SECONDS", "45.0"))
 RANKING_TIMEOUT_SECONDS = 300.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
@@ -319,7 +320,7 @@ class LeadScoutService:
 
     # ── Entry point ─────────────────────────────────────────────────────────
 
-    async def search_jobs(self, intent_plan: dict) -> list[dict]:
+    async def search_jobs(self, intent_plan: dict, *, progress_callback: Optional[Callable[[int], None]] = None) -> list[dict]:
         self.reset_state()
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
@@ -363,7 +364,24 @@ class LeadScoutService:
             source_coros.append(self._search_tavily(query, location, remote, tavily_key=tavily_key))
             source_coros.append(self._search_remotive(query, location, remote))
 
-        results = await self._run_source_tasks(source_coros, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS)
+        fetched_jobs = 0
+        last_progress_chunk = 0
+
+        def _handle_batch_progress(batch_size: int) -> None:
+            nonlocal fetched_jobs, last_progress_chunk
+            if batch_size <= 0:
+                return
+            fetched_jobs += int(batch_size)
+            chunk = fetched_jobs // 10
+            if progress_callback and chunk > last_progress_chunk:
+                last_progress_chunk = chunk
+                progress_callback(fetched_jobs)
+
+        results = await self._run_source_tasks(
+            source_coros,
+            timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
+            batch_progress_callback=_handle_batch_progress,
+        )
 
         leads: list[JobLead] = []
         for batch in results:
@@ -398,7 +416,8 @@ class LeadScoutService:
         unique = self._enforce_source_quotas(unique, quota_targets=TOP_SOURCE_QUOTAS)
 
         target_count = max(MIN_DISCOVERY_JOBS_TARGET, int(intent_plan.get("max_jobs") or 80))
-        if len(unique) < target_count:
+        tier2_trigger_threshold = min(20, target_count)
+        if len(unique) < tier2_trigger_threshold:
             # Tier 2 search: force adjacent-title expansion before allowing loop exit.
             tier2_queries = self._adjacent_queries_from_skills(
                 [str(k) for k in (intent_plan.get("keywords") or []) if str(k).strip()],
@@ -410,7 +429,11 @@ class LeadScoutService:
                     tier2_coros.append(self._search_serper_organic(query, location, remote, serper_key=serper_key))
                     tier2_coros.append(self._search_tavily(query, location, remote, tavily_key=tavily_key))
                     tier2_coros.append(self._search_remotive(query, location, remote))
-                for batch in await self._run_source_tasks(tier2_coros, timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS):
+                for batch in await self._run_source_tasks(
+                    tier2_coros,
+                    timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
+                    batch_progress_callback=_handle_batch_progress,
+                ):
                     for lead in batch:
                         diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
                     leads.extend(batch)
@@ -457,23 +480,42 @@ class LeadScoutService:
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
 
-    async def _run_source_tasks(self, coros: list[asyncio.Future], *, timeout_seconds: float) -> list[list[JobLead]]:
+    async def _run_source_tasks(
+        self,
+        coros: list[asyncio.Future],
+        *,
+        timeout_seconds: float,
+        batch_progress_callback: Optional[Callable[[int], None]] = None,
+    ) -> list[list[JobLead]]:
+        per_source_timeout = min(timeout_seconds, SOURCE_TASK_TIMEOUT_SECONDS)
         if JOB_SCRAPER_MAX_WORKERS <= 1:
             results: list[list[JobLead]] = []
             for coro in coros:
                 try:
-                    batch = await asyncio.wait_for(coro, timeout=timeout_seconds)
+                    batch = await asyncio.wait_for(coro, timeout=per_source_timeout)
                 except Exception as exc:
                     log.warning("LeadScout source error: %s", exc)
                     continue
                 if isinstance(batch, list):
                     results.append(batch)
+                    if batch_progress_callback:
+                        batch_progress_callback(len(batch))
             return results
 
         tasks = [asyncio.create_task(c) for c in coros]
-        return await self._gather_non_blocking(tasks, timeout_seconds=timeout_seconds)
+        return await self._gather_non_blocking(
+            tasks,
+            timeout_seconds=per_source_timeout,
+            batch_progress_callback=batch_progress_callback,
+        )
 
-    async def _gather_non_blocking(self, tasks: list[asyncio.Task[list[JobLead]]], *, timeout_seconds: float) -> list[list[JobLead]]:
+    async def _gather_non_blocking(
+        self,
+        tasks: list[asyncio.Task[list[JobLead]]],
+        *,
+        timeout_seconds: float,
+        batch_progress_callback: Optional[Callable[[int], None]] = None,
+    ) -> list[list[JobLead]]:
         """Collect completed tasks without blocking on the slowest source."""
         results: list[list[JobLead]] = []
         if not tasks:
@@ -487,6 +529,8 @@ class LeadScoutService:
                     continue
                 if isinstance(batch, list):
                     results.append(batch)
+                    if batch_progress_callback:
+                        batch_progress_callback(len(batch))
         except asyncio.TimeoutError:
             pending = [t for t in tasks if not t.done()]
             if pending:
@@ -1081,6 +1125,8 @@ class LeadScoutService:
                     source      = "serper_organic",
                     remote      = "remote" in (r.get("snippet", "") + url).lower(),
                 ))
+                if len(leads) % 5 == 0:
+                    await asyncio.sleep(1)
             log.info("Serper organic: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:
@@ -1131,6 +1177,8 @@ class LeadScoutService:
                     source      = "tavily",
                     remote      = "remote" in (r.get("content", "") + url).lower(),
                 ))
+                if len(leads) % 5 == 0:
+                    await asyncio.sleep(1)
             log.info("Tavily: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:
@@ -1169,6 +1217,8 @@ class LeadScoutService:
                     source="remotive",
                     remote=True,
                 ))
+                if len(leads) % 5 == 0:
+                    await asyncio.sleep(1)
             log.info("Remotive: %d leads for: %s", len(leads), query)
             return leads
         except Exception as exc:
