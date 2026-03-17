@@ -7,7 +7,7 @@ from pathlib import Path
 def _load_funcs():
     src = Path('src/careeragent/api/main.py').read_text(encoding='utf-8')
     mod = ast.parse(src)
-    wanted = {'_coerce_iso_ts', '_state_rank', '_refresh_run_state'}
+    wanted = {'_sanitize_run_id', '_coerce_iso_ts', '_state_rank', '_refresh_run_state'}
     nodes = [n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     fn_mod = ast.Module(body=nodes, type_ignores=[])
     code = compile(fn_mod, filename='api_main_extract', mode='exec')
@@ -25,11 +25,14 @@ def _load_funcs():
         'json': json,
         'datetime': datetime,
         'timezone': timezone,
+        'Path': Path,
         'Any': __import__('typing').Any,
         'HTTPException': HTTPException,
         'log': Log(),
         '_runs': {},
         'LOGS_DIR': Path('.'),
+        'RUN_ID_SAFE_PATTERN': __import__('re').compile(r'[^a-zA-Z0-9_-]'),
+        'tempfile': __import__('tempfile'),
     }
     exec(code, scope)
     return scope, HTTPException
