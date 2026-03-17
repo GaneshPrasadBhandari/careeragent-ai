@@ -766,13 +766,17 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                     endpoint,
                     files={"resume": (filename, resume_bytes, "application/octet-stream")},
                     data={"config": json.dumps(payload_config)},
-                    timeout=30,
+                    timeout=2,
                 )
-                if r.status_code == 200:
-                    return r.json().get("run_id") or client_run_id
+                if r.status_code in {200, 202}:
+                    try:
+                        payload_ok = r.json()
+                    except Exception:
+                        payload_ok = {}
+                    return payload_ok.get("run_id") or client_run_id
                 payload = {}
                 try:
-                    payload = r.json() if r.text else {}
+                    payload = r.json()
                 except Exception:
                     payload = {}
                 status_value = str(payload.get("status") or "").strip().lower()
