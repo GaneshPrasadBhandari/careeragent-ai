@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
 from urllib.parse import parse_qs, quote_plus, urlparse
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -33,6 +33,7 @@ RANKING_TIMEOUT_SECONDS = 300.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
 BATCH_COMMIT_SIZE = 5
+CHECKPOINT_PATH = "/tmp/discovery_checkpoint.json"
 
 os.environ.setdefault("PLAYWRIGHT_BROWSER_TYPE", "chromium")
 
@@ -96,13 +97,25 @@ def _normalize_result_url(url: str) -> str:
 
     if parsed.scheme not in {"http", "https"}:
         return ""
+    host = (parsed.netloc or "").strip()
     path = parsed.path.rstrip("/")
-    # Normalize to https to avoid browser "connection is not private" for legacy http links.
-    base = f"https://{parsed.netloc}{path}"
 
-    # Canonicalize URLs by stripping query/fragments (tracking params, campaign tags).
-    # This ensures the same job reached via different query strings dedupes reliably.
-    return base
+    query = ""
+    q = parse_qs(parsed.query or "")
+    low_host = host.lower()
+    low_path = path.lower()
+    # Keep stable job identifiers required by some boards.
+    if "indeed.com" in low_host and "/viewjob" in low_path:
+        jk = (q.get("jk") or [""])[0].strip()
+        if jk:
+            query = f"?jk={jk}"
+    elif "glassdoor.com" in low_host:
+        jid = (q.get("jobListingId") or q.get("joblistingid") or [""])[0].strip()
+        if jid:
+            query = f"?jobListingId={jid}"
+
+    # Normalize to https and strip tracking fragments/campaign params.
+    return f"https://{host}{path}{query}"
 
 
 def _normalize_job_title(title: str) -> str:
@@ -232,6 +245,11 @@ def _is_valid_job_url(url: str) -> bool:
     ) and any(token in path for token in ("/job", "/jobs/", "/recruiting/"))
 
 
+
+def _is_plausible_job_link(url: str) -> bool:
+    """Backward-compatible alias used by tests and legacy discovery filters."""
+    return _is_valid_job_url(url)
+
 def _is_supported_mirror_board_url(url: str) -> bool:
     low = str(url or "").lower()
     return any(site in low for site in SUPPORTED_MIRROR_SITES)
@@ -321,6 +339,30 @@ class LeadScoutService:
             "session_reset": True,
         }
 
+
+    def _write_discovery_checkpoint(self, leads: list[JobLead], diagnostics: Optional[dict] = None) -> None:
+        """Atomically persist partial discovery output for restart-safe resume."""
+        payload: dict[str, Any] = {
+            "jobs": [lead.to_dict() for lead in leads],
+            "count": len(leads),
+            "diagnostics": dict(diagnostics or {}),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp_path = f"{CHECKPOINT_PATH}.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp_path, CHECKPOINT_PATH)
+        except Exception as exc:
+            log.warning("LeadScout checkpoint write failed: %s", exc)
+
+    def _remove_discovery_checkpoint(self) -> None:
+        try:
+            if os.path.exists(CHECKPOINT_PATH):
+                os.remove(CHECKPOINT_PATH)
+        except Exception:
+            return
+
     # ── Entry point ─────────────────────────────────────────────────────────
 
     async def search_jobs(self, intent_plan: dict, *, progress_callback: Optional[Callable[[int, list[dict]], None]] = None) -> list[dict]:
@@ -371,12 +413,19 @@ class LeadScoutService:
         fetched_jobs = 0
         last_progress_chunk = 0
 
+        checkpoint_buffer: list[JobLead] = []
+        next_checkpoint_at = BATCH_COMMIT_SIZE
+
         def _handle_batch_progress(batch_size: int, batch_payload: list[JobLead]) -> None:
-            nonlocal fetched_jobs, last_progress_chunk
+            nonlocal fetched_jobs, last_progress_chunk, next_checkpoint_at
             if batch_size <= 0:
                 return
             fetched_jobs += int(batch_size)
             chunk = fetched_jobs // 10
+            checkpoint_buffer.extend(batch_payload)
+            if len(checkpoint_buffer) >= next_checkpoint_at:
+                self._write_discovery_checkpoint(checkpoint_buffer, diagnostics=diagnostics)
+                next_checkpoint_at += BATCH_COMMIT_SIZE
             if progress_callback:
                 progress_callback(fetched_jobs, [lead.to_dict() for lead in batch_payload])
             if chunk > last_progress_chunk:
@@ -484,6 +533,11 @@ class LeadScoutService:
                 diagnostics["fallback_reason"] = "Providers responded but returned no matching jobs after quality filters."
         self.last_search_diagnostics = diagnostics
 
+        if unique:
+            self._write_discovery_checkpoint(unique, diagnostics=diagnostics)
+        else:
+            self._remove_discovery_checkpoint()
+
         log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
         return [l.to_dict() for l in unique[: self.max_per_source * 4]]
 
@@ -495,37 +549,29 @@ class LeadScoutService:
         batch_progress_callback: Optional[Callable[[int, list[JobLead]], None]] = None,
         diagnostics: Optional[dict] = None,
     ) -> list[list[JobLead]]:
+        """Run discovery providers as a sequential queue to keep memory stable on 512MB tiers."""
         per_source_timeout = min(timeout_seconds, SOURCE_TASK_TIMEOUT_SECONDS)
-        if JOB_SCRAPER_MAX_WORKERS <= 1:
-            results: list[list[JobLead]] = []
-            for coro in coros:
-                try:
-                    batch = await asyncio.wait_for(coro, timeout=per_source_timeout)
-                except asyncio.TimeoutError:
-                    if diagnostics is not None:
-                        diagnostics["source_timeout_hit"] = True
-                    log.warning("LeadScout source timed out after %.1fs; committing partial results and continuing.", per_source_timeout)
-                    continue
-                except Exception as exc:
-                    log.warning("LeadScout source error: %s", exc)
-                    continue
-                if isinstance(batch, list):
-                    for idx in range(0, len(batch), BATCH_COMMIT_SIZE):
-                        chunk = batch[idx : idx + BATCH_COMMIT_SIZE]
-                        if not chunk:
-                            continue
-                        results.append(chunk)
-                        if batch_progress_callback:
-                            batch_progress_callback(len(chunk), chunk)
-            return results
-
-        tasks = [asyncio.create_task(c) for c in coros]
-        return await self._gather_non_blocking(
-            tasks,
-            timeout_seconds=per_source_timeout,
-            batch_progress_callback=batch_progress_callback,
-            diagnostics=diagnostics,
-        )
+        results: list[list[JobLead]] = []
+        for coro in coros:
+            try:
+                batch = await asyncio.wait_for(coro, timeout=per_source_timeout)
+            except asyncio.TimeoutError:
+                if diagnostics is not None:
+                    diagnostics["source_timeout_hit"] = True
+                log.warning("LeadScout source timed out after %.1fs; committing partial results and continuing.", per_source_timeout)
+                continue
+            except Exception as exc:
+                log.warning("LeadScout source error: %s", exc)
+                continue
+            if isinstance(batch, list):
+                for idx in range(0, len(batch), BATCH_COMMIT_SIZE):
+                    chunk = batch[idx : idx + BATCH_COMMIT_SIZE]
+                    if not chunk:
+                        continue
+                    results.append(chunk)
+                    if batch_progress_callback:
+                        batch_progress_callback(len(chunk), chunk)
+        return results
 
     async def _gather_non_blocking(
         self,
@@ -566,7 +612,11 @@ class LeadScoutService:
                 )
                 for task in pending:
                     task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
+                for task in pending:
+                    try:
+                        await task
+                    except Exception:
+                        continue
         return results
 
     def _next_user_agent(self) -> str:

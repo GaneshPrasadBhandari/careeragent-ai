@@ -1585,6 +1585,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             # Continue with empty profile rather than aborting
             state["profile"] = {"name": "Candidate", "skills": [], "experience": []}
 
+        gc.collect()
+
         # ── L3: Discovery — Hunt Job Boards ──────────────────────────────────
         await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
         scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
@@ -1740,6 +1742,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             top_score=state["top_match_score"],
         )
         state["layers"][4]["output"] = f"{len(scored)} jobs scored"
+
+        gc.collect()
 
         # ── L5: Evaluator + Ranking + HITL ───────────────────────────────────
         await mark_running(5, "Ranking jobs by interview probability…", tools_used=["ranking_evaluator"], attempt_count=1)
