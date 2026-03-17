@@ -318,6 +318,12 @@ def _normalize_config(config: dict) -> dict:
     cfg.setdefault("require_draft_approval", True)
     cfg.setdefault("require_followup_approval", True)
     cfg.setdefault("max_jobs", 100)
+    cfg.setdefault("target_job_count", int(cfg.get("max_jobs", 100) or 100))
+    try:
+        cfg["target_job_count"] = max(1, int(cfg.get("target_job_count") or cfg.get("max_jobs") or 100))
+    except Exception:
+        cfg["target_job_count"] = max(1, int(cfg.get("max_jobs", 100) or 100))
+    cfg["max_jobs"] = int(cfg["target_job_count"])
     cfg.setdefault("posted_within_hours", 168)
     cfg.setdefault("salary_min", 0)
     cfg.setdefault("salary_max", 400000)
@@ -1654,7 +1660,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             else:
                 state.setdefault("discovery_diagnostics", {})["used_demo_fallback"] = False
 
-            min_raw_jobs = max(80, int(state["config"].get("max_jobs", 100) or 100))
+            min_raw_jobs = max(80, target_job_count)
             if len(leads) < min_raw_jobs:
                 _log_agent(state, 3, f"Discovery below target ({len(leads)}<{min_raw_jobs}); appending resilient fallback leads.")
                 leads = (leads or []) + _stub_leads(state["profile"], max_jobs=min_raw_jobs)
