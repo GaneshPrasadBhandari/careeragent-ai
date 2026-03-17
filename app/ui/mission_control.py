@@ -829,9 +829,13 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
-    raw = _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
+    last_hb = str(st.session_state.get("last_heartbeat_at") or "")
+    path = f"/hunt/{run_id}/status?wait_for_heartbeat=1&max_wait_seconds=12&since_heartbeat={quote_plus(last_hb)}"
+    raw = _api_get(api_base, path, timeout=15)
     if not raw:
         return None
+    if raw.get("last_heartbeat_at"):
+        st.session_state["last_heartbeat_at"] = raw.get("last_heartbeat_at")
 
     # Backward/alternate backend compatibility: normalize common field variants.
     if "progress_pct" not in raw and "progress_percent" in raw:
@@ -910,6 +914,7 @@ def _init_session():
         "refresh_sec":    5,
         "api_base":       _default_api_base(),
         "last_poll":      0.0,
+        "last_heartbeat_at": "",
         "last_backend_error": "",
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,

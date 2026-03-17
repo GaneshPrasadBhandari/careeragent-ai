@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import random
 import re
 from datetime import datetime, timedelta, timezone
@@ -329,6 +330,7 @@ class LeadScoutService:
             "counts": {},
             "fallback_reason": None,
         }
+        self._safe_progress_events: "queue.Queue[dict[str, Any]]" = queue.Queue()
 
     def reset_state(self) -> None:
         """Reset transient state before each hunt run."""
@@ -338,7 +340,18 @@ class LeadScoutService:
             "fallback_reason": None,
             "session_reset": True,
         }
+        self._safe_progress_events = queue.Queue()
 
+
+    def pop_buffered_progress_events(self) -> list[dict[str, Any]]:
+        """Drain callback events that were buffered after thread-unsafe UI callback failures."""
+        drained: list[dict[str, Any]] = []
+        while True:
+            try:
+                drained.append(self._safe_progress_events.get_nowait())
+            except queue.Empty:
+                break
+        return drained
 
     def _write_discovery_checkpoint(self, leads: list[JobLead], diagnostics: Optional[dict] = None) -> None:
         """Atomically persist partial discovery output for restart-safe resume."""
@@ -427,7 +440,20 @@ class LeadScoutService:
                 self._write_discovery_checkpoint(checkpoint_buffer, diagnostics=diagnostics)
                 next_checkpoint_at += BATCH_COMMIT_SIZE
             if progress_callback:
-                progress_callback(fetched_jobs, [lead.to_dict() for lead in batch_payload])
+                payload = [lead.to_dict() for lead in batch_payload]
+                try:
+                    progress_callback(fetched_jobs, payload)
+                except Exception as exc:
+                    # Streamlit widgets (e.g. st.empty()) can raise when called from
+                    # non-main threads. Buffer events so UI can replay safely.
+                    self._safe_progress_events.put(
+                        {
+                            "fetched_jobs": fetched_jobs,
+                            "batch": payload,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                    log.debug("LeadScout progress callback buffered after callback error: %s", exc)
             if chunk > last_progress_chunk:
                 last_progress_chunk = chunk
 
