@@ -32,6 +32,9 @@ SOURCE_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SOURCE_TIMEOUT_SECONDS"
 RANKING_TIMEOUT_SECONDS = 300.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
+BATCH_COMMIT_SIZE = 5
+
+os.environ.setdefault("PLAYWRIGHT_BROWSER_TYPE", "chromium")
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -320,7 +323,7 @@ class LeadScoutService:
 
     # ── Entry point ─────────────────────────────────────────────────────────
 
-    async def search_jobs(self, intent_plan: dict, *, progress_callback: Optional[Callable[[int], None]] = None) -> list[dict]:
+    async def search_jobs(self, intent_plan: dict, *, progress_callback: Optional[Callable[[int, list[dict]], None]] = None) -> list[dict]:
         self.reset_state()
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
@@ -351,6 +354,7 @@ class LeadScoutService:
             },
             "counts": {"serper_organic": 0, "tavily": 0, "remotive": 0},
             "fallback_reason": None,
+            "source_timeout_hit": False,
         }
 
         log.info("LeadScout starting: %d queries, location='%s'", len(queries), location)
@@ -367,20 +371,22 @@ class LeadScoutService:
         fetched_jobs = 0
         last_progress_chunk = 0
 
-        def _handle_batch_progress(batch_size: int) -> None:
+        def _handle_batch_progress(batch_size: int, batch_payload: list[JobLead]) -> None:
             nonlocal fetched_jobs, last_progress_chunk
             if batch_size <= 0:
                 return
             fetched_jobs += int(batch_size)
             chunk = fetched_jobs // 10
-            if progress_callback and chunk > last_progress_chunk:
+            if progress_callback:
+                progress_callback(fetched_jobs, [lead.to_dict() for lead in batch_payload])
+            if chunk > last_progress_chunk:
                 last_progress_chunk = chunk
-                progress_callback(fetched_jobs)
 
         results = await self._run_source_tasks(
             source_coros,
             timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
             batch_progress_callback=_handle_batch_progress,
+            diagnostics=diagnostics,
         )
 
         leads: list[JobLead] = []
@@ -433,6 +439,7 @@ class LeadScoutService:
                     tier2_coros,
                     timeout_seconds=SEARCH_TASK_TIMEOUT_SECONDS,
                     batch_progress_callback=_handle_batch_progress,
+                    diagnostics=diagnostics,
                 ):
                     for lead in batch:
                         diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
@@ -485,7 +492,8 @@ class LeadScoutService:
         coros: list[asyncio.Future],
         *,
         timeout_seconds: float,
-        batch_progress_callback: Optional[Callable[[int], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, list[JobLead]], None]] = None,
+        diagnostics: Optional[dict] = None,
     ) -> list[list[JobLead]]:
         per_source_timeout = min(timeout_seconds, SOURCE_TASK_TIMEOUT_SECONDS)
         if JOB_SCRAPER_MAX_WORKERS <= 1:
@@ -493,13 +501,22 @@ class LeadScoutService:
             for coro in coros:
                 try:
                     batch = await asyncio.wait_for(coro, timeout=per_source_timeout)
+                except asyncio.TimeoutError:
+                    if diagnostics is not None:
+                        diagnostics["source_timeout_hit"] = True
+                    log.warning("LeadScout source timed out after %.1fs; committing partial results and continuing.", per_source_timeout)
+                    continue
                 except Exception as exc:
                     log.warning("LeadScout source error: %s", exc)
                     continue
                 if isinstance(batch, list):
-                    results.append(batch)
-                    if batch_progress_callback:
-                        batch_progress_callback(len(batch))
+                    for idx in range(0, len(batch), BATCH_COMMIT_SIZE):
+                        chunk = batch[idx : idx + BATCH_COMMIT_SIZE]
+                        if not chunk:
+                            continue
+                        results.append(chunk)
+                        if batch_progress_callback:
+                            batch_progress_callback(len(chunk), chunk)
             return results
 
         tasks = [asyncio.create_task(c) for c in coros]
@@ -507,6 +524,7 @@ class LeadScoutService:
             tasks,
             timeout_seconds=per_source_timeout,
             batch_progress_callback=batch_progress_callback,
+            diagnostics=diagnostics,
         )
 
     async def _gather_non_blocking(
@@ -514,7 +532,8 @@ class LeadScoutService:
         tasks: list[asyncio.Task[list[JobLead]]],
         *,
         timeout_seconds: float,
-        batch_progress_callback: Optional[Callable[[int], None]] = None,
+        batch_progress_callback: Optional[Callable[[int, list[JobLead]], None]] = None,
+        diagnostics: Optional[dict] = None,
     ) -> list[list[JobLead]]:
         """Collect completed tasks without blocking on the slowest source."""
         results: list[list[JobLead]] = []
@@ -528,12 +547,18 @@ class LeadScoutService:
                     log.warning("LeadScout source error: %s", exc)
                     continue
                 if isinstance(batch, list):
-                    results.append(batch)
-                    if batch_progress_callback:
-                        batch_progress_callback(len(batch))
+                    for idx in range(0, len(batch), BATCH_COMMIT_SIZE):
+                        chunk = batch[idx : idx + BATCH_COMMIT_SIZE]
+                        if not chunk:
+                            continue
+                        results.append(chunk)
+                        if batch_progress_callback:
+                            batch_progress_callback(len(chunk), chunk)
         except asyncio.TimeoutError:
             pending = [t for t in tasks if not t.done()]
             if pending:
+                if diagnostics is not None:
+                    diagnostics["source_timeout_hit"] = True
                 log.warning(
                     "LeadScout timed out waiting for %d source tasks after %.1fs; continuing with partial results.",
                     len(pending),
@@ -559,7 +584,7 @@ class LeadScoutService:
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+                browser = await pw.chromium.launch(headless=True, args=["--headless=new", "--no-sandbox", "--disable-blink-features=AutomationControlled"])
                 context = await browser.new_context(locale="en-US")
                 page = await context.new_page()
                 await page.goto(url, wait_until="domcontentloaded", timeout=15_000)

@@ -1000,6 +1000,28 @@ def render_progress_bar(status: Optional[dict], layers_data: list[dict]) -> None
             st.caption(f"Step {ld['id']}: Used {tool_txt} | {attempts} attempts")
 
 
+def render_discovery_live_counter(status: Optional[dict], layers_data: list[dict]) -> None:
+    """Live L3 counter so users can see jobs accumulating before full completion."""
+    box = st.empty()
+    if not status or not layers_data or len(layers_data) <= 3:
+        box.empty()
+        return
+
+    l3_status = str((layers_data[3] or {}).get("status") or "waiting").strip().lower()
+    jobs = int(status.get("jobs_discovered") or 0)
+    progress = float(status.get("progress_pct") or 0.0)
+
+    if l3_status == "running" or (40.0 <= progress < 50.0):
+        box.info(f"🔍 Discovery live — Jobs found so far: {jobs}")
+        return
+
+    if jobs > 0 and l3_status in {"ok", "error"}:
+        box.success(f"🔍 Discovery snapshot — Jobs found so far: {jobs}")
+        return
+
+    box.empty()
+
+
 def render_layer_card(ld: dict, layer_state: dict, expanded: bool = False) -> None:
     """Render one layer card with expandable details."""
     layer_id    = ld["id"]
@@ -2089,6 +2111,7 @@ def main():
 
     # ── Progress bar ─────────────────────────────────────────────────────────
     render_progress_bar(status, layers_data)
+    render_discovery_live_counter(status, layers_data)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_labels = [

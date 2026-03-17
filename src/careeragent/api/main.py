@@ -38,6 +38,8 @@ from urllib.parse import quote_plus, urlparse
 import importlib.machinery
 import importlib.util
 
+os.environ.setdefault("PLAYWRIGHT_BROWSER_TYPE", "chromium")
+
 
 def _repair_pydantic_shadowing() -> None:
     """Ensure local src/pydantic shims never shadow real dependency."""
@@ -1597,17 +1599,28 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             }
 
             last_discovery_progress_chunk = -1
+            streamed_leads: list[dict[str, Any]] = []
 
-            def _on_discovery_chunk(fetched_jobs: int) -> None:
+            def _on_discovery_chunk(fetched_jobs: int, batch_payload: list[dict[str, Any]]) -> None:
                 nonlocal last_discovery_progress_chunk
-                chunk = int(fetched_jobs // 10)
-                if chunk <= last_discovery_progress_chunk:
-                    return
-                last_discovery_progress_chunk = chunk
-                chunk_progress = min(59.0, 40.0 + (chunk * 5.0))
+                if batch_payload:
+                    streamed_leads.extend(batch_payload)
+                    deduped = _dedupe_jobs(streamed_leads)
+                    state["job_leads"] = deduped
+                    state.setdefault("layer_debug", {}).setdefault("L3", {})["stream_batches"] = (
+                        state.get("layer_debug", {}).get("L3", {}).get("stream_batches", 0) + 1
+                    )
+                    _update_run_status(run_id, jobs_discovered=len(deduped))
+
+                chunk = int(max(0, fetched_jobs) // 10)
+                chunk_progress = min(49.0, 40.0 + (chunk * 1.0))
+                if chunk > last_discovery_progress_chunk:
+                    last_discovery_progress_chunk = chunk
+                    _log_agent(state, 3, f"Discovery in progress: {fetched_jobs} jobs fetched ({chunk_progress:.0f}%).")
+
                 state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), chunk_progress)
                 state["last_heartbeat_at"] = _now()
-                _log_agent(state, 3, f"Discovery in progress: {fetched_jobs} jobs fetched ({chunk_progress:.0f}%).")
+                _persist_state(run_id)
 
             if not intent.get("extracted_skills"):
                 _log_agent(state, 3, "No parsed skills found; continuing with role-first discovery queries.")
@@ -1637,6 +1650,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 leads = _dedupe_jobs(leads)[:min_raw_jobs]
             state["job_leads"]       = leads[:min_raw_jobs]
             state["jobs_discovered"] = len(state["job_leads"])
+            if state.get("discovery_diagnostics", {}).get("source_timeout_hit"):
+                state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), 50.0)
             state["layer_debug"]["L3"] = {
                 "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
                 "sample_jobs": leads[:5],
@@ -1660,12 +1675,23 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
             await mark_error(3, f"Discovery timeout after {int(DISCOVERY_TIMEOUT_SECONDS)}s")
-            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+            partial = _dedupe_jobs(state.get("job_leads") or [])
+            if partial:
+                state["job_leads"] = partial
+                state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), 50.0)
+            else:
+                state["job_leads"] = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
             state["jobs_discovered"] = len(state["job_leads"])
         except Exception as exc:
             await mark_error(3, str(exc))
-            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+            partial = _dedupe_jobs(state.get("job_leads") or [])
+            if partial:
+                state["job_leads"] = partial
+            else:
+                state["job_leads"] = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
             state["jobs_discovered"] = len(state["job_leads"])
+
+        gc.collect()
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
         await mark_running(4, f"Scoring {state['jobs_discovered']} jobs against your profile…", tools_used=["matcher", "scorer"], attempt_count=1)
@@ -1832,6 +1858,16 @@ def _persist_state(run_id: str) -> None:
         state_file.write_text(json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.debug("State persist error: %s", exc)
+
+
+def _update_run_status(run_id: str, **fields: Any) -> None:
+    """Lightweight status updater used for partial-progress streaming."""
+    state = _runs.get(run_id)
+    if not isinstance(state, dict):
+        return
+    for key, value in fields.items():
+        state[key] = value
+    _persist_state(run_id)
 
 
 def _coerce_iso_ts(value: Any) -> datetime | None:
