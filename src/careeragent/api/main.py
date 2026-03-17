@@ -182,6 +182,12 @@ DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_TIMEOUT_SECONDS", "300"))
 KEEPALIVE_INTERVAL_SECONDS = float(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))
 HEALTH_PAYLOAD = {"status": "online"}
 HEALTH_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
+RUN_ID_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _sanitize_run_id(run_id: str) -> str:
+    cleaned = RUN_ID_SAFE_PATTERN.sub("", str(run_id or "").strip())
+    return cleaned[:64]
 
 
 def _public_base_url() -> str:
@@ -316,6 +322,12 @@ def _normalize_config(config: dict) -> dict:
     cfg.setdefault("require_draft_approval", True)
     cfg.setdefault("require_followup_approval", True)
     cfg.setdefault("max_jobs", 100)
+    cfg.setdefault("target_job_count", int(cfg.get("max_jobs", 100) or 100))
+    try:
+        cfg["target_job_count"] = max(1, int(cfg.get("target_job_count") or cfg.get("max_jobs") or 100))
+    except Exception:
+        cfg["target_job_count"] = max(1, int(cfg.get("max_jobs", 100) or 100))
+    cfg["max_jobs"] = int(cfg["target_job_count"])
     cfg.setdefault("posted_within_hours", 168)
     cfg.setdefault("salary_min", 0)
     cfg.setdefault("salary_max", 400000)
@@ -1591,7 +1603,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         # ── L3: Discovery — Hunt Job Boards ──────────────────────────────────
         await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
         _update_run_status(run_id, status="running", jobs_discovered=int(state.get("jobs_discovered") or 0))
-        scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
+        target_job_count = max(1, int(state.get("config", {}).get("target_job_count") or state.get("config", {}).get("max_jobs", 80) or 80))
+        scout = LeadScoutService(max_results_per_source=max(25, int(target_job_count // 2)), enable_playwright_scrape=False)
         state.setdefault("discovery_diagnostics", {})
 
         try:
@@ -1647,13 +1660,30 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             else:
                 state.setdefault("discovery_diagnostics", {})["used_demo_fallback"] = False
 
-            min_raw_jobs = max(80, int(state["config"].get("max_jobs", 100) or 100))
+            min_raw_jobs = max(80, target_job_count)
             if len(leads) < min_raw_jobs:
                 _log_agent(state, 3, f"Discovery below target ({len(leads)}<{min_raw_jobs}); appending resilient fallback leads.")
                 leads = (leads or []) + _stub_leads(state["profile"], max_jobs=min_raw_jobs)
                 leads = _dedupe_jobs(leads)[:min_raw_jobs]
             state["job_leads"]       = leads[:min_raw_jobs]
             state["jobs_discovered"] = len(state["job_leads"])
+            if state["jobs_discovered"] >= target_job_count:
+                state.setdefault("layer_debug", {}).setdefault("L3", {})["l3_to_l4_bridge"] = {
+                    "triggered": True,
+                    "target_job_count": target_job_count,
+                    "handoff_jobs": state["jobs_discovered"],
+                    "gc_before_l4": True,
+                    "ts": _now(),
+                }
+                _log_agent(state, 3, f"L3→L4 bridge engaged at {state['jobs_discovered']} jobs. Forcing GC and handing off to scoring.")
+                gc.collect()
+            else:
+                state.setdefault("layer_debug", {}).setdefault("L3", {})["l3_to_l4_bridge"] = {
+                    "triggered": False,
+                    "target_job_count": target_job_count,
+                    "handoff_jobs": state["jobs_discovered"],
+                    "ts": _now(),
+                }
             if state.get("discovery_diagnostics", {}).get("source_timeout_hit"):
                 state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), 50.0)
             state["layer_debug"]["L3"] = {
@@ -1936,31 +1966,43 @@ def _refresh_run_state(run_id: str) -> dict:
     polling status from a different worker than the one executing background
     pipeline tasks.
     """
-    mem_state = _runs.get(run_id)
-    state_file = LOGS_DIR / f"state_{run_id}.json"
+    clean_run_id = _sanitize_run_id(run_id)
+    if not clean_run_id:
+        raise HTTPException(404, "Run ID is missing or invalid")
+
+    mem_state = _runs.get(clean_run_id)
+    state_files = [
+        LOGS_DIR / f"state_{clean_run_id}.json",
+        Path(tempfile.gettempdir()) / f"state_{clean_run_id}.json",
+    ]
     disk_state: dict | None = None
-    if state_file.exists():
+    for state_file in state_files:
+        if not state_file.exists():
+            continue
         try:
-            lock_file = LOGS_DIR / f"state_{run_id}.lock"
+            lock_file = state_file.with_suffix(".lock")
             lock_file.parent.mkdir(parents=True, exist_ok=True)
             with lock_file.open("a+", encoding="utf-8") as lock_fh:
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_SH)
-                disk_state = json.loads(state_file.read_text(encoding="utf-8"))
+                candidate = json.loads(state_file.read_text(encoding="utf-8"))
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            if isinstance(candidate, dict):
+                if disk_state is None or _state_rank(candidate) >= _state_rank(disk_state):
+                    disk_state = candidate
         except Exception as exc:
-            log.debug("State reload error for %s: %s", run_id, exc)
+            log.debug("State reload error for %s from %s: %s", clean_run_id, state_file, exc)
 
     if disk_state and mem_state:
         chosen = disk_state if _state_rank(disk_state) >= _state_rank(mem_state) else mem_state
-        _runs[run_id] = chosen
+        _runs[clean_run_id] = chosen
         return chosen
 
     if disk_state:
-        _runs[run_id] = disk_state
+        _runs[clean_run_id] = disk_state
         return disk_state
 
     if mem_state is None:
-        raise HTTPException(404, f"Run {run_id} not found")
+        raise HTTPException(404, f"Run {clean_run_id} not found")
     return mem_state
 
 
@@ -2990,7 +3032,16 @@ def _to_pdf(docx_path: Path) -> Optional[Path]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Clean startup / shutdown — no crash."""
-    configure_runtime_env()
+    try:
+        configure_runtime_env()
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        if any(token in err.lower() for token in ("langsmith", "401", "404", "unauthorized", "forbidden")):
+            os.environ["LANGCHAIN_TRACING_V2"] = "false"
+            os.environ["LANGSMITH_TRACING"] = "false"
+            log.warning("LangSmith bootstrap failed (%s). Continuing with tracing disabled.", err)
+        else:
+            raise
     log.info("CareerAgent API starting up…")
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -3130,6 +3181,7 @@ async def get_status(
     since_heartbeat: str = "",
 ):
     """Poll this endpoint for real-time progress updates."""
+    run_id = _sanitize_run_id(run_id)
     state = _refresh_run_state(run_id)
     _try_recover_stalled_run(run_id, state)
 
