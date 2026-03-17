@@ -32,6 +32,24 @@ import streamlit as st
 
 BACKEND_URL = os.getenv("BACKEND_URL", "https://careeragent-api.onrender.com")
 
+DISCOVERY_CHECKPOINT_PATH = Path("/tmp/discovery_checkpoint.json")
+
+
+def _load_discovery_checkpoint() -> Optional[dict]:
+    try:
+        if not DISCOVERY_CHECKPOINT_PATH.exists():
+            return None
+        with DISCOVERY_CHECKPOINT_PATH.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        if not isinstance(payload, dict):
+            return None
+        jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
+        payload["jobs"] = jobs
+        payload["count"] = int(payload.get("count") or len(jobs))
+        return payload
+    except Exception:
+        return None
+
 
 class LiveFeedHandler(logging.Handler):
     """Capture orchestrator/agent info logs and mirror them into Mission Control feed."""
@@ -896,10 +914,26 @@ def _init_session():
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
         "pending_start":  None,
+        "checkpoint_resume_notice": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    if st.session_state.get("run_status") is None:
+        checkpoint = _load_discovery_checkpoint()
+        if checkpoint:
+            jobs = checkpoint.get("jobs") or []
+            st.session_state["run_status"] = {
+                "status": "running",
+                "current_layer": 3,
+                "jobs_discovered": int(checkpoint.get("count") or len(jobs)),
+                "job_leads": jobs,
+                "layers": {},
+            }
+            st.session_state["checkpoint_resume_notice"] = (
+                f"Recovered {int(checkpoint.get('count') or len(jobs))} discovered jobs from checkpoint."
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2058,6 +2092,8 @@ def main():
 
     # ── Header ────────────────────────────────────────────────────────────────
     run_label  = f"Run: `{run_id}`  |  L0→L9 Planner-Director Pipeline" if run_id else "No active run"
+    if st.session_state.get("checkpoint_resume_notice"):
+        st.info(st.session_state.get("checkpoint_resume_notice"))
     run_state  = (status or {}).get("status", "idle")
     state_cls  = f"run-status {run_state}" if run_state in ("running","completed","error","pending_human_input") else "run-status"
 
