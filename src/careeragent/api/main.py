@@ -1469,7 +1469,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
     async def _heartbeat_loop(layer_id: int) -> None:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(10)
             if state["layers"][layer_id].get("status") != "running":
                 return
             _heartbeat(state, layer_id, detail="long-running step")
@@ -1589,6 +1589,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
         # ── L3: Discovery — Hunt Job Boards ──────────────────────────────────
         await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
+        _update_run_status(run_id, status="running", jobs_discovered=int(state.get("jobs_discovered") or 0))
         scout = LeadScoutService(max_results_per_source=max(25, int((state.get("config", {}).get("max_jobs", 80) or 80) // 2)), enable_playwright_scrape=False)
         state.setdefault("discovery_diagnostics", {})
 
@@ -3088,10 +3089,30 @@ async def start_hunt(
 
 @app.get("/hunt/{run_id}/status")
 @traceable(name="api.get_status")
-async def get_status(run_id: str):
+async def get_status(
+    run_id: str,
+    wait_for_heartbeat: bool = False,
+    max_wait_seconds: int = 0,
+    since_heartbeat: str = "",
+):
     """Poll this endpoint for real-time progress updates."""
     state = _refresh_run_state(run_id)
     _try_recover_stalled_run(run_id, state)
+
+    if wait_for_heartbeat and int(max_wait_seconds or 0) > 0:
+        wait_budget = max(1, min(30, int(max_wait_seconds)))
+        deadline = time.monotonic() + wait_budget
+        baseline_heartbeat = str(since_heartbeat or state.get("last_heartbeat_at") or "")
+        terminal_states = {"completed", "error", "failed"}
+        while time.monotonic() < deadline:
+            state = _refresh_run_state(run_id)
+            heartbeat = str(state.get("last_heartbeat_at") or "")
+            if heartbeat and heartbeat != baseline_heartbeat:
+                break
+            if str(state.get("status") or "").strip().lower() in terminal_states:
+                break
+            await asyncio.sleep(1)
+
     state = _refresh_run_state(run_id)
     return {
         "run_id":           state["run_id"],
