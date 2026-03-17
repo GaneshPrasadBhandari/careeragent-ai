@@ -23,6 +23,8 @@ from urllib.parse import quote_plus
 import requests
 import streamlit as st
 
+from careeragent.utils.url_normalization import normalize_api_base
+
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
     page_title="CareerAgent-AI — Mission Control",
@@ -375,7 +377,7 @@ def _init_session():
         "view_mode":      "Pilot View",
         "live_update":    True,
         "refresh_sec":    5,
-        "api_base":       "http://localhost:8000",
+        "api_base":       "http://127.0.0.1:8000",
         "last_poll":      0.0,
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
@@ -1126,8 +1128,11 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         """, unsafe_allow_html=True)
 
         # ── API Base URL ──────────────────────────────────────────────────────
-        api_base = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
+        api_raw = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
+        api_base = normalize_api_base(api_raw)
         st.session_state["api_base"] = api_base
+        if api_raw.strip() != api_base:
+            st.caption(f"Normalized backend URL → {api_base}")
 
         # ── Health indicator ──────────────────────────────────────────────────
         is_healthy = _api_health(api_base)

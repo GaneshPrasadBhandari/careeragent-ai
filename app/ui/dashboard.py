@@ -10,6 +10,8 @@ import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
+from careeragent.utils.url_normalization import normalize_api_base
+
 # --- Path bootstrap
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
@@ -18,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-DEFAULT_API = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
+DEFAULT_API = normalize_api_base(os.getenv("API_URL", "http://127.0.0.1:8000"))
 
 
 def _safe_json(resp: requests.Response) -> Dict[str, Any]:
@@ -200,7 +202,10 @@ def main() -> None:
     if "selected_urls" not in st.session_state:
         st.session_state["selected_urls"] = set()
 
-    api = st.sidebar.text_input("API Base URL", value=DEFAULT_API).rstrip("/")
+    api_raw = st.sidebar.text_input("API Base URL", value=DEFAULT_API)
+    api = normalize_api_base(api_raw)
+    if api_raw.strip() != api:
+        st.sidebar.caption(f"Normalized API URL → {api}")
 
     # health
     try:
