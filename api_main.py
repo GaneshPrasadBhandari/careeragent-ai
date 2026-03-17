@@ -11,8 +11,11 @@ import importlib
 import json
 import logging
 import os
+import re
 import sys
 import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -114,6 +117,7 @@ else:
     _backend_ready = False
     _backend_bootstrap_thread: threading.Thread | None = None
     _health_server_thread: threading.Thread | None = None
+    _pending_hunt_runs: dict[str, dict[str, Any]] = {}
 
     class _DedicatedHealthHandler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
@@ -140,6 +144,32 @@ else:
     def _is_hunt_start_path(path: str) -> bool:
         normalized = (path or "/").split("?", 1)[0].rstrip("/") or "/"
         return normalized in {"/hunt/start", "/start_hunt"}
+
+    def _pending_status_path(path: str) -> str | None:
+        normalized = (path or "/").split("?", 1)[0].rstrip("/")
+        m = re.match(r"^/hunt/([A-Za-z0-9_-]{6,64})/status$", normalized)
+        if not m:
+            return None
+        return m.group(1)
+
+    def _extract_client_run_id(raw_body: bytes) -> str:
+        try:
+            text = raw_body.decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        m = re.search(r'"client_run_id"\s*:\s*"([A-Za-z0-9_-]{6,64})"', text)
+        return (m.group(1) if m else "").strip()[:64]
+
+    def _register_lightweight_handshake(raw_body: bytes) -> str:
+        run_id = _extract_client_run_id(raw_body) or uuid.uuid4().hex[:12]
+        _pending_hunt_runs[run_id] = {
+            "run_id": run_id,
+            "status": "queued",
+            "progress_pct": 0.0,
+            "queued_at": time.time(),
+            "message": "Lightweight handshake accepted while backend warms.",
+        }
+        return run_id
 
     def _is_health_path(path: str) -> bool:
         normalized = (path or "/").split("?", 1)[0].rstrip("/") or "/"
@@ -226,8 +256,23 @@ else:
         if not _backend_ready or _backend_app is None:
             if _backend_error is None:
                 _ensure_lazy_warmup()
+                pending_run_id = _pending_status_path(request_path)
+                if pending_run_id and pending_run_id in _pending_hunt_runs:
+                    return _json_response(200, dict(_pending_hunt_runs[pending_run_id]))
                 if _is_hunt_start_path(request_path):
-                    return _json_response(202, {"status": "loading_models", "retry_after": 3})
+                    raw_body = await request.body()
+                    run_id = _register_lightweight_handshake(raw_body)
+                    return _json_response(
+                        200,
+                        {
+                            "run_id": run_id,
+                            "task_id": run_id,
+                            "status": "loading_models",
+                            "queued": True,
+                            "retry_after": 2,
+                            "message": "Handshake OK. Backend is warming and will continue startup shortly.",
+                        },
+                    )
                 return _json_response(503, {"status": "initializing", "retry_after": 5})
 
         if _backend_error is not None:
