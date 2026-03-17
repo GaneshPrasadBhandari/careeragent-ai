@@ -13,8 +13,10 @@ import logging
 import os
 import random
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlparse
 from typing import Optional
 
@@ -26,11 +28,14 @@ from careeragent.tools.llm_tools import GeminiClient
 log = logging.getLogger("leadscout")
 
 REQUEST_TIMEOUT = 20.0
+DISCOVERY_ZERO_JOB_FAILSAFE_SECONDS = float(os.getenv("DISCOVERY_ZERO_JOB_FAILSAFE_SECONDS", "45"))
+DISCOVERY_CACHED_JOB_INJECTION_COUNT = int(os.getenv("DISCOVERY_CACHED_JOB_INJECTION_COUNT", "10"))
 LLM_QUERY_TIMEOUT_SECONDS = 8.0
 SEARCH_TASK_TIMEOUT_SECONDS = float(os.getenv("DISCOVERY_SEARCH_TIMEOUT_SECONDS", "120.0"))
 RANKING_TIMEOUT_SECONDS = 300.0
 MIN_DISCOVERY_JOBS_TARGET = int(os.getenv("MIN_DISCOVERY_READY_JOBS", "80"))
 JOB_SCRAPER_MAX_WORKERS = int(os.getenv("JOB_SCRAPER_MAX_WORKERS", "1"))
+CACHED_JOBS_FILE = Path(__file__).resolve().parents[3] / "data" / "raw" / "cached_jobs.json"
 
 TOP_SOURCE_QUOTAS = {
     "linkedin.com": 2,
@@ -369,6 +374,7 @@ class LeadScoutService:
             source_coros.append(self._search_remotive(query, location, remote))
 
         fetched_jobs = 0
+        started_at = time.monotonic()
 
         def _handle_batch_progress(batch_size: int, batch_payload: list[JobLead]) -> None:
             nonlocal fetched_jobs
@@ -394,6 +400,16 @@ class LeadScoutService:
                 for lead in batch:
                     diagnostics["counts"][str(lead.source or "unknown")] = diagnostics["counts"].get(str(lead.source or "unknown"), 0) + 1
                 leads.extend(batch)
+
+        if not leads and (time.monotonic() - started_at) >= DISCOVERY_ZERO_JOB_FAILSAFE_SECONDS:
+            cached = self._load_cached_jobs(intent_plan, limit=DISCOVERY_CACHED_JOB_INJECTION_COUNT)
+            if cached:
+                leads.extend(cached)
+                diagnostics["counts"]["cached_jobs"] = len(cached)
+                diagnostics["fallback_reason"] = (
+                    f"No discovery jobs after {int(DISCOVERY_ZERO_JOB_FAILSAFE_SECONDS)}s; injected {len(cached)} cached jobs."
+                )
+                _handle_batch_progress(len(cached), cached)
 
         if leads:
             leads = await self._validate_and_retry_links(leads, serper_key=serper_key)
@@ -542,19 +558,28 @@ class LeadScoutService:
         return self._ua_pool[self._ua_cursor]
 
     async def _linkedin_fresh_context_resolve(self, url: str) -> tuple[bool, str]:
-        """LinkedIn-only recovery: clear cookies in browser context, then retry URL."""
+        """LinkedIn-only recovery: use stealth-light context with network blocking."""
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            return False, url
+            return await self._linkedin_requests_resolve(url)
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-gpu", "--disable-blink-features=AutomationControlled"],
+                context = await pw.chromium.launch_persistent_context(
+                    user_data_dir="/tmp/careeragent_li_stealth",
+                    headless=self._playwright_stealth.get("headless", True),
+                    args=list(self._playwright_stealth.get("args", [])),
+                    locale=self._playwright_stealth.get("context", {}).get("locale", "en-US"),
+                    timezone_id=self._playwright_stealth.get("context", {}).get("timezone_id", "America/New_York"),
+                    color_scheme=self._playwright_stealth.get("context", {}).get("color_scheme", "light"),
                 )
-                context = await browser.new_context(locale="en-US")
+                await context.route(
+                    "**/*",
+                    lambda route: route.abort()
+                    if route.request.resource_type in {"image", "stylesheet", "font"}
+                    else route.continue_(),
+                )
                 page = await context.new_page()
                 await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
                 final_url = str(page.url)
@@ -563,8 +588,24 @@ class LeadScoutService:
                     await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
                     final_url = str(page.url)
                 await context.close()
-                await browser.close()
                 return _is_valid_job_url(final_url), final_url
+        except Exception:
+            return await self._linkedin_requests_resolve(url)
+
+    async def _linkedin_requests_resolve(self, url: str) -> tuple[bool, str]:
+        headers = {
+            "User-Agent": self._next_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.google.com/",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
+                response = await client.get(url)
+            final_url = str(response.url or url)
+            if "linkedin.com/feed" in final_url.lower() or "/feed" in final_url.lower():
+                return False, url
+            return _is_valid_job_url(final_url), final_url
         except Exception:
             return False, url
 
@@ -923,6 +964,37 @@ class LeadScoutService:
             if idx > target_count * 3:
                 break
         return existing
+
+    def _load_cached_jobs(self, intent_plan: dict, *, limit: int) -> list[JobLead]:
+        if limit <= 0:
+            return []
+        try:
+            rows = json.loads(CACHED_JOBS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        location = self._resolve_location(intent_plan)
+        remote = bool(intent_plan.get("geo_preferences", {}).get("remote", True))
+        cached: list[JobLead] = []
+        for idx, row in enumerate(rows[:limit], start=1):
+            title = str((row or {}).get("title") or "Software Engineer").strip()
+            company = str((row or {}).get("company") or "Cached Company").strip()
+            url = _normalize_result_url(str((row or {}).get("url") or ""))
+            if not url:
+                continue
+            cached.append(
+                JobLead(
+                    id=str((row or {}).get("id") or f"cached_{idx:03d}"),
+                    title=title,
+                    company=company,
+                    url=url,
+                    location=str((row or {}).get("location") or location),
+                    remote=bool((row or {}).get("remote", remote)),
+                    description=str((row or {}).get("description") or "Cached fail-safe discovery job."),
+                    source="cached_jobs",
+                    posted_date=str((row or {}).get("posted_date") or ""),
+                )
+            )
+        return cached
 
     # Aliases
     find_jobs   = search_jobs

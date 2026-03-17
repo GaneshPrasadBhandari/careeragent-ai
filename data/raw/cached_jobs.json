@@ -1,0 +1,12 @@
+[
+  {"id":"cached_001","title":"AI Engineer","company":"Acme AI","url":"https://www.linkedin.com/jobs/view/4000000001","location":"United States","remote":true,"description":"Cached fallback job for pipeline continuity.","posted_date":"2026-03-10"},
+  {"id":"cached_002","title":"Machine Learning Engineer","company":"Nimbus Labs","url":"https://www.indeed.com/viewjob?jk=demo0002","location":"Remote","remote":true,"description":"Cached fallback job for discovery fail-safe.","posted_date":"2026-03-10"},
+  {"id":"cached_003","title":"Generative AI Engineer","company":"Vertex Works","url":"https://boards.greenhouse.io/demo/jobs/100003","location":"United States","remote":true,"description":"Cached fallback job for blocked portals.","posted_date":"2026-03-09"},
+  {"id":"cached_004","title":"LLM Engineer","company":"Helix Systems","url":"https://jobs.lever.co/demo/100004","location":"United States","remote":true,"description":"Cached fallback job for throttled environments.","posted_date":"2026-03-09"},
+  {"id":"cached_005","title":"Applied Scientist","company":"Quantum Forge","url":"https://www.linkedin.com/jobs/view/4000000005","location":"United States","remote":true,"description":"Cached fallback job preserving L3 throughput.","posted_date":"2026-03-08"},
+  {"id":"cached_006","title":"NLP Engineer","company":"Blue Harbor","url":"https://www.indeed.com/viewjob?jk=demo0006","location":"Remote","remote":true,"description":"Cached fail-safe row for scoring continuity.","posted_date":"2026-03-08"},
+  {"id":"cached_007","title":"MLOps Engineer","company":"Northwind AI","url":"https://boards.greenhouse.io/demo/jobs/100007","location":"United States","remote":true,"description":"Cached fail-safe row for ranking continuity.","posted_date":"2026-03-07"},
+  {"id":"cached_008","title":"AI Platform Engineer","company":"Signal Stack","url":"https://jobs.lever.co/demo/100008","location":"United States","remote":true,"description":"Cached fail-safe row for drafting continuity.","posted_date":"2026-03-07"},
+  {"id":"cached_009","title":"Senior ML Engineer","company":"Pioneer Data","url":"https://www.linkedin.com/jobs/view/4000000009","location":"United States","remote":true,"description":"Cached fail-safe row for apply continuity.","posted_date":"2026-03-06"},
+  {"id":"cached_010","title":"AI Solutions Engineer","company":"Orbit Labs","url":"https://www.indeed.com/viewjob?jk=demo0010","location":"Remote","remote":true,"description":"Cached fail-safe row for L9 completion continuity.","posted_date":"2026-03-06"}
+]

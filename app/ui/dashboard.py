@@ -270,7 +270,7 @@ def main() -> None:
     st.button("🔄 Refresh", use_container_width=True)
     st.caption("Auto-refresh runs every 5s while waiting for HITL states.")
 
-    r = _api_get(api, f"/status/{run_id}", timeout=25)
+    r = _api_get(api, f"/status/{run_id}", timeout=120)
     state = _safe_json(r)
 
     status = state.get("status")
