@@ -17,6 +17,7 @@ import asyncio
 from collections import Counter
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -26,6 +27,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote_plus
 
 
 import importlib.machinery
@@ -108,7 +110,7 @@ LAYER_DEFS = [
     {"id": 0, "name": "Security & Guardrails",          "weight": 5,  "agent": "GuardAgent",     "desc": "Sanitizes input, runs guardrail checks, validates API tokens"},
     {"id": 1, "name": "Mission Control (UI)",            "weight": 5,  "agent": "UIAgent",        "desc": "Initializes UI state, loads run configuration"},
     {"id": 2, "name": "Intake Bundle (Parsing/Profile)", "weight": 15, "agent": "ParseAgent",     "desc": "Parses resume via LLM+regex, extracts skills/experience/education, builds search personas"},
-    {"id": 3, "name": "Discovery (Hunt / Job Boards)",   "weight": 25, "agent": "HuntAgent",      "desc": "Scrapes LinkedIn & Indeed with Playwright, deduplicates, geo-fences results"},
+    {"id": 3, "name": "Discovery (Hunt / Job Boards)",   "weight": 25, "agent": "HuntAgent",      "desc": "Searches LinkedIn, Glassdoor, Indeed, ZipRecruiter, MyVisaJobs, Greenhouse, Lever, and Google Jobs with deduped geo-aware discovery"},
     {"id": 4, "name": "Scrape + Match + Score",          "weight": 15, "agent": "MatchAgent",     "desc": "Extracts full JD text, runs semantic + keyword scoring against your profile"},
     {"id": 5, "name": "Evaluator + Ranking + HITL",      "weight": 10, "agent": "EvalAgent",      "desc": "Phase-2 evaluation, ranks by interview probability, triggers HITL gate"},
     {"id": 6, "name": "Drafting (ATS Resume + Cover)",   "weight": 10, "agent": "DraftAgent",     "desc": "Generates tailored ATS resume + cover letter per approved job using LLM"},
@@ -170,6 +172,9 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "feedback_events":  [],
         "learning_loop":    {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0},
         "employer_outcomes": {"interview": 0, "selected": 0, "rejected": 0, "unknown": 0},
+        "learning_resources": {},
+        "analytics_summary": {},
+        "self_learning_prompt": "",
         "langsmith":        _langsmith_status(run_id),
         "langgraph":        _langgraph_status(run_id),
         "llm_stack":        _llm_stack_snapshot(),
@@ -270,6 +275,16 @@ def _build_analytics_summary(state: dict) -> dict:
     status_counts = dict(Counter(str(item.get("status") or "unknown") for item in applied))
     companies = sorted({str(item.get("company") or "").strip() for item in applied if str(item.get("company") or "").strip()})
     latest = max((item.get("applied_at") for item in applied if item.get("applied_at")), default=None)
+    feedback_events = state.get("feedback_events", [])[-25:]
+    learning_loop = state.get("learning_loop", {})
+    optimization_prompt = (
+        "Self-Learning Optimization Prompt: Use the latest user/employer feedback, evaluator decisions, "
+        "and outcome signals to recalibrate discovery diversity, semantic-role equivalence, and ranking strictness. "
+        f"Current totals -> user_feedback={learning_loop.get('user_feedback', 0)}, "
+        f"employer_feedback={learning_loop.get('employer_feedback', 0)}, "
+        f"accepted={learning_loop.get('accepted', 0)}, rejected={learning_loop.get('rejected', 0)}. "
+        f"Recent feedback count={len(feedback_events)}."
+    )
     return {
         "total_applications": len(applied),
         "status_breakdown": status_counts,
@@ -278,9 +293,10 @@ def _build_analytics_summary(state: dict) -> dict:
         "interview_pipeline": state.get("interviews", []),
         "followup_queue": state.get("followup_queue", []),
         "feedback_loop": {
-            "learning_loop": state.get("learning_loop", {}),
+            "learning_loop": learning_loop,
             "employer_outcomes": state.get("employer_outcomes", {}),
-            "feedback_events": state.get("feedback_events", [])[-25:],
+            "feedback_events": feedback_events,
+            "self_learning_prompt": optimization_prompt,
         },
     }
 
@@ -459,11 +475,13 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
     source = str(payload.get("source") or "user").strip().lower()
     text = str(payload.get("text") or "").strip()
     meta = dict(payload.get("meta") or {})
+    rating = payload.get("rating")
     is_genuine, confidence, reason = _feedback_is_genuine(source, text)
     event = {
         "ts": _now(),
         "source": source,
         "text": text[:600],
+        "rating": int(rating) if str(rating).isdigit() else None,
         "meta": meta,
         "evaluation": {
             "is_genuine": is_genuine,
@@ -475,6 +493,10 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
     loop = state.setdefault("learning_loop", {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0})
     loop["employer_feedback" if source == "employer" else "user_feedback"] += 1
     loop["accepted" if is_genuine else "rejected"] += 1
+    state["self_learning_prompt"] = (
+        "Self-Learning Optimization Prompt: recalibrate ranking strictness, semantic role equivalence, "
+        f"and source diversification using the latest feedback event from {source} with confidence {confidence}."
+    )
     if source == "employer":
         outcomes = state.setdefault("employer_outcomes", {"interview": 0, "selected": 0, "rejected": 0, "unknown": 0})
         low = text.lower()
@@ -490,6 +512,17 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
 
 
 def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
+    role_titles = " ".join(
+        str((item or {}).get("title") or "")
+        for item in (profile.get("experience") or [])
+        if isinstance(item, dict)
+    ).lower()
+    profile_skills_blob = " ".join(str(s) for s in (profile.get("skills") or [])).lower()
+    role_equivalence_sets = (
+        {"ai architect", "solutions architect", "solution architect", "principal ml engineer", "principal machine learning engineer", "staff ml engineer"},
+        {"senior ai engineer", "principal ai engineer", "applied ai engineer", "machine learning engineer", "principal ml engineer", "llm engineer"},
+        {"backend engineer", "platform engineer", "distributed systems engineer", "software engineer"},
+    )
     resume_skills = [str(s) for s in (profile.get("skills") or []) if str(s).strip()]
     for job in jobs:
         jd_text = " ".join(
@@ -498,6 +531,8 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
         align = compute_jd_alignment(jd_text=jd_text, resume_skills=resume_skills)
         job["matched_jd_skills"] = align.matched_jd_skills[:25]
         job["missing_jd_skills"] = align.missing_jd_skills[:25]
+        job["matched_skills"] = align.matched_jd_skills[:25]
+        job["missing_skills"] = align.missing_jd_skills[:25]
         job["jd_alignment_percent"] = align.jd_alignment_percent
         job["missing_skills_gap_percent"] = align.missing_skills_gap_percent
         semantic_proxy = round(min(1.0, max(0.0, align.jd_alignment_percent / 100.0)), 4)
@@ -512,16 +547,32 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
             term in profile_low for term in ("architect", "principal", "lead")
         ):
             title_bonus = 0.08
+        equivalence_bonus = 0.0
+        normalized_title = re.sub(r"[^a-z0-9+/ ]+", " ", title_low)
+        normalized_title = re.sub(r"\s+", " ", normalized_title).strip()
+        for family in role_equivalence_sets:
+            if any(alias in normalized_title for alias in family) and any(alias in role_titles for alias in family):
+                equivalence_bonus = 0.12
+                break
+        if equivalence_bonus == 0.0 and any(term in normalized_title for term in ("principal", "staff", "architect", "lead")):
+            if any(term in role_titles for term in ("principal", "staff", "architect", "lead")):
+                equivalence_bonus = 0.08
+        if equivalence_bonus == 0.0 and any(term in jd_text.lower() for term in ("llm", "genai", "machine learning", "artificial intelligence")):
+            if any(term in profile_skills_blob for term in ("llm", "genai", "machine learning", "artificial intelligence", "ml", "ai")):
+                equivalence_bonus = 0.05
         high_match_floor = 0.0
         if lexical >= 0.58 and semantic_proxy >= 0.52:
             high_match_floor = 0.08
         elif lexical >= 0.48 and semantic_proxy >= 0.45:
             high_match_floor = 0.04
-        hybrid = round(min(1.0, (0.52 * lexical) + (0.38 * semantic_proxy) + title_bonus + high_match_floor), 4)
+        semantic_total = round(min(1.0, semantic_proxy + equivalence_bonus), 4)
+        cognitive_score = round(min(1.0, max(semantic_total, semantic_proxy) + equivalence_bonus + (title_bonus / 2.0)), 4)
+        hybrid = round(min(1.0, (0.42 * lexical) + (0.43 * semantic_proxy) + title_bonus + equivalence_bonus + high_match_floor), 4)
         job["keyword_score"] = lexical
-        job["semantic_score"] = semantic_proxy
+        job["semantic_score"] = semantic_total
+        job["cognitive_score"] = cognitive_score
         job["score"] = hybrid
-        job["ats_proxy"] = round((0.6 * semantic_proxy) + (0.4 * lexical), 4)
+        job["ats_proxy"] = round((0.45 * semantic_proxy) + (0.35 * lexical) + (0.20 * cognitive_score), 4)
     return jobs
 
 
@@ -534,17 +585,30 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
         return []
 
     ranked = sorted(scored, key=lambda j: (float(j.get("interview_probability_percent") or 0.0), float(j.get("score") or 0.0)), reverse=True)
+    above_half = [j for j in ranked if float(j.get("score") or 0.0) > 0.5]
+    must_keep = max(1, int(math.ceil(len(above_half) * 0.8))) if above_half else 0
     strict = [j for j in ranked if float(j.get("score") or 0.0) >= float(threshold)]
     if strict:
-        target = max(len(strict), int(round(len(ranked) * 0.8)))
+        target = max(len(strict), must_keep, int(round(len(ranked) * 0.8)))
     else:
-        target = max(1, int(round(len(ranked) * 0.8)))
+        target = max(1, must_keep, int(round(len(ranked) * 0.8)))
 
     top_score = float(ranked[0].get("score") or 0.0)
-    soft_floor = max(float(threshold) - 0.07, top_score * 0.8, 0.42)
+    soft_floor = max(float(threshold) - 0.1, top_score * 0.76, 0.5 if above_half else 0.42)
     widened = [j for j in ranked if float(j.get("score") or 0.0) >= soft_floor]
     selected = widened[:target] if widened else ranked[:target]
-    return selected
+
+    if above_half:
+        selected_map = {
+            str(job.get("id") or job.get("url") or idx): job
+            for idx, job in enumerate(selected)
+        }
+        for idx, job in enumerate(above_half[:must_keep]):
+            selected_map.setdefault(str(job.get("id") or job.get("url") or f"above_half_{idx}"), job)
+        selected = list(selected_map.values())
+        selected.sort(key=lambda j: (float(j.get("interview_probability_percent") or 0.0), float(j.get("score") or 0.0)), reverse=True)
+
+    return selected[: max(target, must_keep)]
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
     profile_skills = {str(x).strip().lower() for x in (profile.get("skills") or []) if str(x).strip()}
@@ -564,6 +628,37 @@ def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
             "score": round(float(j.get("score") or 0.0), 4),
         } for j in near_miss[:10]],
         "missing_skills_checklist": missing[:20],
+    }
+
+
+def _build_learning_resource_pack(skill: str) -> dict[str, Any]:
+    normalized = quote_plus(str(skill).strip())
+    docs_map = {
+        "python": "https://docs.python.org/3/",
+        "aws": "https://docs.aws.amazon.com/",
+        "azure": "https://learn.microsoft.com/azure/",
+        "gcp": "https://cloud.google.com/docs",
+        "docker": "https://docs.docker.com/",
+        "kubernetes": "https://kubernetes.io/docs/home/",
+        "langchain": "https://python.langchain.com/docs/introduction/",
+        "langgraph": "https://langchain-ai.github.io/langgraph/",
+        "pytorch": "https://pytorch.org/docs/stable/index.html",
+        "tensorflow": "https://www.tensorflow.org/learn",
+        "postgresql": "https://www.postgresql.org/docs/",
+        "sql": "https://www.postgresql.org/docs/current/tutorial-sql.html",
+    }
+    key = str(skill).strip().lower()
+    official = docs_map.get(key, f"https://www.google.com/search?q={normalized}+official+documentation")
+    youtube = f"https://www.youtube.com/results?search_query={normalized}+tutorial+free"
+    top_sites = [
+        {"label": "Official Documentation", "url": official},
+        {"label": "freeCodeCamp", "url": f"https://www.google.com/search?q=site%3Afreecodecamp.org+{normalized}"},
+        {"label": "GeeksforGeeks", "url": f"https://www.google.com/search?q=site%3Ageeksforgeeks.org+{normalized}"},
+    ]
+    return {
+        "official_documentation": official,
+        "youtube_search": youtube,
+        "top_websites": top_sites,
     }
 
 
@@ -870,6 +965,7 @@ async def _continue_l8_to_l9(run_id: str) -> None:
     _layer_running(state, 9, "Generating analytics, XAI explanations, career roadmap…", tools_used=["analytics_engine", "xai_reporter"], attempt_count=1)
     await asyncio.sleep(0.4)
     analytics_summary = _build_analytics_summary(state)
+    state["analytics_summary"] = analytics_summary
     state["layer_debug"]["L9"] = {
         "analytics_summary": analytics_summary,
         "notification_log": state.get("notification_log", []),
@@ -1000,7 +1096,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["profile"] = {"name": "Candidate", "skills": [], "experience": []}
 
         # ── L3: Discovery — Hunt Job Boards ──────────────────────────────────
-        await mark_running(3, "Launching job discovery across LinkedIn, Indeed, Greenhouse, Lever…", tools_used=["job_discovery"], attempt_count=1)
+        await mark_running(3, "Launching hybrid job discovery across LinkedIn, Glassdoor, Indeed, ZipRecruiter, MyVisaJobs, Greenhouse, Lever, and Google Jobs…", tools_used=["job_discovery"], attempt_count=1)
         try:
             from careeragent.managers.leadscout_service import LeadScoutService
             scout = LeadScoutService(enable_playwright_scrape=False)
@@ -1105,6 +1201,10 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         qualified = _phase6_qualified_jobs(scored, threshold)
         state["jobs_approved"] = len(qualified)
         gap = _gap_analysis(state.get("profile") or {}, scored, threshold=float(threshold))
+        state["learning_resources"] = {
+            skill: _build_learning_resource_pack(skill)
+            for skill in (gap.get("missing_skills_checklist") or [])[:12]
+        }
         state["layer_debug"]["L5"] = {
             "qualified_jobs": qualified[:10],
             "threshold": threshold,
@@ -1828,6 +1928,9 @@ async def get_status(run_id: str):
         "feedback_events":  state.get("feedback_events", [])[-50:],
         "learning_loop":    state.get("learning_loop", {}),
         "employer_outcomes": state.get("employer_outcomes", {}),
+        "learning_resources": state.get("learning_resources", {}),
+        "analytics_summary": state.get("analytics_summary", {}),
+        "self_learning_prompt": state.get("self_learning_prompt", ""),
         "profile":          state.get("profile", {}),
         "layer_debug":      state.get("layer_debug", {}),
         "evaluations":      state.get("evaluations", [])[-50:],
