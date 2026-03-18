@@ -270,6 +270,13 @@ DEFAULT_OUTPUTS = [
 # API HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _cooldown_seconds(resp: requests.Response) -> int:
+    retry_after = str(resp.headers.get("Retry-After") or "").strip()
+    if retry_after.isdigit():
+        return max(1, min(60, int(retry_after)))
+    return 5
+
+
 def _api_get(api_base: str, path: str, timeout: int = 5) -> Optional[dict]:
     try:
         r = requests.get(f"{api_base.rstrip('/')}{path}", timeout=timeout)
@@ -291,26 +298,53 @@ def _api_health(api_base: str) -> bool:
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
-        r = requests.post(
-            f"{api_base.rstrip('/')}/hunt/start",
-            files={"resume": (filename, resume_bytes, "application/octet-stream")},
-            data={"config": json.dumps(config)},
-            timeout=30,
-        )
-        if r.status_code == 200:
-            return r.json().get("run_id")
-        st.error(f"Backend error {r.status_code}: {r.text[:200]}")
+        for attempt in range(3):
+            r = requests.post(
+                f"{api_base.rstrip('/')}/hunt/start",
+                files={"resume": (filename, resume_bytes, "application/octet-stream")},
+                data={"config": json.dumps(config)},
+                timeout=30,
+            )
+            if r.status_code == 200:
+                st.session_state["start_hunt_error"] = None
+                return r.json().get("run_id")
+            if r.status_code in (429, 502, 503, 504) and attempt < 2:
+                wait_seconds = _cooldown_seconds(r)
+                st.session_state["start_hunt_error"] = (
+                    f"Backend is waking up or rate-limited. Retrying in {wait_seconds}s…"
+                )
+                time.sleep(wait_seconds)
+                continue
+            st.session_state["start_hunt_error"] = f"Backend error {r.status_code}: {r.text[:200]}"
+            st.error(st.session_state["start_hunt_error"])
+            return None
     except requests.exceptions.ConnectionError:
-        st.error("🔴 Cannot connect to backend. Make sure `uvicorn careeragent.api.main:app` is running on port 8000.")
+        st.session_state["start_hunt_error"] = "🔴 Cannot connect to backend. Make sure `uvicorn careeragent.api.main:app` is running on port 8000."
+        st.error(st.session_state["start_hunt_error"])
     except Exception as exc:
-        st.error(f"Start hunt error: {exc}")
+        st.session_state["start_hunt_error"] = f"Start hunt error: {exc}"
+        st.error(st.session_state["start_hunt_error"])
     return None
 
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
-    raw = _api_get(api_base, f"/hunt/{run_id}/status", timeout=5)
-    if not raw:
-        return None
+    try:
+        r = requests.get(f"{api_base.rstrip('/')}/hunt/{run_id}/status", timeout=5)
+        if r.status_code == 429:
+            cooldown = _cooldown_seconds(r)
+            st.session_state["last_poll"] = time.time() + max(0, cooldown - 1)
+            st.session_state["backend_warning"] = f"Backend is throttling status checks. Waiting {cooldown}s before polling again."
+            return st.session_state.get("run_status")
+        if r.status_code in (502, 503, 504):
+            st.session_state["backend_warning"] = "Backend is waking up. Status will resume automatically in a few seconds."
+            return st.session_state.get("run_status")
+        if r.status_code != 200:
+            st.session_state["backend_warning"] = f"Status check failed ({r.status_code})."
+            return st.session_state.get("run_status")
+        st.session_state["backend_warning"] = None
+        raw = r.json()
+    except Exception:
+        return st.session_state.get("run_status")
 
     # Backward/alternate backend compatibility: normalize common field variants.
     if "progress_pct" not in raw and "progress_percent" in raw:
@@ -381,6 +415,8 @@ def _init_session():
         "last_poll":      0.0,
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
+        "backend_warning": None,
+        "start_hunt_error": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1254,7 +1290,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         # ── Handle Start Hunt ─────────────────────────────────────────────────
         if start_clicked and resume_bytes and is_healthy:
-            with st.spinner("Launching pipeline…"):
+            with st.spinner(st.session_state.get("start_hunt_error") or "Launching pipeline…"):
                 run_id = _api_start_hunt(api_base, resume_bytes, resume_filename or "resume.pdf", config)
             if run_id:
                 st.session_state["run_id"]       = run_id
@@ -1264,6 +1300,9 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                 st.success(f"✓ Run started: `{run_id}`")
             else:
                 st.error("Failed to start run — check backend logs.")
+
+        if st.session_state.get("start_hunt_error") and not st.session_state.get("run_id"):
+            st.info(st.session_state["start_hunt_error"])
 
         # ── Show current run ID ───────────────────────────────────────────────
         if st.session_state.get("run_id"):
@@ -1286,6 +1325,9 @@ def main():
     # ── Poll backend for status ───────────────────────────────────────────────
     status = st.session_state.get("run_status")
     now    = time.time()
+
+    if st.session_state.get("backend_warning"):
+        st.warning(st.session_state["backend_warning"])
 
     if run_id and (now - st.session_state["last_poll"] > 1.5):   # max 1 poll per 1.5s
         fresh = _api_get_status(api_base, run_id)
