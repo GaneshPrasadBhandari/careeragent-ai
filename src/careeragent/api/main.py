@@ -2212,6 +2212,82 @@ def _release_recovery_slot(run_id: str) -> None:
         pass
 
 
+def _schedule_background_coroutine(coro: Any, background_tasks: Any | None = None, *, task_name: str = "background task") -> bool:
+    """Prefer immediate asyncio scheduling; fall back to FastAPI BackgroundTasks.
+
+    Some hosts may delay/drop FastAPI BackgroundTasks during worker churn. Scheduling
+    directly on the running loop makes pipeline resumes deterministic for start and
+    HITL approval actions.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro)
+        return True
+    except RuntimeError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not schedule %s via asyncio.create_task: %s", task_name, exc)
+
+    if background_tasks is not None:
+        try:
+            background_tasks.add_task(asyncio.run, coro)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not schedule %s via BackgroundTasks fallback: %s", task_name, exc)
+    return False
+
+
+def _is_stalled_discovery_run(state: dict) -> bool:
+    """Detect runs frozen inside L3 discovery around the 40%% progress mark."""
+    if not isinstance(state, dict) or state.get("status") != "running":
+        return False
+    layers = state.get("layers") or []
+    if not isinstance(layers, list) or len(layers) < 4:
+        return False
+
+    l3 = layers[3] if isinstance(layers[3], dict) else {}
+    later_layers_idle = all(
+        str((layers[i] if i < len(layers) else {}).get("status") or "waiting") == "waiting"
+        for i in range(4, min(len(layers), 10))
+    )
+    progress = float(state.get("progress_pct") or 0.0)
+    discovery_running = str(l3.get("status") or "waiting") == "running"
+    if not (discovery_running and later_layers_idle and 39.0 <= progress <= 50.0):
+        return False
+
+    age_seconds = _state_last_updated_seconds(state)
+    return age_seconds is None or age_seconds >= max(45.0, DISCOVERY_TIMEOUT_SECONDS + 5.0)
+
+
+async def _resume_pipeline_from_discovery(run_id: str) -> None:
+    state = _runs.get(run_id)
+    if not isinstance(state, dict) or state.get("status") not in {"running", None}:
+        return
+
+    state.setdefault("discovery_diagnostics", {})["auto_recovered_from_discovery_stall"] = True
+    state.setdefault("discovery_diagnostics", {})["fallback_reason"] = (
+        state.get("discovery_diagnostics", {}).get("fallback_reason")
+        or "Discovery stalled beyond timeout; resuming with resilient fallback leads."
+    )
+    leads = _dedupe_jobs(state.get("job_leads") or [])
+    if not leads:
+        leads = _stub_leads(state.get("profile") or {}, max_jobs=state.get("config", {}).get("max_jobs", 100))
+    target_job_count = max(1, int((state.get("config") or {}).get("target_job_count") or (state.get("config") or {}).get("max_jobs") or 1))
+    state["job_leads"] = leads
+    state["jobs_discovered"] = len(leads)
+    _layer_error(
+        state,
+        3,
+        f"Discovery stalled after {int(DISCOVERY_TIMEOUT_SECONDS)}s; switching to resilient fallback leads.",
+        tools_used=["job_discovery", "auto_recovery"],
+        attempt_count=int((state.get("layers", [{}] * 4)[3].get("meta", {}) or {}).get("attempt_count") or 1),
+    )
+    _ensure_minimum_job_leads(state, minimum=target_job_count)
+    state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), 50.0)
+    _persist_state(run_id)
+    await _resume_pipeline_from_l4(run_id)
+
+
 def _try_recover_stalled_run(run_id: str, state: dict) -> None:
     """Best-effort auto-recovery for stale runs stuck in early startup or at L4/L5."""
     recovery_mode = None
@@ -2221,6 +2297,10 @@ def _try_recover_stalled_run(run_id: str, state: dict) -> None:
         if state.get("recovery_attempted_at") or not resume_path.exists():
             return
         recovery_mode = "early_restart"
+    elif _is_stalled_discovery_run(state):
+        if state.get("recovery_discovery_attempted_at"):
+            return
+        recovery_mode = "resume_discovery"
     elif _is_stalled_l4_l5_run(state):
         if state.get("recovery_l4_l5_attempted_at"):
             return
@@ -2235,6 +2315,8 @@ def _try_recover_stalled_run(run_id: str, state: dict) -> None:
         loop = asyncio.get_running_loop()
         if recovery_mode == "early_restart":
             loop.create_task(run_pipeline(run_id, resume_path))
+        elif recovery_mode == "resume_discovery":
+            loop.create_task(_resume_pipeline_from_discovery(run_id))
         else:
             loop.create_task(_resume_pipeline_from_l4(run_id))
     except Exception as exc:
@@ -2248,6 +2330,9 @@ def _try_recover_stalled_run(run_id: str, state: dict) -> None:
     if recovery_mode == "early_restart":
         state["recovery_attempted_at"] = ts
         _log_agent(state, 1, "Run appeared stalled in early startup. Auto-retrying pipeline scheduling…")
+    elif recovery_mode == "resume_discovery":
+        state["recovery_discovery_attempted_at"] = ts
+        _log_agent(state, 3, "Run appeared stalled at discovery (~40%). Auto-switching to resilient fallback leads…")
     else:
         state["recovery_l4_l5_attempted_at"] = ts
         _log_agent(state, 4, "Run appeared stalled near 40-60%. Auto-resuming scoring/ranking…")
@@ -3326,9 +3411,10 @@ async def start_hunt(
         # hosts where FastAPI BackgroundTasks can be delayed/dropped under
         # worker churn. Keep BackgroundTasks as a defensive fallback.
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(run_pipeline(run_id, save_path))
-            log.info("Run %s scheduled via asyncio.create_task", run_id)
+            if _schedule_background_coroutine(run_pipeline(run_id, save_path), background_tasks, task_name="initial pipeline run"):
+                log.info("Run %s scheduled for execution", run_id)
+            else:
+                raise RuntimeError("Unable to schedule initial pipeline run")
         except RuntimeError:
             background_tasks.add_task(run_pipeline, run_id, save_path)
             log.info("Run %s scheduled via FastAPI BackgroundTasks fallback", run_id)
@@ -3501,11 +3587,15 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["status"] = "running"
         _mark_action_processed(state, request_token)
         _persist_state(run_id)
-        background_tasks.add_task(
-            _continue_l6_to_l9,
-            run_id,
-            stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)),
-        )
+        if not _schedule_background_coroutine(
+            _continue_l6_to_l9(
+                run_id,
+                stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)),
+            ),
+            background_tasks,
+            task_name="resume from ranking approval",
+        ):
+            raise HTTPException(500, "Unable to resume pipeline after ranking approval")
         return {"ok": True, "message": f"approved {len(approved)} jobs"}
 
     if action == "approve_drafts":
@@ -3513,7 +3603,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["status"] = "running"
         _mark_action_processed(state, request_token)
         _persist_state(run_id)
-        background_tasks.add_task(_continue_l7_to_l9, run_id)
+        if not _schedule_background_coroutine(_continue_l7_to_l9(run_id), background_tasks, task_name="resume from draft approval"):
+            raise HTTPException(500, "Unable to resume pipeline after draft approval")
         return {"ok": True, "message": "drafts approved; resuming apply"}
 
     if action == "approve_followups":
@@ -3530,7 +3621,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         _log_agent(state, 7, f"Human approved {len(followups)} follow-up drafts. Continuing tracking and analytics.")
         _mark_action_processed(state, request_token)
         _persist_state(run_id)
-        background_tasks.add_task(_continue_l8_to_l9, run_id)
+        if not _schedule_background_coroutine(_continue_l8_to_l9(run_id), background_tasks, task_name="resume from follow-up approval"):
+            raise HTTPException(500, "Unable to resume pipeline after follow-up approval")
         return {"ok": True, "message": f"follow-up drafts approved ({len(followups)}); resuming"}
 
     if action == "reject_followups":
@@ -3550,7 +3642,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         _persist_state(run_id)
         resume_path = Path(state.get("resume_path") or "")
         if resume_path.exists():
-            background_tasks.add_task(run_pipeline, run_id, resume_path)
+            if not _schedule_background_coroutine(run_pipeline(run_id, resume_path), background_tasks, task_name="restart pipeline after ranking rejection"):
+                raise HTTPException(500, "Unable to restart pipeline after ranking rejection")
             return {"ok": True, "message": "ranking rejected; restarting from L2"}
         raise HTTPException(400, "resume path missing; cannot re-run")
 
@@ -3575,7 +3668,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         _log_agent(state, 5, f"Profile updated with {len(incoming)} user-confirmed skills. Re-running from L4.")
         _mark_action_processed(state, request_token)
         _persist_state(run_id)
-        background_tasks.add_task(_rerun_from_l4_l5, run_id)
+        if not _schedule_background_coroutine(_rerun_from_l4_l5(run_id), background_tasks, task_name="rerun from L4/L5 after skill update"):
+            raise HTTPException(500, "Unable to rerun pipeline after profile skill update")
         return {"ok": True, "message": f"profile updated with {len(incoming)} skills; rerunning from L4"}
 
     raise HTTPException(400, "unknown action")
