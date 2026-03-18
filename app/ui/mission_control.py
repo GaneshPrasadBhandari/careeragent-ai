@@ -14,6 +14,7 @@ Fixes applied:
 from __future__ import annotations
 
 import json
+import os
 import time
 from html import escape
 from pathlib import Path
@@ -260,6 +261,31 @@ def _api_health(api_base: str) -> bool:
     return resp is not None and resp.get("status") == "ok"
 
 
+def normalize_api_base(raw: Optional[str]) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    value = value.replace("tips://", "https://").replace("tip://", "https://")
+    if "://" not in value:
+        value = f"https://{value}"
+    return value.rstrip("/")
+
+
+def resolve_default_api_base() -> str:
+    candidates = [
+        os.getenv("API_URL"),
+        os.getenv("RENDER_EXTERNAL_URL"),
+        os.getenv("PUBLIC_API_URL"),
+        os.getenv("BACKEND_URL"),
+        "http://127.0.0.1:8000",
+    ]
+    for candidate in candidates:
+        normalized = normalize_api_base(candidate)
+        if normalized:
+            return normalized
+    return "http://127.0.0.1:8000"
+
+
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
         r = requests.post(
@@ -337,6 +363,17 @@ def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict]
     return False
 
 
+def _api_post_feedback(api_base: str, run_id: str, rating: int, text: str) -> tuple[bool, str]:
+    try:
+        payload = {"source": "user", "rating": int(rating), "text": text.strip()}
+        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/feedback", json=payload, timeout=20)
+        if r.status_code == 200:
+            return True, "Feedback captured — thank you for helping improve the beta."
+        return False, f"Feedback failed ({r.status_code}): {r.text[:200]}"
+    except Exception as exc:
+        return False, f"Feedback request failed: {exc}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE BOOTSTRAP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -348,10 +385,11 @@ def _init_session():
         "view_mode":      "Pilot View",
         "live_update":    True,
         "refresh_sec":    5,
-        "api_base":       "http://localhost:8000",
+        "api_base":       resolve_default_api_base(),
         "last_poll":      0.0,
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
+        "admin_unlocked": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -984,6 +1022,74 @@ def render_analytics(status: Optional[dict]) -> None:
         st.warning("**Pipeline Errors:**\n" + "\n".join(f"- {e}" for e in errors))
 
 
+def render_admin_analytics(status: Optional[dict]) -> None:
+    st.markdown("#### 🔐 Admin Evaluation Analytics")
+    if not status:
+        st.info("Start a run to inspect evaluator analytics.")
+        return
+
+    learning_loop = status.get("learning_loop") or {}
+    feedback_events = status.get("feedback_events") or []
+    evaluations = status.get("evaluations") or []
+    layer_debug = status.get("layer_debug") or {}
+    apply_results = status.get("apply_results") or []
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("User feedback", learning_loop.get("user_feedback", 0))
+    with c2:
+        st.metric("Employer feedback", learning_loop.get("employer_feedback", 0))
+    with c3:
+        st.metric("Accepted signals", learning_loop.get("accepted", 0))
+    with c4:
+        st.metric("Rejected signals", learning_loop.get("rejected", 0))
+
+    funnel = {
+        "Jobs discovered": status.get("jobs_discovered", 0),
+        "Jobs scored": status.get("jobs_scored", 0),
+        "Jobs approved": status.get("jobs_approved", 0),
+        "Applications sent": status.get("jobs_applied", 0),
+        "Follow-ups queued": len(status.get("followup_queue") or []),
+        "Interviews predicted": len(status.get("interviews") or []),
+    }
+    st.markdown("#### Funnel conversion")
+    st.dataframe([{"Stage": k, "Count": v} for k, v in funnel.items()], use_container_width=True, hide_index=True)
+
+    if evaluations:
+        st.markdown("#### Recent evaluator decisions")
+        st.dataframe(evaluations[-20:], use_container_width=True, hide_index=True)
+    else:
+        st.caption("No evaluator decisions captured yet.")
+
+    if feedback_events:
+        st.markdown("#### Beta feedback stream")
+        st.dataframe(feedback_events[-20:], use_container_width=True, hide_index=True)
+    else:
+        st.caption("No beta feedback submissions yet.")
+
+    ranked_jobs = ((layer_debug.get("L5") or {}).get("qualified_jobs") or [])[:15]
+    if ranked_jobs:
+        st.markdown("#### Ranked jobs snapshot")
+        st.dataframe(
+            [
+                {
+                    "Title": job.get("title"),
+                    "Company": job.get("company"),
+                    "Match %": round(float(job.get("score") or 0.0) * 100, 1),
+                    "Interview %": round(float(job.get("interview_probability_percent") or 0.0), 1),
+                    "URL": job.get("url"),
+                }
+                for job in ranked_jobs
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if apply_results:
+        st.markdown("#### Application outcome ledger")
+        st.dataframe(apply_results[-20:], use_container_width=True, hide_index=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1001,7 +1107,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         """, unsafe_allow_html=True)
 
         # ── API Base URL ──────────────────────────────────────────────────────
-        api_base = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
+        api_base_input = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
+        api_base = normalize_api_base(api_base_input)
         st.session_state["api_base"] = api_base
 
         # ── Health indicator ──────────────────────────────────────────────────
@@ -1136,6 +1243,37 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         if st.session_state.get("run_id"):
             st.caption(f"Run ID: `{st.session_state['run_id']}`")
 
+        st.divider()
+        st.caption("PUBLIC BETA FEEDBACK")
+        if st.session_state.get("run_id"):
+            rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+            improve_text = st.text_area(
+                "What should we improve?",
+                value="",
+                height=120,
+                key="beta_feedback_text",
+                placeholder="Tell us what felt broken, confusing, or missing.",
+            )
+            if st.button("Send beta feedback", key="beta_feedback_submit"):
+                if not improve_text.strip():
+                    st.warning("Please include a short note before submitting feedback.")
+                else:
+                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                    (st.success if ok else st.error)(msg)
+                    if ok:
+                        st.session_state["beta_feedback_text"] = ""
+        else:
+            st.caption("Start a run to unlock public beta feedback.")
+
+        admin_secret = os.getenv("CAREERAGENT_ADMIN_PASSWORD", "").strip()
+        if admin_secret:
+            st.divider()
+            st.caption("ADMIN ACCESS")
+            supplied = st.text_input("Admin password", value="", type="password", key="admin_password_input")
+            st.session_state["admin_unlocked"] = supplied == admin_secret
+            if st.session_state["admin_unlocked"]:
+                st.success("Admin analytics unlocked.")
+
     return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config
 
 
@@ -1207,13 +1345,18 @@ def main():
     render_progress_bar(status, layers_data)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = st.tabs([
+    tab_labels = [
         "📋  Pipeline Layers",
         "💼  Job Board",
         "🧩  Match Analysis",
         "🎓  Learning Center",
         "📊  Analytics",
-    ])
+    ]
+    show_admin = bool(st.session_state.get("admin_unlocked"))
+    if show_admin:
+        tab_labels.append("🛡️  Admin Analytics")
+    tabs = st.tabs(tab_labels)
+    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:5]
 
     with tab_pipeline:
         st.markdown('<div class="section-header">Layer Details — click to expand</div>',
@@ -1262,6 +1405,10 @@ def main():
 
     with tab_analytics:
         render_analytics(status)
+
+    if show_admin:
+        with tabs[5]:
+            render_admin_analytics(status)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:
