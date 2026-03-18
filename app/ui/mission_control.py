@@ -793,7 +793,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                     payload = {}
                 status_value = str(payload.get("status") or "").strip().lower()
                 is_initializing = status_value == "initializing"
-                retry_after = int(payload.get("retry_after") or 5) if is_initializing else 5
+                retry_after = float(payload.get("retry_after") or 0.75) if is_initializing else 0.75
                 if is_initializing:
                     st.info("⏳ AI Engine Warming Up...")
                     last_err = "Backend initializing"
@@ -803,15 +803,15 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                 should_warm_retry = is_initializing or r.status_code == 503 or "backend_unavailable" in body_text
                 if should_warm_retry and attempt < 10:
                     st.toast("Waking up AI Engine...")
-                    # Opportunistic warm-up probe before retrying.
+                    # Keep UI retries responsive while still nudging cold starts.
                     try:
                         requests.get(f"{resolved_base.rstrip('/')}/health", timeout=5)
                     except Exception:
                         pass
-                    time.sleep(max(1, retry_after))
+                    time.sleep(min(max(retry_after, 0.2), 1.0))
                     continue
                 if r.status_code in {502, 504} and attempt < 10:
-                    time.sleep(min(2.5 * attempt, 10.0))
+                    time.sleep(min(0.35 * attempt, 1.5))
                     continue
                 break
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
@@ -830,8 +830,9 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
     last_hb = str(st.session_state.get("last_heartbeat_at") or "")
     status_hint = str(st.session_state.get("run_status") or "").lower()
-    wait_for_heartbeat = 1 if run_id and status_hint in {"running", "pending_human_input", "needs_human_approval"} else 0
-    max_wait = 4 if wait_for_heartbeat else 0
+    active_statuses = {"", "running", "queued", "loading_models", "started", "pending_human_input", "needs_human_approval"}
+    wait_for_heartbeat = 1 if run_id and status_hint in active_statuses else 0
+    max_wait = 12 if wait_for_heartbeat else 0
     path = f"/hunt/{run_id}/status?wait_for_heartbeat={wait_for_heartbeat}&max_wait_seconds={max_wait}&since_heartbeat={quote_plus(last_hb)}"
     raw = _api_get(api_base, path, timeout=120)
     if not raw:
