@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import smtplib
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -11,7 +12,7 @@ from careeragent.core.settings import Settings
 
 
 class NotificationService:
-    """L7/L5 notifications via ntfy.sh and optional Gmail API."""
+    """L7/L5 notifications via Gmail API, SMTP, SMS, and ntfy.sh."""
 
     def __init__(self, settings: Optional[Settings] = None, *, dry_run: bool = False) -> None:
         self._settings = settings or Settings()
@@ -48,6 +49,35 @@ class NotificationService:
         except Exception as e:
             return {"sent": False, "channel": "gmail", "error": str(e)}
 
+    def _send_smtp_email(self, *, subject: str, body: str, to_addr: str = "") -> Dict[str, Any]:
+        to_addr = to_addr or self._settings.SMTP_TO_EMAIL or self._settings.GMAIL_TO_EMAIL
+        host = self._settings.SMTP_HOST
+        port = int(self._settings.SMTP_PORT or 587)
+        username = self._settings.SMTP_USERNAME or self._settings.GMAIL_FROM_EMAIL
+        password = self._settings.SMTP_PASSWORD
+        from_addr = self._settings.SMTP_FROM_EMAIL or username or self._settings.GMAIL_FROM_EMAIL
+        use_tls = bool(self._settings.SMTP_USE_TLS)
+        if not (to_addr and host and username and password and from_addr):
+            return {"sent": False, "skipped": True, "reason": "smtp_not_configured", "to": to_addr}
+
+        message = MIMEText(body)
+        message["to"] = to_addr
+        message["from"] = from_addr
+        message["subject"] = subject
+
+        if self._dry_run:
+            return {"sent": False, "dry_run": True, "to": to_addr, "subject": subject, "channel": "smtp"}
+
+        try:
+            with smtplib.SMTP(host, port, timeout=20) as server:
+                if use_tls:
+                    server.starttls()
+                server.login(username, password)
+                server.sendmail(from_addr, [to_addr], message.as_string())
+            return {"sent": True, "channel": "smtp", "to": to_addr}
+        except Exception as e:
+            return {"sent": False, "channel": "smtp", "error": str(e), "to": to_addr}
+
     def _send_twilio_sms(self, *, body: str, to_number: str = "") -> Dict[str, Any]:
         sid = self._settings.TWILIO_ACCOUNT_SID
         token = self._settings.TWILIO_AUTH_TOKEN
@@ -79,6 +109,7 @@ class NotificationService:
         to_phone: str = "",
     ) -> Dict[str, Any]:
         gmail_res = self._send_gmail(subject=title, body=message, to_addr=to_email)
+        smtp_res = self._send_smtp_email(subject=title, body=message, to_addr=to_email)
         sms_res = self._send_twilio_sms(body=f"{title}: {message}", to_number=to_phone)
 
         topic = self._settings.NTFY_TOPIC or "careeragent_alerts_ganesh"
@@ -87,7 +118,7 @@ class NotificationService:
         payload = message.encode("utf-8")
 
         if self._dry_run:
-            return {"sent": False, "dry_run": True, "url": url, "message": message, "gmail": gmail_res, "sms": sms_res}
+            return {"sent": False, "dry_run": True, "url": url, "message": message, "gmail": gmail_res, "smtp": smtp_res, "sms": sms_res}
 
         try:
             r = httpx.post(url, data=payload, headers=headers, timeout=15.0)
@@ -96,7 +127,8 @@ class NotificationService:
                 "status_code": r.status_code,
                 "url": url,
                 "gmail": gmail_res,
+                "smtp": smtp_res,
                 "sms": sms_res,
             }
         except Exception as e:
-            return {"sent": False, "error": str(e), "url": url, "gmail": gmail_res, "sms": sms_res}
+            return {"sent": False, "error": str(e), "url": url, "gmail": gmail_res, "smtp": smtp_res, "sms": sms_res}

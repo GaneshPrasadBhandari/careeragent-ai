@@ -5,6 +5,13 @@ class _FakeSettings:
     GMAIL_TO_EMAIL = ""
     GMAIL_FROM_EMAIL = ""
     GMAIL_SERVICE_ACCOUNT_JSON = ""
+    SMTP_HOST = "smtp.gmail.com"
+    SMTP_PORT = 587
+    SMTP_USERNAME = "bot@example.com"
+    SMTP_PASSWORD = "secret"
+    SMTP_FROM_EMAIL = "bot@example.com"
+    SMTP_TO_EMAIL = ""
+    SMTP_USE_TLS = True
     TWILIO_ACCOUNT_SID = "sid"
     TWILIO_AUTH_TOKEN = "token"
     TWILIO_FROM_NUMBER = "+14155550123"
@@ -24,5 +31,7 @@ def test_send_alert_accepts_runtime_recipients_in_dry_run() -> None:
     assert out["dry_run"] is True
     assert out["gmail"].get("skipped") is True
     assert out["gmail"].get("to") == "user@example.com"
+    assert out["smtp"].get("dry_run") is True
+    assert out["smtp"].get("to") == "user@example.com"
     assert out["sms"].get("to") == "+14155550100"
     assert out["sms"].get("dry_run") is True

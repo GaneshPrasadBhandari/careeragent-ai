@@ -70,6 +70,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
 from careeragent.nlp.skills import compute_jd_alignment, extract_skills, normalize_skill
 from careeragent.services.notification_service import NotificationService
+from careeragent.managers.leadscout_service import sanitize_job_url
 
 try:
     from langsmith.run_helpers import traceable  # type: ignore
@@ -181,9 +182,10 @@ def _normalize_config(config: dict) -> dict:
     if not isinstance(cfg.get("target_roles"), list):
         cfg["target_roles"] = [str(cfg.get("target_roles") or "Software Engineer")]
     cfg.setdefault("match_threshold", 0.40)
-    cfg.setdefault("geo_preferences", {"remote": True, "locations": []})
+    cfg.setdefault("geo_preferences", {"remote": True, "locations": [], "country_selector": "US"})
     if not isinstance(cfg.get("geo_preferences"), dict):
-        cfg["geo_preferences"] = {"remote": True, "locations": []}
+        cfg["geo_preferences"] = {"remote": True, "locations": [], "country_selector": "US"}
+    cfg["geo_preferences"].setdefault("country_selector", "US")
     cfg.setdefault("require_ranking_approval", True)
     cfg.setdefault("require_draft_approval", True)
     cfg.setdefault("require_followup_approval", True)
@@ -709,6 +711,13 @@ async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -
     if stop_after_l6_for_approval:
         state["status"] = "pending_human_input"
         state["pending_action"] = "approve_drafts"
+        _log_agent(state, 6, "Draft approval gate reached. NotificationManager is sending the approval alert.")
+        _send_run_notification(
+            state,
+            title="CareerAgent approval required",
+            message=f"Run {run_id} has reached the Awaiting Approval stage. Review and approve draft resumes/cover letters to continue.",
+            stage="awaiting_approval",
+        )
         _persist_state(run_id)
         return
 
@@ -815,6 +824,15 @@ async def _continue_l7_to_l9(run_id: str, *, skip_followup_gate: bool = False) -
     _layer_ok(state, 7, f"{len(apply_results)} applications queued ✓", applied=len(apply_results), interviews_predicted=len(state["interviews"]), tools_used=["playwright"], attempt_count=1)
     state["layers"][7]["output"] = f"{len(apply_results)} applications submitted"
 
+    if apply_results:
+        submitted_count = sum(1 for row in apply_results if row.get("status") == "submitted")
+        _send_run_notification(
+            state,
+            title="CareerAgent application submitted",
+            message=f"Run {run_id} successfully submitted {submitted_count or len(apply_results)} application(s). Check Mission Control for job details.",
+            stage="application_submitted",
+        )
+
     if (not skip_followup_gate) and state.get("config", {}).get("require_followup_approval", True) and apply_results:
         state["status"] = "pending_human_input"
         state["pending_action"] = "approve_followups"
@@ -837,22 +855,12 @@ async def _continue_l8_to_l9(run_id: str) -> None:
     apply_results = state.get("apply_results") or []
 
     if notif_cfg.get("enable_email") or notif_cfg.get("enable_sms"):
-        notifier = NotificationService(dry_run=True)
-        message = f"Run {run_id}: {len(apply_results)} applications are queued/submitted."
-        alert_result = notifier.send_alert(
-            message=message,
+        _send_run_notification(
+            state,
             title="CareerAgent apply update",
-            to_email=candidate_email,
-            to_phone=candidate_phone,
+            message=f"Run {run_id}: {len(apply_results)} applications are queued/submitted.",
+            stage="tracking_update",
         )
-        state["notification_log"].append({
-            "timestamp": _now(),
-            "requested_channels": {
-                "email": bool(notif_cfg.get("enable_email")),
-                "sms": bool(notif_cfg.get("enable_sms")),
-            },
-            "result": alert_result,
-        })
 
     _layer_running(state, 8, "Recording results to tracking database…", tools_used=["sqlite_tracking"], attempt_count=1)
     await asyncio.sleep(0.3)
@@ -1174,6 +1182,33 @@ def _persist_tracking(run_id: str, state: dict) -> None:
         pass
 
 
+def _send_run_notification(state: dict, *, title: str, message: str, stage: str) -> None:
+    notif_cfg = dict((state.get("config") or {}).get("notifications") or {})
+    if not (notif_cfg.get("enable_email") or notif_cfg.get("enable_sms")):
+        return
+
+    profile = state.get("profile") or {}
+    candidate_email = str(notif_cfg.get("email") or profile.get("email") or "").strip()
+    candidate_phone = str(notif_cfg.get("phone") or profile.get("phone") or "").strip()
+    notifier = NotificationService()
+    result = notifier.send_alert(
+        message=message,
+        title=title,
+        to_email=candidate_email,
+        to_phone=candidate_phone,
+    )
+    state.setdefault("notification_log", []).append({
+        "timestamp": _now(),
+        "stage": stage,
+        "title": title,
+        "requested_channels": {
+            "email": bool(notif_cfg.get("enable_email")),
+            "sms": bool(notif_cfg.get("enable_sms")),
+        },
+        "result": result,
+    })
+
+
 def _clean_role_title(raw_title: str) -> str:
     """Normalize noisy job titles for resume/cover-letter personalization."""
     import re
@@ -1360,21 +1395,21 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     seed_jobs = [
         {
             "id": "demo_001", "title": f"Senior {skills[0] if skills else 'Software'} Engineer",
-            "company": "TechCorp Inc.", "url": "https://boards.greenhouse.io/techcorp/jobs/demo",
+            "company": "TechCorp Inc.", "url": "https://www.linkedin.com/jobs/search/?keywords=senior%20ai%20engineer&location=United%20States",
             "location": "Remote", "remote": True, "description": f"Looking for {' '.join(skills)} expert.",
-            "source": "demo", "salary_min": 130000, "salary_max": 180000,
+            "source": "linkedin", "salary_min": 130000, "salary_max": 180000,
         },
         {
             "id": "demo_002", "title": "Backend Software Engineer",
-            "company": "StartupAI", "url": "https://jobs.lever.co/startupai/demo",
+            "company": "StartupAI", "url": "https://www.indeed.com/jobs?q=backend+software+engineer&l=remote",
             "location": "San Francisco, CA", "remote": True, "description": f"Need strong {skills[0] if skills else 'Python'} skills.",
-            "source": "demo", "salary_min": 140000, "salary_max": 200000,
+            "source": "indeed", "salary_min": 140000, "salary_max": 200000,
         },
         {
             "id": "demo_003", "title": "Staff Engineer — Platform",
-            "company": "ScaleUp Inc.", "url": "https://startupxyz.com/jobs/demo",
+            "company": "ScaleUp Inc.", "url": "https://www.glassdoor.com/Job/jobs.htm?sc.keyword=platform%20engineer",
             "location": "New York, NY", "remote": False, "description": "Platform team, strong systems background.",
-            "source": "demo", "salary_min": 160000, "salary_max": 220000,
+            "source": "glassdoor", "salary_min": 160000, "salary_max": 220000,
         },
     ]
     if max_jobs <= len(seed_jobs):
@@ -1813,7 +1848,7 @@ async def get_jobs(run_id: str):
     if run_id not in _runs:
         raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    jobs  = state.get("scored_jobs", [])
+    jobs  = [{**job, "url": sanitize_job_url(job.get("url", ""))} for job in (state.get("scored_jobs", []) or [])]
     return {
         "run_id":    run_id,
         "total":     len(jobs),

@@ -28,6 +28,9 @@ JOB_BOARD_DOMAINS = [
     "indeed.com",
     "glassdoor.com",
     "ziprecruiter.com",
+    "naukri.com",
+    "wellfound.com",
+    "monsterindia.com",
     "greenhouse.io",
     "lever.co",
     "workday.com",
@@ -39,12 +42,42 @@ JOB_BOARD_DOMAINS = [
     "rippling.com",
 ]
 
+COUNTRY_SOURCE_ROTATION = {
+    "US": [
+        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+        {"label": "Indeed", "domains": ["indeed.com"]},
+        {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+        {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
+    ],
+    "IN": [
+        {"label": "Naukri", "domains": ["naukri.com"]},
+        {"label": "Wellfound", "domains": ["wellfound.com", "angel.co"]},
+        {"label": "Monster", "domains": ["monsterindia.com", "foundit.in"]},
+        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+    ],
+    "EU": [
+        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+        {"label": "Indeed", "domains": ["indeed.com"]},
+        {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+    ],
+    "AU": [
+        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+        {"label": "Indeed", "domains": ["indeed.com"]},
+        {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+    ],
+    "UAE": [
+        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+        {"label": "Indeed", "domains": ["indeed.com"]},
+        {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+    ],
+}
+
 COUNTRY_SEARCH_PRESETS = {
-    "US": {"label": "United States", "location": "United States", "gl": "us", "hl": "en"},
-    "IN": {"label": "India", "location": "India", "gl": "in", "hl": "en"},
-    "EU": {"label": "Europe", "location": "Europe", "gl": "de", "hl": "en"},
-    "AU": {"label": "Australia", "location": "Australia", "gl": "au", "hl": "en"},
-    "UAE": {"label": "UAE", "location": "United Arab Emirates", "gl": "ae", "hl": "en"},
+    "US": {"code": "US", "label": "United States", "location": "United States", "gl": "us", "hl": "en"},
+    "IN": {"code": "IN", "label": "India", "location": "India", "gl": "in", "hl": "en"},
+    "EU": {"code": "EU", "label": "Europe", "location": "Europe", "gl": "de", "hl": "en"},
+    "AU": {"code": "AU", "label": "Australia", "location": "Australia", "gl": "au", "hl": "en"},
+    "UAE": {"code": "UAE", "label": "UAE", "location": "United Arab Emirates", "gl": "ae", "hl": "en"},
 }
 
 SKIP_PATHS = ["/blog/", "/news/", "/about", "/company", "/press", "/learn"]
@@ -137,9 +170,11 @@ class LeadScoutService:
 
         tasks = []
         for region in regions:
+            providers = self._source_rotation_for_region(region)
             for query in queries:
-                tasks.append(self._search_serper_organic(query, region, remote))
-                tasks.append(self._search_tavily(query, region, remote))
+                for provider in providers:
+                    tasks.append(self._search_serper_organic(query, region, remote, provider))
+                    tasks.append(self._search_tavily(query, region, remote, provider))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -264,9 +299,13 @@ class LeadScoutService:
 
     def _resolve_locations(self, intent_plan: dict) -> list[dict[str, str]]:
         geo = intent_plan.get("geo_preferences", {}) or {}
+        selector = str(geo.get("country_selector") or geo.get("region") or "").strip().upper()
         locs = [str(loc).strip() for loc in (geo.get("locations") or []) if str(loc).strip()]
+        if selector and selector in COUNTRY_SEARCH_PRESETS and selector not in {loc.upper() for loc in locs}:
+            locs.insert(0, selector)
         if not locs:
-            return [COUNTRY_SEARCH_PRESETS[k] for k in ("US", "IN", "EU", "AU", "UAE")]
+            default_selector = selector if selector in COUNTRY_SEARCH_PRESETS else "US"
+            return [COUNTRY_SEARCH_PRESETS[default_selector]]
 
         resolved = []
         for loc in locs:
@@ -285,15 +324,22 @@ class LeadScoutService:
                 seen.add(key)
         return deduped
 
+    def _source_rotation_for_region(self, region: dict[str, str]) -> list[dict[str, list[str]]]:
+        selector = str(region.get("code") or "").upper()
+        if not selector:
+            selector = next((code for code, preset in COUNTRY_SEARCH_PRESETS.items() if preset.get("location") == region.get("location")), "US")
+        return COUNTRY_SOURCE_ROTATION.get(selector, COUNTRY_SOURCE_ROTATION["US"])
+
     # ── Source: Serper /search (organic) ────────────────────────────────────
 
-    async def _search_serper_organic(self, query: str, region: dict[str, str], remote: bool) -> list[JobLead]:
+    async def _search_serper_organic(self, query: str, region: dict[str, str], remote: bool, provider: dict[str, list[str]]) -> list[JobLead]:
         if not SERPER_KEY:
             log.debug("Serper skipped — SERPER_API_KEY not set")
             return []
         try:
             loc_str = "remote" if remote else region["location"]
-            site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS[:8])
+            site_domains = provider.get("domains") or JOB_BOARD_DOMAINS[:4]
+            site_str = " OR ".join(f"site:{d}" for d in site_domains)
             search_q = f"{query} {loc_str} ({site_str})"
             payload  = {"q": search_q, "gl": region.get("gl", "us"), "hl": region.get("hl", "en"), "num": self.max_per_source}
             headers  = {"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"}
@@ -316,7 +362,7 @@ class LeadScoutService:
                     continue
                 if any(skip in url for skip in SKIP_PATHS):
                     continue
-                if not any(d in url for d in JOB_BOARD_DOMAINS):
+                if not any(d in url for d in site_domains):
                     continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
@@ -324,7 +370,7 @@ class LeadScoutService:
                     company     = r.get("displayLink", ""),
                     url         = sanitize_job_url(url),
                     description = r.get("snippet", "")[:500],
-                    source      = "serper_organic",
+                    source      = provider.get("label", "serper_organic").lower(),
                     remote      = "remote" in (r.get("snippet", "") + url).lower(),
                 ))
             log.info("Serper organic: %d leads for: %s", len(leads), query)
@@ -335,18 +381,19 @@ class LeadScoutService:
 
     # ── Source: Tavily ───────────────────────────────────────────────────────
 
-    async def _search_tavily(self, query: str, region: dict[str, str], remote: bool) -> list[JobLead]:
+    async def _search_tavily(self, query: str, region: dict[str, str], remote: bool, provider: dict[str, list[str]]) -> list[JobLead]:
         if not TAVILY_KEY:
             log.debug("Tavily skipped — TAVILY_API_KEY not set")
             return []
         try:
             loc_str = "remote" if remote else region["location"]
+            site_domains = provider.get("domains") or JOB_BOARD_DOMAINS[:4]
             payload = {
                 "api_key":         TAVILY_KEY,
-                "query":           f"{query} {loc_str} job opening apply now",
+                "query":           f"{query} {loc_str} job opening apply now {provider.get('label', '')}",
                 "search_depth":    "basic",
                 "max_results":     self.max_per_source,
-                "include_domains": JOB_BOARD_DOMAINS,
+                "include_domains": site_domains,
             }
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
                 resp = await client.post("https://api.tavily.com/search", json=payload)
@@ -363,13 +410,15 @@ class LeadScoutService:
                     continue
                 if any(skip in url for skip in SKIP_PATHS):
                     continue
+                if not any(d in url for d in site_domains):
+                    continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = "",
                     url         = sanitize_job_url(url),
                     description = r.get("content", "")[:500],
-                    source      = "tavily",
+                    source      = provider.get("label", "tavily").lower(),
                     remote      = "remote" in (r.get("content", "") + url).lower(),
                 ))
             log.info("Tavily: %d leads for: %s", len(leads), query)
