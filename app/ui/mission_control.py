@@ -778,7 +778,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
                     endpoint,
                     files={"resume": (filename, resume_bytes, "application/octet-stream")},
                     data={"config": json.dumps(payload_config)},
-                    timeout=2,
+                    timeout=30,
                 )
                 if r.status_code in {200, 202}:
                     try:
@@ -830,7 +830,7 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
     last_hb = str(st.session_state.get("last_heartbeat_at") or "")
     path = f"/hunt/{run_id}/status?wait_for_heartbeat=1&max_wait_seconds=12&since_heartbeat={quote_plus(last_hb)}"
-    raw = _api_get(api_base, path, timeout=15)
+    raw = _api_get(api_base, path, timeout=120)
     if not raw:
         return None
     if raw.get("last_heartbeat_at"):
