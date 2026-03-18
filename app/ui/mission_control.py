@@ -220,7 +220,7 @@ LAYERS = [
     {"id": 0, "icon": "🔒", "name": "Security & Guardrails",          "weight": 5,  "agent": "GuardAgent",      "desc": "Sanitizes input, runs guardrail checks, validates API tokens"},
     {"id": 1, "icon": "🖥️", "name": "Mission Control (UI)",            "weight": 5,  "agent": "UIAgent",         "desc": "Initializes UI state, loads run configuration"},
     {"id": 2, "icon": "📄", "name": "Intake Bundle (Parsing/Profile)", "weight": 15, "agent": "ParseAgent",      "desc": "Parses resume via LLM+regex, extracts skills/experience/education, builds search personas"},
-    {"id": 3, "icon": "🔍", "name": "Discovery (Hunt / Job Boards)",   "weight": 25, "agent": "HuntAgent",       "desc": "Scrapes LinkedIn & Indeed with Playwright, deduplicates, geo-fences results"},
+    {"id": 3, "icon": "🔍", "name": "Discovery (Hunt / Job Boards)",   "weight": 25, "agent": "HuntAgent",       "desc": "Searches LinkedIn, Glassdoor, Indeed, ZipRecruiter, MyVisaJobs, Greenhouse, Lever, and Google Jobs with deduped geo-aware discovery"},
     {"id": 4, "icon": "⚖️", "name": "Scrape + Match + Score",          "weight": 15, "agent": "MatchAgent",      "desc": "Extracts full JD text, runs semantic + keyword scoring against your profile"},
     {"id": 5, "icon": "🏆", "name": "Evaluator + Ranking + HITL",      "weight": 10, "agent": "EvalAgent",       "desc": "Phase-2 evaluation, ranks by interview probability, triggers HITL gate"},
     {"id": 6, "icon": "✍️", "name": "Drafting (ATS Resume + Cover)",   "weight": 10, "agent": "DraftAgent",      "desc": "Generates tailored ATS resume + cover letter per approved job using LLM"},
@@ -985,6 +985,21 @@ def render_match_analysis(status: Optional[dict]) -> None:
                     "Skill comparison prompt: "
                     + str(job.get("skill_comparison_prompt") or "Phase 6 comparison prompt not available.")
                 )
+    if missing:
+        st.markdown("#### 🎯 Missing Skill Learning Resources")
+        unique_missing = list(dict.fromkeys([m for m in missing if m]))[:12]
+        learning_resources = status.get("learning_resources") or {}
+        for skill in unique_missing:
+            pack = learning_resources.get(skill) or {}
+            docs = pack.get("official_documentation") or ""
+            youtube = pack.get("youtube_search") or ""
+            sites = pack.get("top_websites") or []
+            with st.expander(f"Learning plan for {skill}", expanded=False):
+                st.markdown(f"- **Official documentation:** {JobURLManager.markdown_link(docs, 'Open docs')}")
+                st.markdown(f"- **Free tutorial videos:** {JobURLManager.markdown_link(youtube, 'Open curated YouTube search')}")
+                st.markdown("**Top 3 websites**")
+                for site in sites[:3]:
+                    st.markdown(f"  - {JobURLManager.markdown_link(site.get('url'), site.get('label') or 'Open resource')}")
 
 
 def render_executive_summary(status: Optional[dict]) -> None:
@@ -997,6 +1012,14 @@ def render_executive_summary(status: Optional[dict]) -> None:
     applications = analytics.get("total_applications", status.get("jobs_applied", 0))
     companies = analytics.get("companies") or []
     top_jobs = ((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or ((status.get("layer_debug") or {}).get("L4") or {}).get("top_jobs") or []
+    deduped_jobs = []
+    seen_jobs = set()
+    for job in top_jobs:
+        key = sanitize_job_url(job.get("url")) or str(job.get("id") or "")
+        if not key or key in seen_jobs:
+            continue
+        seen_jobs.add(key)
+        deduped_jobs.append(job)
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -1017,9 +1040,9 @@ def render_executive_summary(status: Optional[dict]) -> None:
         """
     )
 
-    if top_jobs:
+    if deduped_jobs:
         st.markdown("#### Recommended jobs")
-        for job in top_jobs[:5]:
+        for job in deduped_jobs[:5]:
             st.markdown(
                 f"- **{job.get('title', 'Role')}** at **{job.get('company', 'Unknown company')}** — "
                 f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'} "
@@ -1130,7 +1153,7 @@ def render_analytics(status: Optional[dict]) -> None:
 
 
 def render_admin_analytics(status: Optional[dict]) -> None:
-    st.markdown("#### 🔐 Admin Evaluation Analytics")
+    st.markdown("#### 🔐 Executive Analytics")
     if not status:
         st.info("Start a run to inspect evaluator analytics.")
         return
@@ -1140,6 +1163,7 @@ def render_admin_analytics(status: Optional[dict]) -> None:
     evaluations = status.get("evaluations") or []
     layer_debug = status.get("layer_debug") or {}
     apply_results = status.get("apply_results") or []
+    analytics_summary = status.get("analytics_summary") or {}
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1173,6 +1197,20 @@ def render_admin_analytics(status: Optional[dict]) -> None:
         st.dataframe(feedback_events[-20:], use_container_width=True, hide_index=True)
     else:
         st.caption("No beta feedback submissions yet.")
+
+    ratings = [int(event.get("rating")) for event in feedback_events if str(event.get("source") or "").lower() == "user" and str(event.get("rating") or "").isdigit()]
+    if ratings:
+        st.metric("Average user rating", round(sum(ratings) / len(ratings), 2))
+    else:
+        st.caption("No user ratings submitted yet.")
+
+    st.markdown("#### Self-Learning optimization prompt")
+    st.code(
+        ((analytics_summary.get("feedback_loop") or {}).get("self_learning_prompt"))
+        or status.get("self_learning_prompt")
+        or "No self-learning prompt generated yet.",
+        language="markdown",
+    )
 
     ranked_jobs = ((layer_debug.get("L5") or {}).get("qualified_jobs") or [])[:15]
     if ranked_jobs:
@@ -1360,28 +1398,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         if st.session_state.get("run_id"):
             st.caption(f"Run ID: `{st.session_state['run_id']}`")
 
-        st.divider()
-        st.caption("PUBLIC BETA FEEDBACK")
-        if st.session_state.get("run_id"):
-            with st.form("beta_feedback_form", clear_on_submit=True):
-                rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
-                improve_text = st.text_area(
-                    "What should we improve?",
-                    height=120,
-                    key="beta_feedback_text",
-                    placeholder="Tell us what felt broken, confusing, or missing.",
-                )
-                submit_feedback = st.form_submit_button("Send beta feedback")
-            if submit_feedback:
-                if not improve_text.strip():
-                    st.warning("Please include a short note before submitting feedback.")
-                else:
-                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
-                    (st.success if ok else st.error)(msg)
-        else:
-            st.caption("Start a run to unlock public beta feedback.")
-
-        admin_secret = os.getenv("CAREERAGENT_ADMIN_PASSWORD", "").strip()
+        admin_secret = (os.getenv("ADMIN_PASSWORD") or os.getenv("CAREERAGENT_ADMIN_PASSWORD") or "").strip()
         st.divider()
         st.caption("ADMIN LOGIN")
         supplied = st.text_input("Admin password", value="", type="password", key="admin_password_input")
@@ -1475,7 +1492,7 @@ def main():
     ]
     show_admin = bool(st.session_state.get("admin_unlocked"))
     if show_admin:
-        tab_labels.append("🛡️  Admin Analytics")
+        tab_labels.append("🛡️  Executive Analytics")
     tabs = st.tabs(tab_labels)
     tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
 
@@ -1532,6 +1549,23 @@ def main():
 
     if show_admin:
         with tabs[6]:
+            if st.session_state.get("run_id"):
+                st.markdown("#### Admin feedback intake")
+                with st.form("beta_feedback_form", clear_on_submit=True):
+                    rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+                    improve_text = st.text_area(
+                        "What should we improve?",
+                        height=120,
+                        key="beta_feedback_text",
+                        placeholder="Tell us what felt broken, confusing, or missing.",
+                    )
+                    submit_feedback = st.form_submit_button("Send beta feedback")
+                if submit_feedback:
+                    if not improve_text.strip():
+                        st.warning("Please include a short note before submitting feedback.")
+                    else:
+                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                        (st.success if ok else st.error)(msg)
             render_admin_analytics(status)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────

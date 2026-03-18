@@ -42,13 +42,19 @@ JOB_BOARD_DOMAINS = [
     "rippling.com",
 ]
 
+CORE_SOURCE_ROTATION = [
+    {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+    {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+    {"label": "Indeed", "domains": ["indeed.com"]},
+    {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
+    {"label": "MyVisaJobs", "domains": ["myvisajobs.com"]},
+    {"label": "Greenhouse", "domains": ["boards.greenhouse.io", "greenhouse.io"]},
+    {"label": "Lever", "domains": ["jobs.lever.co", "lever.co"]},
+    {"label": "Google Jobs", "domains": ["google.com", "googleusercontent.com"]},
+]
+
 COUNTRY_SOURCE_ROTATION = {
-    "US": [
-        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
-        {"label": "Indeed", "domains": ["indeed.com"]},
-        {"label": "Glassdoor", "domains": ["glassdoor.com"]},
-        {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
-    ],
+    "US": CORE_SOURCE_ROTATION,
     "IN": [
         {"label": "Naukri", "domains": ["naukri.com"]},
         {"label": "Wellfound", "domains": ["wellfound.com", "angel.co"]},
@@ -251,6 +257,12 @@ class LeadScoutService:
             base = roles[0] if roles else "AI Engineer"
             queries.append(f"Generative AI {base} LLM")
 
+        if roles and ai_ml and cloud:
+            queries.append(f"{roles[0]} {' '.join(ai_ml[:2])} {' '.join(cloud[:2])}".strip())
+        if roles:
+            queries.append(f"{roles[0]} semantic platform architecture")
+            queries.append(f"{roles[0]} cognitive systems ai")
+
         queries.append("Machine Learning Engineer GenAI LLM remote")
 
         seen_q: set[str] = set()
@@ -260,7 +272,7 @@ class LeadScoutService:
             if q and q not in seen_q:
                 seen_q.add(q)
                 final.append(q)
-                if len(final) >= 6:
+                if len(final) >= 8:
                     break
 
         return final or ["AI Engineer Python remote", "Machine Learning Engineer remote"]
