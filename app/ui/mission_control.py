@@ -126,6 +126,18 @@ def _resolve_api_base(raw_value: str) -> str:
     if not clean:
         clean = fallback
 
+    lower_clean = clean.lower()
+    if lower_clean.startswith("tips://"):
+        clean = f"https://{clean[7:].lstrip('/')}"
+    elif lower_clean.startswith("tip://"):
+        clean = f"https://{clean[6:].lstrip('/')}"
+    elif lower_clean.startswith("ttps://"):
+        clean = f"https://{clean[7:].lstrip('/')}"
+    elif lower_clean.startswith("http//"):
+        clean = f"http://{clean[6:].lstrip('/')}"
+    elif lower_clean.startswith("https//"):
+        clean = f"https://{clean[7:].lstrip('/')}"
+
     if not clean.startswith(("http://", "https://")):
         host_hint = clean.split("/", 1)[0].split(":", 1)[0].strip().lower()
         local_hosts = {"localhost", "127.0.0.1", "0.0.0.0"}

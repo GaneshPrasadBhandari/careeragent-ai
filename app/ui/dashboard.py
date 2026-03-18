@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 import requests
 import streamlit as st
@@ -18,7 +19,43 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-DEFAULT_API = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
+
+
+def _normalize_api_base(raw_value: str) -> str:
+    clean = str(raw_value or "").strip()
+    fallback = str(os.getenv("API_URL") or os.getenv("BACKEND_URL") or "http://127.0.0.1:8000").strip() or "http://127.0.0.1:8000"
+    if not clean:
+        clean = fallback
+
+    lower_clean = clean.lower()
+    if lower_clean.startswith("tips://"):
+        clean = f"https://{clean[7:].lstrip('/')}"
+    elif lower_clean.startswith("tip://"):
+        clean = f"https://{clean[6:].lstrip('/')}"
+    elif lower_clean.startswith("ttps://"):
+        clean = f"https://{clean[7:].lstrip('/')}"
+    elif lower_clean.startswith("http//"):
+        clean = f"http://{clean[6:].lstrip('/')}"
+    elif lower_clean.startswith("https//"):
+        clean = f"https://{clean[7:].lstrip('/')}"
+
+    if not clean.startswith(("http://", "https://")):
+        host_hint = clean.split("/", 1)[0].split(":", 1)[0].strip().lower()
+        scheme = "http" if host_hint in {"localhost", "127.0.0.1", "0.0.0.0"} else "https"
+        clean = f"{scheme}://{clean.lstrip('/')}"
+
+    parsed = urlparse(clean)
+    host = (parsed.netloc or "").strip().lower()
+    path = (parsed.path or "").strip()
+    if host.endswith("-dashboard.onrender.com"):
+        host = host.replace("-dashboard.onrender.com", "-api.onrender.com")
+    if any(path.startswith(prefix) for prefix in ("/health", "/docs", "/openapi", "/hunt")):
+        path = ""
+    normalized = urlunparse((parsed.scheme or "https", host, path.rstrip("/"), "", "", "")).rstrip("/")
+    return normalized or "http://127.0.0.1:8000"
+
+
+DEFAULT_API = _normalize_api_base(os.getenv("API_URL", "http://127.0.0.1:8000"))
 
 
 def _safe_json(resp: requests.Response) -> Dict[str, Any]:
@@ -200,7 +237,7 @@ def main() -> None:
     if "selected_urls" not in st.session_state:
         st.session_state["selected_urls"] = set()
 
-    api = st.sidebar.text_input("API Base URL", value=DEFAULT_API).rstrip("/")
+    api = _normalize_api_base(st.sidebar.text_input("API Base URL", value=DEFAULT_API))
 
     # health
     try:
