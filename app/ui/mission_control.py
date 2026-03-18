@@ -873,6 +873,9 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
             <div>
                 <div class="job-title">{job.get('title','')}</div>
                 <div class="job-company">{job.get('company','')}  ·  {remote_b}</div>
+                <div style="font-size:11px;color:#1B263B;margin-top:4px">
+                    Match Explanation: {job.get('match_explanation') or job.get('executive_summary') or 'Recommendation summary unavailable'}
+                </div>
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
@@ -921,9 +924,68 @@ def render_match_analysis(status: Optional[dict]) -> None:
         else:
             st.caption("No missing skills identified")
 
+    detailed_jobs = source_jobs[:5]
+    if detailed_jobs:
+        st.markdown("#### 🧠 Cognitive Intelligence")
+        for idx, job in enumerate(detailed_jobs, start=1):
+            title = f"{idx}. {job.get('title', 'Role')} — {job.get('company', 'Unknown company')}"
+            with st.expander(title, expanded=(idx == 1)):
+                st.markdown(f"**Executive summary:** {job.get('executive_summary') or 'No executive summary yet.'}")
+                st.markdown(f"**Match explanation:** {job.get('match_explanation') or 'No match explanation yet.'}")
+                rationale = job.get("recommendation_rationale") or []
+                if rationale:
+                    st.markdown("**Why recommended**")
+                    for line in rationale:
+                        st.markdown(f"- {line}")
+                st.caption(
+                    "Skill comparison prompt: "
+                    + str(job.get("skill_comparison_prompt") or "Phase 6 comparison prompt not available.")
+                )
+
+
+def render_executive_summary(status: Optional[dict]) -> None:
+    """Phase 6 executive summary tab."""
+    if not status:
+        st.info("Start a run to generate the executive summary bridge.")
+        return
+
+    analytics = status.get("analytics_summary") or {}
+    applications = analytics.get("total_applications", status.get("jobs_applied", 0))
+    companies = analytics.get("companies") or []
+    top_jobs = ((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or ((status.get("layer_debug") or {}).get("L4") or {}).get("top_jobs") or []
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Top Match", f"{status.get('top_match_score', 0):.0f}%")
+    with c2:
+        st.metric("Applications", applications)
+    with c3:
+        st.metric("Companies in Pipeline", len(companies))
+
+    st.markdown("#### Executive briefing")
+    st.markdown(
+        f"""
+        * Candidate: **{status.get('candidate_name', '—')}**
+        * Skills extracted: **{status.get('skills_extracted', 0)}**
+        * Jobs discovered/scored: **{status.get('jobs_discovered', 0)} / {status.get('jobs_scored', 0)}**
+        * Jobs approved for action: **{status.get('jobs_approved', 0)}**
+        * Current run state: **{status.get('status', 'idle')}**
+        """
+    )
+
+    if top_jobs:
+        st.markdown("#### Recommended jobs")
+        for job in top_jobs[:5]:
+            st.markdown(
+                f"- **{job.get('title', 'Role')}** at **{job.get('company', 'Unknown company')}** — "
+                f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'}"
+            )
+    else:
+        st.caption("Recommended jobs will appear here after L4/L5 scoring.")
+
 def render_analytics(status: Optional[dict]) -> None:
     """Analytics tab."""
-    if not status or status.get("progress_pct", 0) < 90:
+    if not status:
         st.markdown("""
         <div class="empty-state">
             <div class="empty-icon">📊</div>
@@ -1266,13 +1328,17 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             st.caption("Start a run to unlock public beta feedback.")
 
         admin_secret = os.getenv("CAREERAGENT_ADMIN_PASSWORD", "").strip()
+        st.divider()
+        st.caption("ADMIN LOGIN")
+        supplied = st.text_input("Admin password", value="", type="password", key="admin_password_input")
+        st.session_state["admin_unlocked"] = bool(admin_secret) and supplied == admin_secret
         if admin_secret:
-            st.divider()
-            st.caption("ADMIN ACCESS")
-            supplied = st.text_input("Admin password", value="", type="password", key="admin_password_input")
-            st.session_state["admin_unlocked"] = supplied == admin_secret
             if st.session_state["admin_unlocked"]:
                 st.success("Admin analytics unlocked.")
+            else:
+                st.caption("Enter the admin password to unlock evaluator analytics.")
+        else:
+            st.caption("Admin password is not configured in this environment.")
 
     return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config
 
@@ -1346,6 +1412,7 @@ def main():
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_labels = [
+        "🧾  Executive Summary",
         "📋  Pipeline Layers",
         "💼  Job Board",
         "🧩  Match Analysis",
@@ -1356,7 +1423,10 @@ def main():
     if show_admin:
         tab_labels.append("🛡️  Admin Analytics")
     tabs = st.tabs(tab_labels)
-    tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:5]
+    tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
+
+    with tab_summary:
+        render_executive_summary(status)
 
     with tab_pipeline:
         st.markdown('<div class="section-header">Layer Details — click to expand</div>',
@@ -1407,7 +1477,7 @@ def main():
         render_analytics(status)
 
     if show_admin:
-        with tabs[5]:
+        with tabs[6]:
             render_admin_analytics(status)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────

@@ -68,7 +68,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from careeragent.api.approval_utils import pick_approved_jobs, qualified_from_state
-from careeragent.nlp.skills import compute_jd_alignment, extract_skills
+from careeragent.nlp.skills import compute_jd_alignment, extract_skills, normalize_skill
 from careeragent.services.notification_service import NotificationService
 
 try:
@@ -180,14 +180,14 @@ def _normalize_config(config: dict) -> dict:
     cfg.setdefault("target_roles", ["Software Engineer"])
     if not isinstance(cfg.get("target_roles"), list):
         cfg["target_roles"] = [str(cfg.get("target_roles") or "Software Engineer")]
-    cfg.setdefault("match_threshold", 0.45)
+    cfg.setdefault("match_threshold", 0.40)
     cfg.setdefault("geo_preferences", {"remote": True, "locations": []})
     if not isinstance(cfg.get("geo_preferences"), dict):
         cfg["geo_preferences"] = {"remote": True, "locations": []}
     cfg.setdefault("require_ranking_approval", True)
     cfg.setdefault("require_draft_approval", True)
     cfg.setdefault("require_followup_approval", True)
-    cfg.setdefault("max_jobs", 100)
+    cfg.setdefault("max_jobs", 140)
     cfg.setdefault("posted_within_hours", 168)
     cfg.setdefault("salary_min", 0)
     cfg.setdefault("salary_max", 400000)
@@ -328,14 +328,43 @@ def _log_agent(state: dict, layer_id: int, msg: str, *, meta: dict | None = None
 
 
 def _derive_reasoning(job: dict, profile: dict) -> tuple[list[str], list[str]]:
-    profile_skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
-    matched = [str(s) for s in (job.get("matched_skills") or []) if str(s).strip()]
+    profile_skills = {
+        normalize_skill(str(s).strip().lower())
+        for s in (profile.get("skills") or [])
+        if str(s).strip()
+    }
+    matched = [normalize_skill(str(s)) for s in (job.get("matched_skills") or []) if str(s).strip()]
     if not matched:
-        desc = str(job.get("description") or "").lower()
-        matched = [s for s in profile_skills if s and s in desc][:8]
+        desc = " ".join(
+            str(job.get(k) or "")
+            for k in ("description", "snippet", "full_text", "full_text_md", "title")
+        )
+        matched = extract_skills(desc, extra_candidates=profile_skills)[:8]
     matched_l = {m.lower() for m in matched}
-    missing = [s for s in profile_skills if s not in matched_l][:8]
+    job_skills = extract_skills(
+        " ".join(str(job.get(k) or "") for k in ("description", "snippet", "full_text", "full_text_md", "title")),
+        extra_candidates=profile_skills,
+    )
+    missing = [s for s in job_skills if s.lower() not in matched_l][:8]
     return matched[:8], missing
+
+
+def _build_skill_comparison_prompt(*, profile: dict, job: dict, matched: list[str], missing: list[str]) -> str:
+    profile_skills = ", ".join(str(s) for s in (profile.get("skills") or [])[:20]) or "not provided"
+    job_title = str(job.get("title") or "Unknown role")
+    company = str(job.get("company") or "Unknown company")
+    job_text = " ".join(str(job.get(k) or "") for k in ("description", "snippet", "full_text_md"))[:2400]
+    return (
+        "Phase 6 skill comparison prompt:\n"
+        "Compare Resume Skills vs. Job Requirements using normalized skill entities, transferable architecture evidence, "
+        "seniority signals, and adjacent tool synonyms.\n"
+        f"Role: {job_title} @ {company}\n"
+        f"Resume skills: {profile_skills}\n"
+        f"Matched skills so far: {', '.join(matched) or 'none'}\n"
+        f"Missing skills so far: {', '.join(missing) or 'none'}\n"
+        f"Job requirements excerpt: {job_text}\n"
+        "Return: why this role is recommended, strongest evidence, realistic gaps, and ATS bullet guidance."
+    )
 
 
 def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
@@ -356,6 +385,9 @@ def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
         rationale.append(f"Matched capabilities: {', '.join(matched[:6])}.")
     if missing:
         rationale.append(f"Skill gaps to close: {', '.join(missing[:5])}.")
+    summary = str(job.get("match_explanation") or "").strip()
+    if summary:
+        rationale.append(f"Match explanation: {summary}")
     return rationale
 
 
@@ -372,13 +404,24 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
     for idx, j in enumerate(jobs):
         matched, missing = _derive_reasoning(j, profile)
         interview_pct = _interview_call_percent(j)
+        jd_alignment = float(j.get("jd_alignment_percent") or 0.0)
+        semantic_pct = round(float(j.get("semantic_score") or 0.0) * 100.0, 1)
+        score_pct = round(float(j.get("score") or 0.0) * 100.0, 1)
         reasons = []
         if matched:
             reasons.append(f"Skills overlap: {', '.join(matched[:4])}")
-        reasons.append(f"ATS/job-match score: {round(float(j.get('score') or 0.0) * 100, 1)}%")
+        reasons.append(f"Cognitive fit: {jd_alignment:.1f}% JD alignment with {semantic_pct:.1f}% semantic similarity")
+        reasons.append(f"ATS/job-match score: {score_pct}%")
         reasons.append(f"Predicted interview call chance: {interview_pct}%")
         if j.get("posted_hours_ago") is not None:
             reasons.append(f"Posting recency: {j.get('posted_hours_ago')}h ago")
+        explanation = (
+            f"Recommended because normalized resume skills match {', '.join(matched[:5]) or 'the core role family'}, "
+            f"the JD alignment is {jd_alignment:.1f}%, and the composite score remains {score_pct:.1f}% after "
+            f"semantic, ATS, and experience weighting. "
+            f"{('Primary gaps: ' + ', '.join(missing[:4]) + '. ') if missing else 'No major skill gaps detected. '}"
+            "Use the matched evidence in resume bullets and cover-letter proof points."
+        )
         j2 = {
             **j,
             "id": j.get("id") or f"job_{idx+1:03d}",
@@ -386,6 +429,12 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
             "missing_skills": missing,
             "interview_probability_percent": interview_pct,
             "llm_reasoning": " | ".join(reasons),
+            "match_explanation": str(j.get("match_explanation") or explanation),
+            "skill_comparison_prompt": _build_skill_comparison_prompt(profile=profile, job=j, matched=matched, missing=missing),
+            "executive_summary": (
+                f"{j.get('title') or 'Role'} at {j.get('company') or 'Unknown company'} scored {score_pct:.1f}% "
+                f"with interview odds of {interview_pct:.1f}%."
+            ),
             "recommendation_rationale": _job_recommendation_rationale({**j, "interview_probability_percent": interview_pct}, profile),
         }
         out.append(j2)
@@ -451,7 +500,17 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
         job["missing_skills_gap_percent"] = align.missing_skills_gap_percent
         semantic_proxy = round(min(1.0, max(0.0, align.jd_alignment_percent / 100.0)), 4)
         lexical = float(job.get("score") or 0.0)
-        hybrid = round((0.65 * lexical) + (0.35 * semantic_proxy), 4)
+        title_bonus = 0.0
+        title_low = str(job.get("title") or "").lower()
+        profile_text = " ".join(str(x) for x in (profile.get("skills") or [])) + " " + " ".join(
+            str((item or {}).get("title") or "") for item in (profile.get("experience") or []) if isinstance(item, dict)
+        )
+        profile_low = profile_text.lower()
+        if any(term in title_low for term in ("architect", "principal", "lead")) and any(
+            term in profile_low for term in ("architect", "principal", "lead")
+        ):
+            title_bonus = 0.08
+        hybrid = round(min(1.0, (0.55 * lexical) + (0.37 * semantic_proxy) + title_bonus), 4)
         job["keyword_score"] = lexical
         job["semantic_score"] = semantic_proxy
         job["score"] = hybrid
