@@ -86,6 +86,16 @@ ROTATING_USER_AGENTS = [
 ]
 
 
+def _http_client(*, timeout: float, follow_redirects: bool = False, headers: Optional[dict[str, str]] = None) -> httpx.AsyncClient:
+    """Create network clients that bypass env proxy settings used by hosted sandboxes."""
+    return httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        headers=headers,
+        trust_env=False,
+    )
+
+
 def _normalize_result_url(url: str) -> str:
     raw = str(url or "").strip()
     if not raw:
@@ -348,19 +358,6 @@ class LeadScoutService:
         serper_key = str(os.getenv("SERPER_API_KEY", "")).strip()
         tavily_key = str(os.getenv("TAVILY_API_KEY", "")).strip()
         queries  = self._build_queries(intent_plan)
-        try:
-            llm_queries = await asyncio.wait_for(
-                asyncio.to_thread(self._llm_expand_queries, intent_plan, queries),
-                timeout=LLM_QUERY_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            llm_queries = []
-            log.warning("LeadScout query expansion timed out after %.1fs; using baseline queries.", LLM_QUERY_TIMEOUT_SECONDS)
-        if llm_queries:
-            for q in llm_queries:
-                if q not in queries:
-                    queries.append(q)
-            queries = queries[:18]
         location = self._resolve_location(intent_plan)
         remote   = intent_plan.get("geo_preferences", {}).get("remote", True)
         diagnostics: dict = {
@@ -379,6 +376,34 @@ class LeadScoutService:
         log.info("LeadScout starting: %d queries, location='%s'", len(queries), location)
         for i, q in enumerate(queries):
             log.info("  Query[%d]: %s", i, q)
+
+        if not serper_key and not tavily_key:
+            unique = self._backfill_curated_search_urls([], intent_plan=intent_plan, target_count=max(MIN_DISCOVERY_JOBS_TARGET, int(intent_plan.get("max_jobs") or 80)))
+            if unique:
+                diagnostics["counts"]["query_backfill"] = len(unique)
+                diagnostics["fallback_reason"] = "SERPER_API_KEY/TAVILY_API_KEY missing; skipping fragile live discovery and using curated board search backfill."
+                self.last_search_diagnostics = diagnostics
+                if progress_callback:
+                    try:
+                        progress_callback(len(unique), [lead.to_dict() for lead in unique[: min(len(unique), 10)]])
+                    except Exception as exc:
+                        log.debug("LeadScout progress callback error: %s", exc)
+                log.info("LeadScout using curated backfill only because live provider keys are unavailable.")
+                return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+
+        try:
+            llm_queries = await asyncio.wait_for(
+                asyncio.to_thread(self._llm_expand_queries, intent_plan, queries),
+                timeout=LLM_QUERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            llm_queries = []
+            log.warning("LeadScout query expansion timed out after %.1fs; using baseline queries.", LLM_QUERY_TIMEOUT_SECONDS)
+        if llm_queries:
+            for q in llm_queries:
+                if q not in queries:
+                    queries.append(q)
+            queries = queries[:18]
 
         # Run source tasks (single-worker by default for Render free-tier stability).
         source_coros = []
@@ -633,7 +658,7 @@ class LeadScoutService:
             "Referer": "https://www.google.com/",
         }
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
+            async with _http_client(timeout=12.0, follow_redirects=True, headers=headers) as client:
                 response = await client.get(url)
             final_url = str(response.url or url)
             if "linkedin.com/feed" in final_url.lower() or "/feed" in final_url.lower():
@@ -652,7 +677,7 @@ class LeadScoutService:
             "Referer": "https://www.google.com/",
         }
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
+            async with _http_client(timeout=12.0, follow_redirects=True, headers=headers) as client:
                 response = await client.get(url)
             final_url = str(response.url)
             body = (response.text or "")[:1200]
@@ -1212,7 +1237,7 @@ class LeadScoutService:
             payload  = {"q": search_q, "gl": "us", "hl": "en", "num": self.max_per_source}
             headers  = {"X-API-KEY": serper_key, "Content-Type": "application/json"}
 
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            async with _http_client(timeout=REQUEST_TIMEOUT) as client:
                 resp = await client.post(
                     "https://google.serper.dev/search",
                     json=payload, headers=headers,
@@ -1265,7 +1290,7 @@ class LeadScoutService:
                 "max_results":     self.max_per_source,
                 "include_domains": JOB_BOARD_DOMAINS,
             }
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            async with _http_client(timeout=REQUEST_TIMEOUT) as client:
                 resp = await client.post("https://api.tavily.com/search", json=payload)
                 if resp.status_code != 200:
                     log.warning("Tavily HTTP %d for: %s", resp.status_code, query)
@@ -1303,7 +1328,7 @@ class LeadScoutService:
     async def _search_remotive(self, query: str, location: str, remote: bool) -> list[JobLead]:
         try:
             search_term = " ".join(str(query or "").split()[:6]).strip() or "software engineer"
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            async with _http_client(timeout=REQUEST_TIMEOUT) as client:
                 resp = await client.get("https://remotive.com/api/remote-jobs", params={"search": search_term})
                 if resp.status_code != 200:
                     log.warning("Remotive HTTP %d for: %s", resp.status_code, query)
