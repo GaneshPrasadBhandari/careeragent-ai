@@ -25,6 +25,8 @@ def test_normalize_config_includes_new_limits():
     cfg = _normalize_config({})
     assert cfg["draft_jobs_limit"] == 0
     assert cfg["apply_jobs_limit"] == 0
+    assert cfg["match_threshold"] == 0.40
+    assert cfg["max_jobs"] == 140
 
 
 def test_feedback_event_updates_learning_loop():
@@ -53,6 +55,8 @@ def test_scored_jobs_include_rationale():
     out = _augment_scored_jobs(jobs, profile)
     assert out[0]["recommendation_rationale"]
     assert any("Context fit" in line for line in out[0]["recommendation_rationale"])
+    assert out[0]["match_explanation"]
+    assert "Resume Skills vs. Job Requirements" in out[0]["skill_comparison_prompt"]
 
 
 def test_normalize_config_handles_malformed_nested_values():
