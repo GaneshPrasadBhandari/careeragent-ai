@@ -53,3 +53,21 @@ def test_search_jobs_reports_mock_batch_to_progress_callback(monkeypatch) -> Non
     assert events
     assert events[0][0] >= 1
     assert len(events[0][1]) >= 1
+
+
+
+def test_backfill_curated_search_urls_can_reach_large_target_without_hanging():
+    service = LeadScoutService(max_results_per_source=25, enable_playwright_scrape=False)
+    leads = service._backfill_curated_search_urls(
+        [],
+        intent_plan={
+            "target_roles": ["AI Engineer"],
+            "keywords": ["Python"],
+            "geo_preferences": {"remote": True},
+        },
+        target_count=80,
+    )
+
+    assert len(leads) == 80
+    assert len({lead.url for lead in leads}) == 80
+    assert all(lead.source == "query_backfill" for lead in leads)
