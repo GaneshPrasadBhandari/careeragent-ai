@@ -829,13 +829,17 @@ def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: d
 
 def _api_get_status(api_base: str, run_id: str) -> Optional[dict]:
     last_hb = str(st.session_state.get("last_heartbeat_at") or "")
-    path = f"/hunt/{run_id}/status?wait_for_heartbeat=1&max_wait_seconds=12&since_heartbeat={quote_plus(last_hb)}"
+    status_hint = str(st.session_state.get("run_status") or "").lower()
+    wait_for_heartbeat = 1 if run_id and status_hint in {"running", "pending_human_input", "needs_human_approval"} else 0
+    max_wait = 4 if wait_for_heartbeat else 0
+    path = f"/hunt/{run_id}/status?wait_for_heartbeat={wait_for_heartbeat}&max_wait_seconds={max_wait}&since_heartbeat={quote_plus(last_hb)}"
     raw = _api_get(api_base, path, timeout=120)
     if not raw:
         return None
     if raw.get("last_heartbeat_at"):
         incoming_hb = str(raw.get("last_heartbeat_at") or "")
         st.session_state["last_heartbeat_at"] = incoming_hb
+    st.session_state["run_status"] = str(raw.get("status") or "")
 
     # Backward/alternate backend compatibility: normalize common field variants.
     if "progress_pct" not in raw and "progress_percent" in raw:
