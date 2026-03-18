@@ -997,19 +997,24 @@ class LeadScoutService:
             "jobs.lever.co",
             "myworkdayjobs.com",
         ]
-        idx = 0
-        while len(existing) < target_count:
-            role = roles[idx % len(roles)]
-            kw = keywords[idx % len(keywords)] if keywords else ""
-            dom = domains[idx % len(domains)]
-            q = quote_plus((f"{role} {kw}").strip())
+        attempt = 0
+        max_attempts = max(target_count * 10, len(domains) * max(1, len(roles)) * max(1, len(keywords) or 1))
+        while len(existing) < target_count and attempt < max_attempts:
+            role = roles[attempt % len(roles)]
+            kw = keywords[attempt % len(keywords)] if keywords else ""
+            dom = domains[attempt % len(domains)]
+            page = attempt // max(1, len(domains) * len(roles) * max(1, len(keywords) or 1))
+            query_terms = [role, kw]
+            if page:
+                query_terms.append(f"page {page + 1}")
+            q = quote_plus(" ".join(term for term in query_terms if term).strip())
             url = _curated_query_url(dom, q)
-            idx += 1
-            if url in seen:
+            attempt += 1
+            if not url or url in seen:
                 continue
             seen.add(url)
             existing.append(JobLead(
-                id=f"backfill_{idx:03d}",
+                id=f"backfill_{attempt:03d}",
                 title=role,
                 company="Unknown company",
                 url=url,
@@ -1017,10 +1022,8 @@ class LeadScoutService:
                 remote=bool(intent_plan.get("geo_preferences", {}).get("remote", True)),
                 description=f"Backfilled discovery query for {role}. Skills context: {', '.join(keywords[:4])}",
                 source="query_backfill",
-                posted_hours_ago=(idx % 72) + 1,
+                posted_hours_ago=(attempt % 72) + 1,
             ))
-            if idx > target_count * 3:
-                break
         return existing
 
     def _load_cached_jobs(self, intent_plan: dict, *, limit: int) -> list[JobLead]:

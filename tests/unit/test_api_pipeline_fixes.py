@@ -1,4 +1,6 @@
 import importlib
+import io
+import json
 import sys
 import types
 import asyncio
@@ -287,3 +289,43 @@ def test_identity_bundle_contains_email_targets_for_main_hidden_and_iframe() -> 
     assert "input[type='email']" in selectors
     assert any("hidden" in str(s) for s in selectors)
     assert any("iframe" in str(s) for s in selectors)
+
+
+
+def test_pipeline_reaches_hitl_gate_with_discovery_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(api_main, "UPLOADS_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(api_main, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr(api_main, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    api_main.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    api_main.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    api_main.ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    api_main._runs.clear()
+
+    async def _exercise():
+        background = api_main.BackgroundTasks()
+
+        class _ResumeUpload:
+            filename = "resume.txt"
+
+            async def read(self):
+                return b"Python FastAPI LangGraph ML engineer resume"
+
+        resume = _ResumeUpload()
+        response = await api_main.start_hunt(
+            background,
+            resume=resume,
+            hunt_config=json.dumps({"target_roles": ["AI Engineer"], "max_jobs": 5}),
+        )
+        run_id = response["run_id"]
+        for _ in range(30):
+            state = api_main._runs.get(run_id) or api_main._load_state(run_id)
+            if state.get("status") in {"pending_human_input", "needs_human_approval", "completed", "error"}:
+                return state
+            await asyncio.sleep(0.2)
+        return api_main._runs.get(run_id) or api_main._load_state(run_id)
+
+    state = asyncio.run(_exercise())
+    assert state["status"] in {"pending_human_input", "needs_human_approval", "completed"}
+    assert "target_job_count" not in " ".join(state.get("errors") or [])
+    assert state.get("jobs_discovered", 0) >= 5
+    assert state["layers"][3]["status"] == "ok"

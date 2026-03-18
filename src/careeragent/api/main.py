@@ -1488,6 +1488,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
     Updates _runs[run_id] at every step so /status polls see real progress.
     """
     state = _runs[run_id]
+    target_job_count = max(1, int((state.get("config") or {}).get("target_job_count") or (state.get("config") or {}).get("max_jobs") or 1))
     heartbeat_tasks: dict[int, asyncio.Task[Any]] = {}
 
     def _cancel_heartbeat(layer_id: int) -> None:
