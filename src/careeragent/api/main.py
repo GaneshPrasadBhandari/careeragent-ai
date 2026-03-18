@@ -1715,7 +1715,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 state["progress_pct"] = max(float(state.get("progress_pct") or 0.0), 50.0)
             else:
                 state["job_leads"] = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
-            state["jobs_discovered"] = len(state["job_leads"])
+            _ensure_minimum_job_leads(state, minimum=target_job_count)
         except Exception as exc:
             await mark_error(3, str(exc))
             partial = _dedupe_jobs(state.get("job_leads") or [])
@@ -1723,10 +1723,10 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 state["job_leads"] = partial
             else:
                 state["job_leads"] = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
-            state["jobs_discovered"] = len(state["job_leads"])
+            _ensure_minimum_job_leads(state, minimum=target_job_count)
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
-        state["job_leads"] = _dedupe_jobs(state.get("job_leads") or [])
+        _ensure_minimum_job_leads(state, minimum=target_job_count)
         gc.collect()
         await mark_running(4, f"Scoring {state['jobs_discovered']} jobs against your profile…", tools_used=["matcher", "scorer"], attempt_count=1)
         await asyncio.sleep(0.5)
@@ -1898,7 +1898,11 @@ async def _run_l4_l5_transition(state: dict, *, threshold: float) -> None:
 def _persist_state(run_id: str) -> None:
     try:
         _runs[run_id]["updated_at"] = _now()
-        data = {k: v for k, v in _runs[run_id].items() if k not in ("job_leads",)}
+        state = dict(_runs[run_id])
+        state["job_leads"] = list(state.get("job_leads") or [])[:250]
+        state["scored_jobs"] = list(state.get("scored_jobs") or [])[:250]
+        state["approved_jobs"] = list(state.get("approved_jobs") or [])[:250]
+        data = state
         blob = json.dumps(data, indent=2, default=str)
         state_files = [
             LOGS_DIR / f"state_{run_id}.json",
@@ -1994,6 +1998,10 @@ def _refresh_run_state(run_id: str) -> dict:
 
     if disk_state and mem_state:
         chosen = disk_state if _state_rank(disk_state) >= _state_rank(mem_state) else mem_state
+        fallback = mem_state if chosen is disk_state else disk_state
+        for rich_key in ("job_leads", "scored_jobs", "approved_jobs", "apply_results", "artifacts"):
+            if not chosen.get(rich_key) and fallback.get(rich_key):
+                chosen[rich_key] = fallback.get(rich_key)
         chosen = finalize_state(chosen)
         _runs[clean_run_id] = chosen
         return chosen
@@ -2064,7 +2072,7 @@ def _is_stalled_l4_l5_run(state: dict) -> bool:
         for i in range(6, min(len(layers), 10))
     )
     stage_is_stuck = (
-        l3.get("status") == "ok"
+        str(l3.get("status") or "waiting") in {"ok", "error"}
         and later_layers_idle
         and str(l4.get("status") or "waiting") in {"waiting", "running", "error"}
         and str(l5.get("status") or "waiting") in {"waiting", "running", "error"}
@@ -2772,7 +2780,11 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
     expanded = []
     for idx in range(max_jobs):
         base = dict(seed_jobs[idx % len(seed_jobs)])
-        base["id"] = f"{base['id']}_{idx+1:03d}"
+        variant = idx + 1
+        base["id"] = f"{base['id']}_{variant:03d}"
+        base["title"] = f"{base['title']} #{variant}"
+        base["company"] = f"{base['company']} {((idx % 12) + 1):02d}"
+        base["url"] = f"{str(base.get('url') or '').rstrip('/')}/{variant}"
         base["posted_hours_ago"] = (idx % 72) + 1
         expanded.append(base)
     return expanded
@@ -2874,6 +2886,16 @@ def _apply_role_relevance_filter(jobs: list[dict], config: dict) -> list[dict]:
     # Last-resort fallback: keep only best role-aligned subset instead of all jobs.
     ranked = sorted(with_relevance, key=lambda j: float(j.get("role_relevance") or 0.0), reverse=True)
     return ranked[:minimum_expected]
+
+
+def _ensure_minimum_job_leads(state: dict, *, minimum: Optional[int] = None) -> None:
+    target = int(minimum or max(80, int((state.get("config") or {}).get("max_jobs", 80) or 80)))
+    deduped = _dedupe_jobs(state.get("job_leads") or [])
+    if len(deduped) < target:
+        seed = _stub_leads(state.get("profile") or {}, max_jobs=target)
+        deduped = _dedupe_jobs([*deduped, *seed])[:target]
+    state["job_leads"] = deduped[:target]
+    state["jobs_discovered"] = len(state["job_leads"])
 
 
 @traceable(name="api.stub_score")
@@ -3400,7 +3422,7 @@ async def get_dev_storage(run_id: str, token: str = ""):
 @traceable(name="api.get_jobs")
 async def get_jobs(run_id: str, limit: int = 200):
     state = _refresh_run_state(run_id)
-    jobs  = state.get("scored_jobs", [])
+    jobs  = state.get("scored_jobs", []) or state.get("approved_jobs", []) or state.get("job_leads", [])
     safe_limit = max(1, min(500, int(limit or 200)))
     return {
         "run_id":    run_id,
