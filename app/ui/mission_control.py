@@ -280,37 +280,54 @@ def resolve_default_api_base() -> str:
 
 
 
+class JobURLManager:
+    """Create direct, sanitized job-board URLs for UI rendering."""
+
+    @staticmethod
+    def sanitize(url: Optional[str]) -> str:
+        raw = str(url or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("//"):
+            raw = f"https:{raw}"
+        if not raw.startswith(("http://", "https://")):
+            return raw
+        try:
+            parts = urlsplit(raw)
+            query = parse_qs(parts.query, keep_blank_values=False)
+            for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
+                value = query.get(key, [""])[0]
+                if value.startswith(("http://", "https://")):
+                    return JobURLManager.sanitize(unquote(value))
+            clean_query = "&".join(
+                f"{k}={v}"
+                for k, values in query.items()
+                if not k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
+                for v in values
+            )
+            return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), clean_query, ""))
+        except Exception:
+            return raw
+
+    @staticmethod
+    def external_link_html(url: Optional[str], label: str = "Open job") -> str:
+        safe_url = JobURLManager.sanitize(url)
+        if not safe_url:
+            return '<span style="font-size:11px;color:#6e7681">No job link available</span>'
+        return f'<a href="{escape(safe_url, quote=True)}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#58a6ff;text-decoration:none">🔗 {escape(label)}</a>'
+
+    @staticmethod
+    def markdown_link(url: Optional[str], label: str = "Open job") -> str:
+        safe_url = JobURLManager.sanitize(url)
+        return f'[{label}]({safe_url})' if safe_url else label
+
+
 def sanitize_job_url(url: Optional[str]) -> str:
-    raw = str(url or "").strip()
-    if not raw:
-        return ""
-    if raw.startswith("//"):
-        raw = f"https:{raw}"
-    if not raw.startswith(("http://", "https://")):
-        return raw
-    try:
-        parts = urlsplit(raw)
-        query = parse_qs(parts.query, keep_blank_values=False)
-        for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
-            value = query.get(key, [""])[0]
-            if value.startswith(("http://", "https://")):
-                return sanitize_job_url(unquote(value))
-        clean_query = "&".join(
-            f"{k}={v}"
-            for k, values in query.items()
-            if not k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
-            for v in values
-        )
-        return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), clean_query, ""))
-    except Exception:
-        return raw
+    return JobURLManager.sanitize(url)
 
 
 def external_link_html(url: Optional[str], label: str = "Open job") -> str:
-    safe_url = sanitize_job_url(url)
-    if not safe_url:
-        return '<span style="font-size:11px;color:#6e7681">No job link available</span>'
-    return f'<a href="{escape(safe_url, quote=True)}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#58a6ff;text-decoration:none">🔗 {escape(label)}</a>'
+    return JobURLManager.external_link_html(url, label)
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
@@ -905,7 +922,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
-                <div style="font-size:11px;color:#58a6ff;margin-top:6px">{external_link_html(job.get('url'), 'Open job post')}</div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:6px">{JobURLManager.external_link_html(job.get('url'), 'Open job post')}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
@@ -957,7 +974,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
             title = f"{idx}. {job.get('title', 'Role')} — {job.get('company', 'Unknown company')}"
             with st.expander(title, expanded=(idx == 1)):
                 st.markdown(f"**Executive summary:** {job.get('executive_summary') or 'No executive summary yet.'}")
-                st.markdown(external_link_html(job.get("url"), "Open job post"), unsafe_allow_html=True)
+                st.markdown(JobURLManager.external_link_html(job.get("url"), "Open job post"), unsafe_allow_html=True)
                 st.markdown(f"**Match explanation:** {job.get('match_explanation') or 'No match explanation yet.'}")
                 rationale = job.get("recommendation_rationale") or []
                 if rationale:
@@ -1006,7 +1023,7 @@ def render_executive_summary(status: Optional[dict]) -> None:
             st.markdown(
                 f"- **{job.get('title', 'Role')}** at **{job.get('company', 'Unknown company')}** — "
                 f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'} "
-                f"[Open job]({sanitize_job_url(job.get('url'))})"
+                f"{JobURLManager.markdown_link(job.get('url'), 'Open job')}"
             )
     else:
         st.caption("Recommended jobs will appear here after L4/L5 scoring.")
@@ -1245,6 +1262,16 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         target_roles = [r.strip() for r in roles_input.split("\n") if r.strip()]
 
         # ── Options ───────────────────────────────────────────────────────────
+        region_options = {
+            "United States": "US",
+            "India": "IN",
+            "Europe": "EU",
+            "Australia": "AU",
+            "United Arab Emirates": "UAE",
+        }
+        selected_region_label = st.selectbox("Search region", list(region_options.keys()), index=0)
+        selected_region_code = region_options[selected_region_label]
+
         remote_only = st.checkbox("Remote Only", value=True)
         threshold   = st.slider("Match Threshold", 0.30, 0.90, 0.45, 0.05,
                                 help="Minimum score for a job to qualify")
@@ -1271,7 +1298,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         config = {
             "target_roles":             target_roles,
             "match_threshold":          threshold,
-            "geo_preferences":          {"remote": remote_only, "locations": []},
+            "geo_preferences":          {"remote": remote_only, "locations": [selected_region_label], "country_selector": selected_region_code},
             "require_ranking_approval": require_ranking_approval,
             "require_draft_approval":   require_draft_approval,
             "require_followup_approval": require_followup_approval,
@@ -1336,22 +1363,21 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.divider()
         st.caption("PUBLIC BETA FEEDBACK")
         if st.session_state.get("run_id"):
-            rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
-            improve_text = st.text_area(
-                "What should we improve?",
-                value="",
-                height=120,
-                key="beta_feedback_text",
-                placeholder="Tell us what felt broken, confusing, or missing.",
-            )
-            if st.button("Send beta feedback", key="beta_feedback_submit"):
+            with st.form("beta_feedback_form", clear_on_submit=True):
+                rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+                improve_text = st.text_area(
+                    "What should we improve?",
+                    height=120,
+                    key="beta_feedback_text",
+                    placeholder="Tell us what felt broken, confusing, or missing.",
+                )
+                submit_feedback = st.form_submit_button("Send beta feedback")
+            if submit_feedback:
                 if not improve_text.strip():
                     st.warning("Please include a short note before submitting feedback.")
                 else:
                     ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
                     (st.success if ok else st.error)(msg)
-                    if ok:
-                        st.session_state["beta_feedback_text"] = ""
         else:
             st.caption("Start a run to unlock public beta feedback.")
 

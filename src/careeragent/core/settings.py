@@ -32,6 +32,13 @@ class Settings(BaseModel):
     GMAIL_TO_EMAIL: Optional[str] = None
     GMAIL_FROM_EMAIL: Optional[str] = None
     GMAIL_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_TO_EMAIL: Optional[str] = None
+    SMTP_USE_TLS: bool = True
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_FROM_NUMBER: Optional[str] = None
@@ -60,6 +67,13 @@ class Settings(BaseModel):
                 "GMAIL_TO_EMAIL",
                 "GMAIL_FROM_EMAIL",
                 "GMAIL_SERVICE_ACCOUNT_JSON",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_USERNAME",
+                "SMTP_PASSWORD",
+                "SMTP_FROM_EMAIL",
+                "SMTP_TO_EMAIL",
+                "SMTP_USE_TLS",
                 "TWILIO_ACCOUNT_SID",
                 "TWILIO_AUTH_TOKEN",
                 "TWILIO_FROM_NUMBER",
