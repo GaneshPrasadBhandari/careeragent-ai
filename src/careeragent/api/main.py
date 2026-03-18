@@ -510,7 +510,12 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
             term in profile_low for term in ("architect", "principal", "lead")
         ):
             title_bonus = 0.08
-        hybrid = round(min(1.0, (0.55 * lexical) + (0.37 * semantic_proxy) + title_bonus), 4)
+        high_match_floor = 0.0
+        if lexical >= 0.58 and semantic_proxy >= 0.52:
+            high_match_floor = 0.08
+        elif lexical >= 0.48 and semantic_proxy >= 0.45:
+            high_match_floor = 0.04
+        hybrid = round(min(1.0, (0.52 * lexical) + (0.38 * semantic_proxy) + title_bonus + high_match_floor), 4)
         job["keyword_score"] = lexical
         job["semantic_score"] = semantic_proxy
         job["score"] = hybrid
@@ -519,6 +524,25 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
 
 
 
+
+
+
+def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
+    if not scored:
+        return []
+
+    ranked = sorted(scored, key=lambda j: (float(j.get("interview_probability_percent") or 0.0), float(j.get("score") or 0.0)), reverse=True)
+    strict = [j for j in ranked if float(j.get("score") or 0.0) >= float(threshold)]
+    if strict:
+        target = max(len(strict), int(round(len(ranked) * 0.8)))
+    else:
+        target = max(1, int(round(len(ranked) * 0.8)))
+
+    top_score = float(ranked[0].get("score") or 0.0)
+    soft_floor = max(float(threshold) - 0.07, top_score * 0.8, 0.42)
+    widened = [j for j in ranked if float(j.get("score") or 0.0) >= soft_floor]
+    selected = widened[:target] if widened else ranked[:target]
+    return selected
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
     profile_skills = {str(x).strip().lower() for x in (profile.get("skills") or []) if str(x).strip()}
@@ -563,8 +587,7 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     _layer_ok(state, 4, f"{len(scored)} jobs re-scored, top match {state['top_match_score']}% ✓", scored=len(scored), top_score=state["top_match_score"], tools_used=["matcher", "scorer"], attempt_count=1)
 
     _layer_running(state, 5, "Re-ranking jobs after profile update…", tools_used=["ranking_evaluator", "gap_analysis"], attempt_count=1)
-    qualified = [j for j in scored if float(j.get("score") or 0.0) >= threshold]
-    qualified = sorted(qualified, key=lambda j: float(j.get("interview_probability_percent") or 0.0), reverse=True)
+    qualified = _phase6_qualified_jobs(scored, threshold)
     state["jobs_approved"] = len(qualified)
     gap = _gap_analysis(state.get("profile") or {}, scored, threshold=threshold)
     state.setdefault("layer_debug", {})["L5"] = {
@@ -1071,13 +1094,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         # ── L5: Evaluator + Ranking + HITL ───────────────────────────────────
         await mark_running(5, "Ranking jobs by interview probability…", tools_used=["ranking_evaluator"], attempt_count=1)
         await asyncio.sleep(0.4)
-        qualified  = [j for j in scored if j.get("score", 0) >= threshold]
+        qualified = _phase6_qualified_jobs(scored, threshold)
         state["jobs_approved"] = len(qualified)
-        qualified = sorted(
-            qualified,
-            key=lambda j: float(j.get("interview_probability_percent") or 0.0),
-            reverse=True,
-        )
         gap = _gap_analysis(state.get("profile") or {}, scored, threshold=float(threshold))
         state["layer_debug"]["L5"] = {
             "qualified_jobs": qualified[:10],
