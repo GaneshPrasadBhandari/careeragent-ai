@@ -209,3 +209,57 @@ def test_try_recover_stalled_run_resumes_l4_l5_once(monkeypatch):
     before = len(scheduled)
     api._try_recover_stalled_run("mid123", state)
     assert len(scheduled) == before, "L4/L5 recovery should only be attempted once"
+
+
+def test_is_stalled_discovery_run_detects_l3_hang() -> None:
+    state = {
+        "status": "running",
+        "progress_pct": 40.0,
+        "updated_at": _ts_ago(120),
+        "layers": [
+            {"status": "ok"},
+            {"status": "ok"},
+            {"status": "ok"},
+            {"status": "running", "meta": {}},
+            {"status": "waiting", "meta": {}},
+            {"status": "waiting", "meta": {}},
+        ],
+    }
+    assert api._is_stalled_discovery_run(state) is True
+
+
+def test_try_recover_stalled_run_resumes_discovery_once(monkeypatch):
+    state = {
+        "run_id": "disc123",
+        "status": "running",
+        "progress_pct": 40.0,
+        "updated_at": _ts_ago(120),
+        "layers": [
+            {"status": "ok", "meta": {}},
+            {"status": "ok", "meta": {}},
+            {"status": "ok", "meta": {}},
+            {"status": "running", "meta": {}},
+            {"status": "waiting", "meta": {}},
+            {"status": "waiting", "meta": {}},
+        ],
+        "agent_log": [],
+    }
+
+    scheduled = []
+
+    class _Loop:
+        def create_task(self, coro):
+            scheduled.append(coro)
+            coro.close()
+
+    monkeypatch.setattr(api.asyncio, "get_running_loop", lambda: _Loop())
+    monkeypatch.setattr(api, "_claim_recovery_slot", lambda _run_id: True)
+    monkeypatch.setattr(api, "_persist_state", lambda _run_id: None)
+
+    api._try_recover_stalled_run("disc123", state)
+    assert state.get("recovery_discovery_attempted_at")
+    assert scheduled, "expected discovery recovery scheduler to enqueue resume task"
+
+    before = len(scheduled)
+    api._try_recover_stalled_run("disc123", state)
+    assert len(scheduled) == before, "discovery recovery should only be attempted once"
