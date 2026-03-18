@@ -13,6 +13,7 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from typing import Optional
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -24,9 +25,11 @@ REQUEST_TIMEOUT = 20.0
 
 JOB_BOARD_DOMAINS = [
     "linkedin.com/jobs",
+    "indeed.com",
+    "glassdoor.com",
+    "ziprecruiter.com",
     "greenhouse.io",
     "lever.co",
-    "indeed.com",
     "workday.com",
     "myworkdayjobs.com",
     "icims.com",
@@ -36,7 +39,56 @@ JOB_BOARD_DOMAINS = [
     "rippling.com",
 ]
 
+COUNTRY_SEARCH_PRESETS = {
+    "US": {"label": "United States", "location": "United States", "gl": "us", "hl": "en"},
+    "IN": {"label": "India", "location": "India", "gl": "in", "hl": "en"},
+    "EU": {"label": "Europe", "location": "Europe", "gl": "de", "hl": "en"},
+    "AU": {"label": "Australia", "location": "Australia", "gl": "au", "hl": "en"},
+    "UAE": {"label": "UAE", "location": "United Arab Emirates", "gl": "ae", "hl": "en"},
+}
+
 SKIP_PATHS = ["/blog/", "/news/", "/about", "/company", "/press", "/learn"]
+
+
+def sanitize_job_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("//"):
+        raw = f"https:{raw}"
+    if not raw.startswith(("http://", "https://")):
+        return raw
+
+    try:
+        parts = urlsplit(raw)
+        query = parse_qs(parts.query, keep_blank_values=False)
+        host = (parts.netloc or "").lower()
+        path = parts.path or ""
+
+        for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
+            value = query.get(key, [""])[0]
+            if value.startswith(("http://", "https://")):
+                return sanitize_job_url(unquote(value))
+
+        if "linkedin.com" in host and "/redir/" in path:
+            target = query.get("url", [""])[0]
+            if target:
+                return sanitize_job_url(unquote(target))
+
+        clean_query = urlencode(
+            [(k, v) for k, values in query.items() if not k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid")) for v in values],
+            doseq=True,
+        )
+        return urlunsplit((parts.scheme, parts.netloc, path.rstrip('/'), clean_query, ""))
+    except Exception:
+        return raw
+
+
+def infer_source_from_url(url: str) -> str:
+    host = (urlsplit(str(url or "")).netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 @dataclass
@@ -75,19 +127,19 @@ class LeadScoutService:
     # ── Entry point ─────────────────────────────────────────────────────────
 
     async def search_jobs(self, intent_plan: dict) -> list[dict]:
-        queries  = self._build_queries(intent_plan)
-        location = self._resolve_location(intent_plan)
-        remote   = intent_plan.get("geo_preferences", {}).get("remote", True)
+        queries = self._build_queries(intent_plan)
+        regions = self._resolve_locations(intent_plan)
+        remote = intent_plan.get("geo_preferences", {}).get("remote", True)
 
-        log.info("LeadScout starting: %d queries, location='%s'", len(queries), location)
+        log.info("LeadScout starting: %d queries across %d regions", len(queries), len(regions))
         for i, q in enumerate(queries):
             log.info("  Query[%d]: %s", i, q)
 
-        # Run all queries concurrently
         tasks = []
-        for query in queries:
-            tasks.append(self._search_serper_organic(query, location, remote))
-            tasks.append(self._search_tavily(query, location, remote))
+        for region in regions:
+            for query in queries:
+                tasks.append(self._search_serper_organic(query, region, remote))
+                tasks.append(self._search_tavily(query, region, remote))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -102,6 +154,9 @@ class LeadScoutService:
         # Deduplicate by URL
         seen, unique = set(), []
         for lead in leads:
+            lead.url = sanitize_job_url(lead.url)
+            if not lead.source:
+                lead.source = infer_source_from_url(lead.url)
             key = lead.url.strip().rstrip("/")
             if key and key not in seen:
                 seen.add(key)
@@ -207,22 +262,40 @@ class LeadScoutService:
                     alts.extend(expansions)
         return list(dict.fromkeys(alts))
 
-    def _resolve_location(self, intent_plan: dict) -> str:
-        geo  = intent_plan.get("geo_preferences", {})
-        locs = geo.get("locations", [])
-        return locs[0] if locs else "United States"
+    def _resolve_locations(self, intent_plan: dict) -> list[dict[str, str]]:
+        geo = intent_plan.get("geo_preferences", {}) or {}
+        locs = [str(loc).strip() for loc in (geo.get("locations") or []) if str(loc).strip()]
+        if not locs:
+            return [COUNTRY_SEARCH_PRESETS[k] for k in ("US", "IN", "EU", "AU", "UAE")]
+
+        resolved = []
+        for loc in locs:
+            upper = loc.upper()
+            if upper in COUNTRY_SEARCH_PRESETS:
+                resolved.append(COUNTRY_SEARCH_PRESETS[upper])
+                continue
+            match = next((preset for preset in COUNTRY_SEARCH_PRESETS.values() if loc.lower() in preset["label"].lower() or preset["location"].lower() in loc.lower()), None)
+            resolved.append(match or {"label": loc, "location": loc, "gl": "us", "hl": "en"})
+        seen = set()
+        deduped = []
+        for region in resolved:
+            key = region["location"]
+            if key not in seen:
+                deduped.append(region)
+                seen.add(key)
+        return deduped
 
     # ── Source: Serper /search (organic) ────────────────────────────────────
 
-    async def _search_serper_organic(self, query: str, location: str, remote: bool) -> list[JobLead]:
+    async def _search_serper_organic(self, query: str, region: dict[str, str], remote: bool) -> list[JobLead]:
         if not SERPER_KEY:
             log.debug("Serper skipped — SERPER_API_KEY not set")
             return []
         try:
-            loc_str  = "remote" if remote else location
-            site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS[:6])
+            loc_str = "remote" if remote else region["location"]
+            site_str = " OR ".join(f"site:{d}" for d in JOB_BOARD_DOMAINS[:8])
             search_q = f"{query} {loc_str} ({site_str})"
-            payload  = {"q": search_q, "gl": "us", "hl": "en", "num": self.max_per_source}
+            payload  = {"q": search_q, "gl": region.get("gl", "us"), "hl": region.get("hl", "en"), "num": self.max_per_source}
             headers  = {"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"}
 
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -249,7 +322,7 @@ class LeadScoutService:
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = r.get("displayLink", ""),
-                    url         = url,
+                    url         = sanitize_job_url(url),
                     description = r.get("snippet", "")[:500],
                     source      = "serper_organic",
                     remote      = "remote" in (r.get("snippet", "") + url).lower(),
@@ -262,12 +335,12 @@ class LeadScoutService:
 
     # ── Source: Tavily ───────────────────────────────────────────────────────
 
-    async def _search_tavily(self, query: str, location: str, remote: bool) -> list[JobLead]:
+    async def _search_tavily(self, query: str, region: dict[str, str], remote: bool) -> list[JobLead]:
         if not TAVILY_KEY:
             log.debug("Tavily skipped — TAVILY_API_KEY not set")
             return []
         try:
-            loc_str = "remote" if remote else location
+            loc_str = "remote" if remote else region["location"]
             payload = {
                 "api_key":         TAVILY_KEY,
                 "query":           f"{query} {loc_str} job opening apply now",
@@ -294,7 +367,7 @@ class LeadScoutService:
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = "",
-                    url         = url,
+                    url         = sanitize_job_url(url),
                     description = r.get("content", "")[:500],
                     source      = "tavily",
                     remote      = "remote" in (r.get("content", "") + url).lower(),

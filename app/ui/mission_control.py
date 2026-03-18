@@ -17,6 +17,7 @@ import json
 import os
 import time
 from html import escape
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
@@ -271,20 +272,45 @@ def normalize_api_base(raw: Optional[str]) -> str:
     return value.rstrip("/")
 
 
-def resolve_default_api_base() -> str:
-    candidates = [
-        os.getenv("API_URL"),
-        os.getenv("RENDER_EXTERNAL_URL"),
-        os.getenv("PUBLIC_API_URL"),
-        os.getenv("BACKEND_URL"),
-        "http://127.0.0.1:8000",
-    ]
-    for candidate in candidates:
-        normalized = normalize_api_base(candidate)
-        if normalized:
-            return normalized
-    return "http://127.0.0.1:8000"
+DEFAULT_API_BASE = "https://careeragent-api.onrender.com"
 
+def resolve_default_api_base() -> str:
+    return DEFAULT_API_BASE
+
+
+
+
+def sanitize_job_url(url: Optional[str]) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("//"):
+        raw = f"https:{raw}"
+    if not raw.startswith(("http://", "https://")):
+        return raw
+    try:
+        parts = urlsplit(raw)
+        query = parse_qs(parts.query, keep_blank_values=False)
+        for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
+            value = query.get(key, [""])[0]
+            if value.startswith(("http://", "https://")):
+                return sanitize_job_url(unquote(value))
+        clean_query = "&".join(
+            f"{k}={v}"
+            for k, values in query.items()
+            if not k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
+            for v in values
+        )
+        return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), clean_query, ""))
+    except Exception:
+        return raw
+
+
+def external_link_html(url: Optional[str], label: str = "Open job") -> str:
+    safe_url = sanitize_job_url(url)
+    if not safe_url:
+        return '<span style="font-size:11px;color:#6e7681">No job link available</span>'
+    return f'<a href="{escape(safe_url, quote=True)}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#58a6ff;text-decoration:none">🔗 {escape(label)}</a>'
 
 def _api_start_hunt(api_base: str, resume_bytes: bytes, filename: str, config: dict) -> Optional[str]:
     try:
@@ -879,7 +905,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('llm_reasoning') or why}
                 </div>
-                <div style="font-size:11px;color:#58a6ff;margin-top:2px">🔗 {job.get('url','')}</div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:6px">{external_link_html(job.get('url'), 'Open job post')}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
@@ -931,6 +957,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
             title = f"{idx}. {job.get('title', 'Role')} — {job.get('company', 'Unknown company')}"
             with st.expander(title, expanded=(idx == 1)):
                 st.markdown(f"**Executive summary:** {job.get('executive_summary') or 'No executive summary yet.'}")
+                st.markdown(external_link_html(job.get("url"), "Open job post"), unsafe_allow_html=True)
                 st.markdown(f"**Match explanation:** {job.get('match_explanation') or 'No match explanation yet.'}")
                 rationale = job.get("recommendation_rationale") or []
                 if rationale:
@@ -978,7 +1005,8 @@ def render_executive_summary(status: Optional[dict]) -> None:
         for job in top_jobs[:5]:
             st.markdown(
                 f"- **{job.get('title', 'Role')}** at **{job.get('company', 'Unknown company')}** — "
-                f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'}"
+                f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'} "
+                f"[Open job]({sanitize_job_url(job.get('url'))})"
             )
     else:
         st.caption("Recommended jobs will appear here after L4/L5 scoring.")
@@ -1169,8 +1197,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         """, unsafe_allow_html=True)
 
         # ── API Base URL ──────────────────────────────────────────────────────
-        api_base_input = st.text_input("Backend URL", value=st.session_state["api_base"], key="api_base_input")
-        api_base = normalize_api_base(api_base_input)
+        st.session_state["api_base"] = DEFAULT_API_BASE
+        api_base = normalize_api_base(st.text_input("Backend URL", value=DEFAULT_API_BASE, key="api_base_input", disabled=True, help="Locked to the production FastAPI backend to keep the UI/API bridge stable."))
         st.session_state["api_base"] = api_base
 
         # ── Health indicator ──────────────────────────────────────────────────
