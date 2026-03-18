@@ -1145,6 +1145,25 @@ def _layer_ok(state: dict, layer_id: int, msg: str = "", **meta: Any) -> None:
         state["layers"][layer_id]["output"] = msg
 
 
+def _layer_error(state: dict, layer_id: int, err: str, **meta: Any) -> None:
+    state["layers"][layer_id]["status"] = "error"
+    state["layers"][layer_id]["finished_at"] = _now()
+    state["layers"][layer_id]["error"] = err
+    base_meta = state["layers"][layer_id].get("meta", {})
+    if "latency" not in meta and state["layers"][layer_id].get("started_at"):
+        try:
+            t0 = datetime.fromisoformat(str(state["layers"][layer_id]["started_at"]))
+            t1 = datetime.fromisoformat(str(state["layers"][layer_id]["finished_at"]))
+            meta["latency"] = max(0.0, (t1 - t0).total_seconds())
+        except Exception:
+            pass
+    merged_meta = {**base_meta, **_default_step_meta(**meta), **meta}
+    state["layers"][layer_id]["meta"].update(merged_meta)
+    state["progress_pct"] = _calc_progress(state)
+    _log_agent(state, layer_id, f"ERROR: {err}", meta=state["layers"][layer_id]["meta"])
+    state["layers"][layer_id]["output"] = err
+
+
 def _qualified_from_state(state: dict) -> list[dict]:
     return qualified_from_state(state)
 
@@ -1971,20 +1990,31 @@ def _refresh_run_state(run_id: str) -> dict:
         except Exception as exc:
             log.debug("State reload error for %s from %s: %s", clean_run_id, state_file, exc)
 
+    finalize_state = globals().get("_force_success_if_l9_reached", lambda s: s)
+
     if disk_state and mem_state:
         chosen = disk_state if _state_rank(disk_state) >= _state_rank(mem_state) else mem_state
-        chosen = _force_success_if_l9_reached(chosen)
+        chosen = finalize_state(chosen)
         _runs[clean_run_id] = chosen
         return chosen
 
     if disk_state:
-        disk_state = _force_success_if_l9_reached(disk_state)
+        disk_state = finalize_state(disk_state)
         _runs[clean_run_id] = disk_state
         return disk_state
 
     if mem_state is None:
         raise HTTPException(404, f"Run {clean_run_id} not found")
-    return _force_success_if_l9_reached(mem_state)
+    return finalize_state(mem_state)
+
+
+def _state_last_updated_seconds(state: dict) -> float | None:
+    updated = _coerce_iso_ts(state.get("updated_at")) or _coerce_iso_ts(state.get("created_at"))
+    if not updated:
+        return None
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - updated).total_seconds()
 
 
 def _is_stalled_early_run(state: dict) -> bool:
@@ -2014,12 +2044,129 @@ def _is_stalled_early_run(state: dict) -> bool:
     if not early_stuck:
         return False
 
-    updated = _coerce_iso_ts(state.get("updated_at")) or _coerce_iso_ts(state.get("created_at"))
-    if not updated:
-        return True
-    if updated.tzinfo is None:
-        updated = updated.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - updated).total_seconds() >= 20
+    age_seconds = _state_last_updated_seconds(state)
+    return age_seconds is None or age_seconds >= 20
+
+
+def _is_stalled_l4_l5_run(state: dict) -> bool:
+    """Detect runs stuck near 40-60% after discovery but before approval/drafting."""
+    if not isinstance(state, dict) or state.get("status") != "running":
+        return False
+    layers = state.get("layers") or []
+    if not isinstance(layers, list) or len(layers) < 6:
+        return False
+
+    l3 = layers[3] if isinstance(layers[3], dict) else {}
+    l4 = layers[4] if isinstance(layers[4], dict) else {}
+    l5 = layers[5] if isinstance(layers[5], dict) else {}
+    later_layers_idle = all(
+        str((layers[i] if i < len(layers) else {}).get("status") or "waiting") == "waiting"
+        for i in range(6, min(len(layers), 10))
+    )
+    stage_is_stuck = (
+        l3.get("status") == "ok"
+        and later_layers_idle
+        and str(l4.get("status") or "waiting") in {"waiting", "running", "error"}
+        and str(l5.get("status") or "waiting") in {"waiting", "running", "error"}
+        and float(state.get("progress_pct") or 0.0) <= 60.0
+        and bool(state.get("job_leads") or state.get("jobs_discovered") or state.get("jobs_scored"))
+    )
+    if not stage_is_stuck:
+        return False
+
+    age_seconds = _state_last_updated_seconds(state)
+    return age_seconds is None or age_seconds >= 45
+
+
+async def _resume_pipeline_from_l4(run_id: str) -> None:
+    state = _runs.get(run_id)
+    if not isinstance(state, dict):
+        return
+
+    if state.get("status") not in {"running", None}:
+        return
+
+    if not state.get("job_leads"):
+        state["job_leads"] = _stub_leads(state.get("profile") or {}, max_jobs=state.get("config", {}).get("max_jobs", 100))
+        state["jobs_discovered"] = len(state["job_leads"])
+
+    state["pending_action"] = None
+    _layer_running(state, 4, f"Resuming stuck pipeline: scoring {state.get('jobs_discovered', 0)} discovered jobs…", tools_used=["matcher", "scorer", "auto_recovery"], attempt_count=int((state.get("layers", [{}]*5)[4].get("meta", {}) or {}).get("attempt_count") or 1) + 1)
+    _persist_state(run_id)
+    await asyncio.sleep(0)
+
+    try:
+        try:
+            from careeragent.managers.managers import ExtractionManager, GeoFenceManager
+            geo_mgr = GeoFenceManager()
+            ext_mgr = ExtractionManager()
+            geo_prefs = state.get("config", {}).get("geo_preferences", {"remote": True, "locations": []})
+            filtered = geo_mgr.filter_by_geo(_dedupe_jobs(state.get("job_leads") or []), geo_prefs)
+            threshold = state.get("config", {}).get("match_threshold", 0.45)
+            scored = ext_mgr.extract_and_score(filtered, state.get("profile") or {}, threshold)
+        except ImportError:
+            scored = _stub_score(state.get("job_leads") or [])
+            threshold = 0.45
+
+        scored = _dedupe_jobs(scored)
+        scored, relax_note = _maybe_relax_frontend_filters(scored, state.get("config") or {})
+        scored = _apply_role_relevance_filter(scored, state.get("config") or {})
+        if relax_note:
+            _log_agent(state, 4, relax_note)
+        scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
+        scored = _dedupe_jobs(scored)
+        scored = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
+        scored = _augment_scored_jobs(scored, state.get("profile") or {})
+        state["scored_jobs"] = scored
+        state["jobs_scored"] = len(scored)
+        top_score = max((j.get("score", 0) for j in scored), default=0)
+        state.setdefault("layer_debug", {})["L4"] = {
+            "threshold": threshold,
+            "top_jobs": sorted(scored, key=lambda j: j.get("score", 0), reverse=True)[:5],
+            "resumed_at": _now(),
+        }
+        _record_eval(
+            state,
+            layer_id=4,
+            target_id="match_score",
+            score=float(top_score),
+            threshold=float(threshold),
+            feedback=[f"scored={len(scored)}", f"top_score={round(top_score, 3)}", "auto_recovery=1"],
+        )
+        state["top_match_score"] = round(top_score * 100, 1)
+        _layer_ok(state, 4, f"{len(scored)} jobs scored, top match {state['top_match_score']}% ✓", scored=len(scored), top_score=state["top_match_score"], tools_used=["matcher", "scorer", "auto_recovery"], attempt_count=int((state.get("layers", [{}]*5)[4].get("meta", {}) or {}).get("attempt_count") or 1))
+        state["layers"][4]["output"] = f"{len(scored)} jobs scored"
+        _persist_state(run_id)
+
+        _layer_running(state, 5, "Resuming stuck pipeline: ranking jobs by interview probability…", tools_used=["ranking_evaluator", "auto_recovery"], attempt_count=int((state.get("layers", [{}]*6)[5].get("meta", {}) or {}).get("attempt_count") or 1) + 1)
+        _persist_state(run_id)
+        await asyncio.wait_for(_run_l4_l5_transition(state, threshold=float(threshold)), timeout=L4_L5_TRANSITION_TIMEOUT_SECONDS)
+        state["layers"][5].setdefault("meta", {})["recovered_from_stall"] = True
+        _persist_state(run_id)
+
+        if (state.get("layer_debug", {}).get("L5", {}).get("gap_analysis", {}) or {}).get("triggered"):
+            state["status"] = "pending_human_input"
+            state["pending_action"] = "update_profile_skills"
+            _log_agent(state, 5, "GapAnalysisAgent identified near-threshold opportunities after auto-recovery. Awaiting skill confirmation.", meta=state["layers"][5].get("meta"))
+            _persist_state(run_id)
+            return
+
+        if state.get("config", {}).get("require_ranking_approval", True):
+            state["status"] = "pending_human_input"
+            state["pending_action"] = "approve_ranking"
+            _log_agent(state, 5, "Awaiting human approval for ranked jobs after auto-recovery.", meta=state["layers"][5].get("meta"))
+            _persist_state(run_id)
+            return
+
+        await _continue_l6_to_l9(run_id, stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)))
+    except asyncio.TimeoutError:
+        _layer_error(state, 5, f"L4→L5 transition timeout after {int(L4_L5_TRANSITION_TIMEOUT_SECONDS)}s", tools_used=["ranking_evaluator", "auto_recovery"], attempt_count=int((state.get("layers", [{}]*6)[5].get("meta", {}) or {}).get("attempt_count") or 1))
+        state.setdefault("errors", []).append(f"L5: L4→L5 transition timeout after {int(L4_L5_TRANSITION_TIMEOUT_SECONDS)}s")
+        _persist_state(run_id)
+    except Exception as exc:
+        _layer_error(state, 5, f"Auto-recovery failed: {exc}", tools_used=["auto_recovery"], attempt_count=int((state.get("layers", [{}]*6)[5].get("meta", {}) or {}).get("attempt_count") or 1))
+        state.setdefault("errors", []).append(f"L5: Auto-recovery failed: {exc}")
+        _persist_state(run_id)
 
 
 def _recovery_lock_path(run_id: str) -> Path:
@@ -2057,14 +2204,19 @@ def _release_recovery_slot(run_id: str) -> None:
 
 
 def _try_recover_stalled_run(run_id: str, state: dict) -> None:
-    """Best-effort auto-recovery for stale runs stuck before discovery (L1/L2)."""
-    if not _is_stalled_early_run(state):
-        return
-    if state.get("recovery_attempted_at"):
-        return
-
+    """Best-effort auto-recovery for stale runs stuck in early startup or at L4/L5."""
+    recovery_mode = None
     resume_path = Path(str(state.get("resume_path") or "")).expanduser()
-    if not resume_path.exists():
+
+    if _is_stalled_early_run(state):
+        if state.get("recovery_attempted_at") or not resume_path.exists():
+            return
+        recovery_mode = "early_restart"
+    elif _is_stalled_l4_l5_run(state):
+        if state.get("recovery_l4_l5_attempted_at"):
+            return
+        recovery_mode = "resume_l4_l5"
+    else:
         return
 
     if not _claim_recovery_slot(run_id):
@@ -2072,7 +2224,10 @@ def _try_recover_stalled_run(run_id: str, state: dict) -> None:
 
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(run_pipeline(run_id, resume_path))
+        if recovery_mode == "early_restart":
+            loop.create_task(run_pipeline(run_id, resume_path))
+        else:
+            loop.create_task(_resume_pipeline_from_l4(run_id))
     except Exception as exc:
         state["recovery_last_error"] = str(exc)
         _persist_state(run_id)
@@ -2080,10 +2235,15 @@ def _try_recover_stalled_run(run_id: str, state: dict) -> None:
         log.warning("Could not auto-recover run %s: %s", run_id, exc)
         return
 
-    state["recovery_attempted_at"] = _now()
-    _log_agent(state, 1, "Run appeared stalled in early startup. Auto-retrying pipeline scheduling…")
+    ts = _now()
+    if recovery_mode == "early_restart":
+        state["recovery_attempted_at"] = ts
+        _log_agent(state, 1, "Run appeared stalled in early startup. Auto-retrying pipeline scheduling…")
+    else:
+        state["recovery_l4_l5_attempted_at"] = ts
+        _log_agent(state, 4, "Run appeared stalled near 40-60%. Auto-resuming scoring/ranking…")
     _persist_state(run_id)
-    log.warning("Recovered stalled run %s via status poll", run_id)
+    log.warning("Recovered stalled run %s via status poll (%s)", run_id, recovery_mode)
 
 
 def _persist_tracking(run_id: str, state: dict) -> None:

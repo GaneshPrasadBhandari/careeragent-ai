@@ -151,3 +151,61 @@ def test_recovery_lock_released_when_scheduler_fails(tmp_path, monkeypatch):
     api._try_recover_stalled_run("abc124", state)
     assert state.get("recovery_attempted_at")
     assert ok_loop.calls == 1
+
+
+def test_is_stalled_l4_l5_run_detects_mid_pipeline_hang() -> None:
+    state = {
+        "status": "running",
+        "progress_pct": 40.0,
+        "updated_at": _ts_ago(90),
+        "jobs_discovered": 25,
+        "layers": [
+            {"status": "ok"},
+            {"status": "ok"},
+            {"status": "ok"},
+            {"status": "ok"},
+            {"status": "waiting", "meta": {}},
+            {"status": "waiting", "meta": {}},
+            {"status": "waiting", "meta": {}},
+        ],
+    }
+    assert api._is_stalled_l4_l5_run(state) is True
+
+
+def test_try_recover_stalled_run_resumes_l4_l5_once(monkeypatch):
+    state = {
+        "run_id": "mid123",
+        "status": "running",
+        "progress_pct": 40.0,
+        "updated_at": _ts_ago(90),
+        "jobs_discovered": 25,
+        "layers": [
+            {"status": "ok", "meta": {}},
+            {"status": "ok", "meta": {}},
+            {"status": "ok", "meta": {}},
+            {"status": "ok", "meta": {}},
+            {"status": "waiting", "meta": {}},
+            {"status": "waiting", "meta": {}},
+            {"status": "waiting", "meta": {}},
+        ],
+        "agent_log": [],
+    }
+
+    scheduled = []
+
+    class _Loop:
+        def create_task(self, coro):
+            scheduled.append(coro)
+            coro.close()
+
+    monkeypatch.setattr(api.asyncio, "get_running_loop", lambda: _Loop())
+    monkeypatch.setattr(api, "_claim_recovery_slot", lambda _run_id: True)
+    monkeypatch.setattr(api, "_persist_state", lambda _run_id: None)
+
+    api._try_recover_stalled_run("mid123", state)
+    assert state.get("recovery_l4_l5_attempted_at")
+    assert scheduled, "expected L4/L5 recovery scheduler to enqueue resume task"
+
+    before = len(scheduled)
+    api._try_recover_stalled_run("mid123", state)
+    assert len(scheduled) == before, "L4/L5 recovery should only be attempted once"
