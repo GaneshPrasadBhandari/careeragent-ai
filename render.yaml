@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: careeragent-api
+    env: python
+    plan: starter
+    buildCommand: pip install -e .
+    startCommand: uvicorn careeragent.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONPATH
+        value: /opt/render/project/src/src
+      - key: API_URL
+        sync: false
+      - key: PUBLIC_API_URL
+        fromService:
+          type: web
+          name: careeragent-api
+          property: hostport
+  - type: web
+    name: careeragent-ui
+    env: python
+    plan: starter
+    buildCommand: pip install -e .
+    startCommand: streamlit run app/main.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: PYTHONPATH
+        value: /opt/render/project/src/src
+      - key: API_URL
+        fromService:
+          type: web
+          name: careeragent-api
+          property: hostport
+      - key: RENDER_EXTERNAL_URL
+        sync: false
