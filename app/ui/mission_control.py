@@ -326,6 +326,13 @@ def sanitize_job_url(url: Optional[str]) -> str:
     return JobURLManager.sanitize(url)
 
 
+def _compact_text(value: Optional[str], *, limit: int = 260) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 def external_link_html(url: Optional[str], label: str = "Open job") -> str:
     return JobURLManager.external_link_html(url, label)
 
@@ -1042,13 +1049,22 @@ def render_executive_summary(status: Optional[dict]) -> None:
 
     if deduped_jobs:
         st.markdown("#### Recommended jobs")
-        for job in deduped_jobs[:5]:
-            st.markdown(
-                f"- **{job.get('title', 'Role')}** at **{job.get('company', 'Unknown company')}** — "
-                f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'}  \n"
-                f"Reasoning: {job.get('cognitive_reasoning') or job.get('llm_reasoning') or 'No reasoning available.'}  \n"
-                f"{JobURLManager.markdown_link(job.get('direct_job_url') or job.get('url'), 'Open Link')}"
-            )
+        for idx, job in enumerate(deduped_jobs[:5], start=1):
+            title = job.get("title", "Role")
+            company = job.get("company", "Unknown company")
+            summary = _compact_text(job.get("executive_summary") or job.get("match_explanation") or job.get("llm_reasoning") or "No summary available.", limit=220)
+            reasoning = _compact_text(job.get("cognitive_reasoning") or job.get("llm_reasoning") or "No reasoning available.", limit=320)
+            interview = float(job.get("interview_probability_percent") or 0.0)
+            with st.container():
+                left, right = st.columns([5, 1])
+                with left:
+                    st.markdown(f"**{idx}. {title}**")
+                    st.caption(f"{company} • Interview prediction {interview:.0f}%")
+                    st.write(summary)
+                    st.caption(f"Reasoning: {reasoning}")
+                with right:
+                    st.markdown(JobURLManager.external_link_html(job.get("direct_job_url") or job.get("url"), "Open Link"), unsafe_allow_html=True)
+                st.markdown("<hr style='margin:8px 0 12px 0'>", unsafe_allow_html=True)
     else:
         st.caption("Recommended jobs will appear here after L4/L5 scoring.")
 
