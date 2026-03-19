@@ -1842,23 +1842,27 @@ def main():
         tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
 
         with tab_summary:
-            render_executive_summary(status)
+            if active_section == "🧾 Executive Summary":
+                render_executive_summary(status)
+            else:
+                render_executive_summary(status)
 
         with tab_pipeline:
-            st.markdown('<div class="section-header">Layer Details — click to expand</div>', unsafe_allow_html=True)
-            running_layer = next((i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None)
-            for ld in LAYERS:
-                layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
-                is_expanded = ld["id"] == running_layer
-                render_layer_card(ld, layer_state, expanded=is_expanded)
+            if active_section == "📋 Pipeline Layers":
+                st.markdown('<div class="section-header">Layer Details — click to expand</div>', unsafe_allow_html=True)
+                running_layer = next((i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None)
+                for ld in LAYERS:
+                    layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
+                    is_expanded = ld["id"] == running_layer
+                    render_layer_card(ld, layer_state, expanded=is_expanded)
 
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            render_agent_feed(status)
-            render_hitl_controls(api_base, run_id, status)
-            render_stepwise_details(status)
-            render_json_downloads(status)
-            with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
-                st.json(status or {"info": "No run status yet"})
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                render_agent_feed(status)
+                render_hitl_controls(api_base, run_id, status)
+                render_stepwise_details(status)
+                render_json_downloads(status)
+                with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
+                    st.json(status or {"info": "No run status yet"})
 
         with tab_jobs:
             render_job_board(api_base, run_id, status)
@@ -1918,6 +1922,8 @@ def main():
                     else:
                         st.caption("No cross-run feedback rows available yet.")
                 render_admin_analytics(status)
+        with rail_col:
+            render_quick_nav_rail(api_base, run_id, status, show_admin)
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
         render_executive_summary(status)
