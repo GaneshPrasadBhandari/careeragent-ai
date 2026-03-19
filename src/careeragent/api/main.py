@@ -1967,7 +1967,10 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
 @traceable(name="api.build_intent")
 def _build_intent(profile: dict, config: dict) -> dict:
     self_learning_context = str(config.get("self_learning_context") or _GLOBAL_SELF_LEARNING_CONTEXT or "").strip()
-    roles = _infer_target_roles(profile, config.get("target_roles"))
+    configured_roles = config.get("target_roles")
+    if list(configured_roles or []) == list(DEFAULT_SMART_TARGET_ROLES):
+        configured_roles = None
+    roles = _infer_target_roles(profile, configured_roles)
 
     # Pass ALL skills, not just 8 — LeadScout needs these for multi-query bucketing
     all_skills = profile.get("skills", [])
@@ -2047,14 +2050,14 @@ def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) 
         "ML Systems", "Data Science", "Automation", "Intelligent Workflows", "Decisioning",
     ]
     search_slugs = {
-        "linkedin": "https://www.linkedin.com/jobs/view/{job_id}",
+        "linkedin": "https://www.linkedin.com/jobs/search/?keywords={query}&job_id={job_id}",
         "indeed": "https://www.indeed.com/viewjob?jk={job_id}",
         "glassdoor": "https://www.glassdoor.com/job-listing/demo-role-JV_IC1147401_KO0,9_KE10,14.htm?jl={job_id}",
         "ziprecruiter": "https://www.ziprecruiter.com/jobs-search?search={query}&job_id={job_id}",
         "naukri": "https://www.naukri.com/job-listings-{query}-{job_id}",
-        "greenhouse": "https://boards.greenhouse.io/demo/jobs/{job_id}",
-        "lever": "https://jobs.lever.co/demo/{job_id}",
-        "workday": "https://demo.wd5.myworkdayjobs.com/en-US/Careers/job/{job_id}",
+        "greenhouse": "https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{job_id}",
+        "lever": "https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{job_id}",
+        "workday": "https://www.google.com/search?q=site%3Amyworkdayjobs.com+OR+site%3Aworkdayjobs.com+{query}+{job_id}",
     }
     seed_jobs: list[dict] = []
     for idx in range(max_jobs):
