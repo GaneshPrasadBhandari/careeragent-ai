@@ -482,6 +482,44 @@ def _compact_text(value: Optional[str], *, limit: int = 260) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def build_top_portal_links(role: Optional[str], location: Optional[str], *, remote: bool = False) -> list[tuple[str, str]]:
+    query = quote_plus(str(role or "AI Engineer").replace("—", " ").replace("/", " ").strip() or "AI Engineer")
+    location_text = str(location or "United States").strip() or "United States"
+    location_query = quote_plus(location_text)
+    remote_suffix = "+remote" if remote else ""
+    return [
+        ("LinkedIn", f"https://www.linkedin.com/jobs/search/?keywords={query}&location={location_query}"),
+        ("Indeed", f"https://www.indeed.com/jobs?q={query}{remote_suffix}&l={location_query}"),
+        ("Glassdoor", f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&locKeyword={location_query}"),
+        ("ZipRecruiter", f"https://www.ziprecruiter.com/jobs-search?search={query}&location={location_query}"),
+        ("Dice", f"https://www.dice.com/jobs?q={query}&location={location_query}"),
+        ("Monster", f"https://www.monster.com/jobs/search/?q={query}&where={location_query}"),
+        ("Greenhouse", f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{location_query}"),
+        ("Lever", f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{location_query}"),
+    ]
+
+
+def render_top_portal_shortcuts(status: Optional[dict]) -> None:
+    if not status:
+        return
+    top_jobs = ((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or ((status.get("layer_debug") or {}).get("L4") or {}).get("top_jobs") or []
+    seed_job = top_jobs[0] if top_jobs else {}
+    role = seed_job.get("title") or ((status.get("profile") or {}).get("target_role") if isinstance(status.get("profile"), dict) else None) or "AI Engineer"
+    location = seed_job.get("location") or "United States"
+    remote = bool(seed_job.get("remote"))
+    st.markdown("#### Top 8 job portal shortcuts")
+    st.caption("Open the same search across the major portals even when a specific job post link is blocked, expired, or redirects incorrectly.")
+    links = build_top_portal_links(role, location, remote=remote)
+    for row_start in range(0, len(links), 4):
+        cols = st.columns(4)
+        for col, (label, url) in zip(cols, links[row_start: row_start + 4]):
+            with col:
+                try:
+                    st.link_button(label, url, use_container_width=True)
+                except Exception:
+                    st.markdown(JobURLManager.markdown_link(url, label))
+
+
 def external_link_html(url: Optional[str], label: str = "Open job") -> str:
     return JobURLManager.external_link_html(url, label)
 
@@ -549,16 +587,43 @@ def _api_get_artifacts(api_base: str, run_id: str) -> dict:
 
 
 def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict] = None) -> bool:
-    try:
-        body = {"action": action, "action_type": action}
-        if payload:
-            body.update(payload)
-        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
-        if r.status_code == 200:
-            return True
-        st.error(f"Action failed ({r.status_code}): {r.text[:200]}")
-    except Exception as exc:
-        st.error(f"Action request failed: {exc}")
+    body = {"action": action, "action_type": action}
+    if payload:
+        body.update(payload)
+
+    last_error = ""
+    for attempt in range(1, 4):
+        try:
+            r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
+            if r.status_code == 200:
+                return True
+            last_error = f"Action failed ({r.status_code}): {r.text[:200]}"
+            if r.status_code not in {502, 503, 504}:
+                st.error(last_error)
+                return False
+            if attempt < 3:
+                time.sleep(1.0 * attempt)
+                continue
+        except Exception as exc:
+            last_error = f"Action request failed: {exc}"
+            if attempt < 3:
+                time.sleep(1.0 * attempt)
+                continue
+
+    status_after_failure = _api_get_status(api_base, run_id)
+    pending_after_failure = str((status_after_failure or {}).get("pending_action") or "").strip().lower()
+    run_state = str((status_after_failure or {}).get("status") or "").strip().lower()
+    if action == "approve_ranking" and pending_after_failure != "approve_ranking" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"}:
+        st.warning("Approve Ranked Jobs returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+        return True
+    if action == "approve_drafts" and pending_after_failure != "approve_drafts" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"}:
+        st.warning("Approve Drafts returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+        return True
+    if action == "approve_followups" and pending_after_failure != "approve_followups" and run_state in {"running", "completed"}:
+        st.warning("Approve Follow-ups returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+        return True
+
+    st.error(last_error or "Action request failed for an unknown reason.")
     return False
 
 
@@ -1288,6 +1353,8 @@ def render_executive_summary(status: Optional[dict]) -> None:
     elif jobs_discovered:
         st.success(f"Ready-to-apply coverage is healthy at {ready_ratio * 100:.1f}% of discovered jobs.")
 
+    render_top_portal_shortcuts(status)
+
     if deduped_jobs:
         st.markdown("#### Recommended jobs")
         recommended_limit = min(len(deduped_jobs), 20 if jobs_discovered >= 80 else 5)
@@ -1853,7 +1920,7 @@ def main():
 
     show_admin = bool(st.session_state.get("admin_auth"))
     if str((status or {}).get("pending_action") or "").strip():
-        st.info("Human approval is waiting in **Pipeline Layers**. The dashboard stays on **Executive Summary** by default; use the left navigation to open the approval controls when ready.")
+        st.info("Human approval is ready below on **Executive Summary** and also inside **Pipeline Layers** so you can approve/reject without switching tabs.")
     else:
         st.caption("Use the left mission navigation to move between sections. The dashboard opens on Executive Summary by default.")
     try:
@@ -1873,8 +1940,10 @@ def main():
         with tab_summary:
             if active_section == "🧾 Executive Summary":
                 render_executive_summary(status)
+                render_hitl_controls(api_base, run_id, status)
             else:
                 render_executive_summary(status)
+                render_hitl_controls(api_base, run_id, status)
 
         with tab_pipeline:
             if active_section == "📋 Pipeline Layers":
