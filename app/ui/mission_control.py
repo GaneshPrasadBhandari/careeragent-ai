@@ -303,7 +303,7 @@ def _inject_css() -> None:
     /* ── Hide Streamlit chrome ── */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+    header {background: transparent !important;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -1763,19 +1763,29 @@ def main():
     render_progress_bar(status, layers_data)
 
     show_admin = bool(st.session_state.get("admin_auth"))
+    st.caption("Use the main tabs below for section switching; the left sidebar still contains resume upload, run controls, and quick navigation.")
+    tab_labels = [
+        "🧾 Executive Summary",
+        "📋 Pipeline Layers",
+        "💼 Job Board",
+        "🧩 Match Analysis",
+        "🎓 Learning Center",
+        "📊 Analytics",
+    ]
+    if show_admin:
+        tab_labels.append("🛡️ Executive Analytics")
     try:
-        if active_section == "🧾 Executive Summary":
-            render_executive_summary(status)
-        elif active_section == "📋 Pipeline Layers":
-            st.markdown('<div class="section-header">Layer Details — click to expand</div>',
-                        unsafe_allow_html=True)
+        tabs = st.tabs(tab_labels)
 
-            running_layer = next(
-                (i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None
-            )
+        with tabs[0]:
+            render_executive_summary(status)
+
+        with tabs[1]:
+            st.markdown('<div class="section-header">Layer Details — click to expand</div>', unsafe_allow_html=True)
+            running_layer = next((i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None)
             for ld in LAYERS:
                 layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
-                is_expanded = (ld["id"] == running_layer)
+                is_expanded = ld["id"] == running_layer
                 render_layer_card(ld, layer_state, expanded=is_expanded)
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -1785,11 +1795,14 @@ def main():
             render_json_downloads(status)
             with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
                 st.json(status or {"info": "No run status yet"})
-        elif active_section == "💼 Job Board":
+
+        with tabs[2]:
             render_job_board(api_base, run_id, status)
-        elif active_section == "🧩 Match Analysis":
+
+        with tabs[3]:
             render_match_analysis(status)
-        elif active_section == "🎓 Learning Center":
+
+        with tabs[4]:
             if not status or status.get("progress_pct", 0) < 50:
                 st.markdown("""
                 <div class="empty-state">
@@ -1806,10 +1819,12 @@ def main():
                     <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
                 </div>
                 """, unsafe_allow_html=True)
-        elif active_section == "📊 Analytics":
+
+        with tabs[5]:
             render_analytics(status)
-        elif active_section == "🛡️ Executive Analytics":
-            if show_admin:
+
+        if show_admin:
+            with tabs[6]:
                 if st.session_state.get("run_id"):
                     st.markdown("#### Admin feedback intake")
                     with st.form("beta_feedback_form", clear_on_submit=True):
@@ -1845,12 +1860,8 @@ def main():
                         ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
                         (st.success if ok else st.error)(msg)
                 render_admin_analytics(status)
-            else:
-                st.info("Use the sidebar Admin Login section to unlock Executive Analytics.")
-        else:
-            render_executive_summary(status)
     except Exception as exc:
-        st.error(f"Mission Control recovered from a tab rendering error: {exc}")
+        st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
         render_executive_summary(status)
         render_job_board(api_base, run_id, status)
 
