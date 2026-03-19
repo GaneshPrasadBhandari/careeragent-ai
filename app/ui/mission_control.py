@@ -348,6 +348,13 @@ NAV_SECTIONS = [
     "🛡️ Executive Analytics",
 ]
 
+DEFAULT_TARGET_ROLES = [
+    "AI Engineer",
+    "AI/ML Solution Architect",
+    "GenAI Solution Architect",
+    "Principal Data Scientist",
+]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API HELPERS
@@ -588,7 +595,7 @@ def _init_session():
         "refresh_sec":    5,
         "api_base":       resolve_default_api_base(),
         "last_poll":      0.0,
-        "active_tab":     "Pipeline Layers",
+        "active_tab":     "Executive Summary",
         "hunt_running":   False,
         "admin_unlocked": False,
         "admin_auth":     False,
@@ -597,6 +604,13 @@ def _init_session():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+def _preferred_active_section(status: Optional[dict]) -> str:
+    pending = str((status or {}).get("pending_action") or "").strip().lower()
+    if pending:
+        return "📋 Pipeline Layers"
+    return "🧾 Executive Summary"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1538,10 +1552,10 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.caption("TARGET ROLES")
         roles_input = st.text_area(
             "Target Roles",
-            value="Software Engineer\nBackend Developer\nPlatform Engineer\nStaff Engineer\nArchitect\nData Science Lead",
+            value="\n".join(DEFAULT_TARGET_ROLES),
             height=80,
             label_visibility="collapsed",
-            help="One role per line",
+            help="One role per line. These defaults are optimized for senior AI / GenAI / architect / principal data-science searches.",
         )
         target_roles = [r.strip() for r in roles_input.split("\n") if r.strip()]
 
@@ -1736,6 +1750,14 @@ def main():
             if fresh.get("status") in ("completed", "error"):
                 st.session_state["hunt_running"] = False
 
+    preferred_section = _preferred_active_section(status)
+    if st.session_state.get("active_section") != preferred_section:
+        if str((status or {}).get("pending_action") or "").strip():
+            st.session_state["active_section"] = preferred_section
+        elif not run_id:
+            st.session_state["active_section"] = preferred_section
+    active_section = st.session_state.get("active_section", preferred_section)
+
     # ── Extract layer data ────────────────────────────────────────────────────
     layers_data = []
     if status and "layers" in status:
@@ -1774,24 +1796,14 @@ def main():
     render_progress_bar(status, layers_data)
 
     show_admin = bool(st.session_state.get("admin_auth"))
-    st.caption("Use the main tabs below for section switching; the left sidebar still contains resume upload, run controls, and quick navigation.")
-    tab_labels = [
-        "🧾 Executive Summary",
-        "📋 Pipeline Layers",
-        "💼 Job Board",
-        "🧩 Match Analysis",
-        "🎓 Learning Center",
-        "📊 Analytics",
-    ]
-    if show_admin:
-        tab_labels.append("🛡️ Executive Analytics")
+    if str((status or {}).get("pending_action") or "").strip():
+        st.info("Human approval is waiting in **Pipeline Layers**. The dashboard auto-focused that section so you can continue the workflow.")
+    else:
+        st.caption("Use the left mission navigation to move between sections. The dashboard opens on Executive Summary by default.")
     try:
-        tabs = st.tabs(tab_labels)
-
-        with tabs[0]:
+        if active_section == "🧾 Executive Summary":
             render_executive_summary(status)
-
-        with tabs[1]:
+        elif active_section == "📋 Pipeline Layers":
             st.markdown('<div class="section-header">Layer Details — click to expand</div>', unsafe_allow_html=True)
             running_layer = next((i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None)
             for ld in LAYERS:
@@ -1806,14 +1818,11 @@ def main():
             render_json_downloads(status)
             with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
                 st.json(status or {"info": "No run status yet"})
-
-        with tabs[2]:
+        elif active_section == "💼 Job Board":
             render_job_board(api_base, run_id, status)
-
-        with tabs[3]:
+        elif active_section == "🧩 Match Analysis":
             render_match_analysis(status)
-
-        with tabs[4]:
+        elif active_section == "🎓 Learning Center":
             if not status or status.get("progress_pct", 0) < 50:
                 st.markdown("""
                 <div class="empty-state">
@@ -1830,44 +1839,43 @@ def main():
                     <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
                 </div>
                 """, unsafe_allow_html=True)
-
-        with tabs[5]:
+        elif active_section == "📊 Analytics":
             render_analytics(status)
+        elif active_section == "🛡️ Executive Analytics" and show_admin:
+            if st.session_state.get("run_id"):
+                st.markdown("#### Admin feedback intake")
+                with st.form("beta_feedback_form", clear_on_submit=True):
+                    rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+                    improve_text = st.text_area(
+                        "What should we improve?",
+                        height=120,
+                        key="beta_feedback_text",
+                        placeholder="Tell us what felt broken, confusing, or missing.",
+                    )
+                    submit_feedback = st.form_submit_button("Send beta feedback")
+                if submit_feedback:
+                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                    (st.success if ok else st.error)(msg)
 
-        if show_admin:
-            with tabs[6]:
-                if st.session_state.get("run_id"):
-                    st.markdown("#### Admin feedback intake")
-                    with st.form("beta_feedback_form", clear_on_submit=True):
-                        rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
-                        improve_text = st.text_area(
-                            "What should we improve?",
-                            height=120,
-                            key="beta_feedback_text",
-                            placeholder="Tell us what felt broken, confusing, or missing.",
-                        )
-                        submit_feedback = st.form_submit_button("Send beta feedback")
-                    if submit_feedback:
-                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
-                        (st.success if ok else st.error)(msg)
+                feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
+                st.markdown("#### Persisted job feedback review")
+                if feedback_rows:
+                    st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No persisted feedback rows yet.")
 
-                    feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
-                    st.markdown("#### Persisted job feedback review")
-                    if feedback_rows:
-                        st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("No persisted feedback rows yet.")
-
-                    st.markdown("#### All-user feedback ledger")
-                    all_feedback_rows = _api_get_all_feedback(api_base)
-                    if all_feedback_rows:
-                        st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("No cross-run feedback rows available yet.")
-                    if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
-                        ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
-                        (st.success if ok else st.error)(msg)
-                render_admin_analytics(status)
+                st.markdown("#### All-user feedback ledger")
+                all_feedback_rows = _api_get_all_feedback(api_base)
+                if all_feedback_rows:
+                    st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No cross-run feedback rows available yet.")
+                if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
+                    ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
+                    (st.success if ok else st.error)(msg)
+            render_admin_analytics(status)
+        else:
+            render_executive_summary(status)
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
         render_executive_summary(status)

@@ -104,6 +104,12 @@ for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
 _runs: dict[str, dict] = {}   # run_id → state dict
 _GLOBAL_SELF_LEARNING_CONTEXT = os.getenv("CAREERAGENT_SELF_LEARNING_CONTEXT", "").strip()
+DEFAULT_SMART_TARGET_ROLES = [
+    "AI Engineer",
+    "AI/ML Solution Architect",
+    "GenAI Solution Architect",
+    "Principal Data Scientist",
+]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -190,9 +196,9 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
 
 def _normalize_config(config: dict) -> dict:
     cfg = dict(config) if isinstance(config, dict) else {}
-    cfg.setdefault("target_roles", ["Software Engineer"])
+    cfg.setdefault("target_roles", list(DEFAULT_SMART_TARGET_ROLES))
     if not isinstance(cfg.get("target_roles"), list):
-        cfg["target_roles"] = [str(cfg.get("target_roles") or "Software Engineer")]
+        cfg["target_roles"] = [str(cfg.get("target_roles") or DEFAULT_SMART_TARGET_ROLES[0])]
     cfg.setdefault("match_threshold", 0.40)
     cfg.setdefault("geo_preferences", {"remote": True, "locations": [], "country_selector": "US"})
     if not isinstance(cfg.get("geo_preferences"), dict):
@@ -1610,6 +1616,23 @@ def _persist_state(run_id: str) -> None:
         log.debug("State persist error: %s", exc)
 
 
+def _load_run_state_from_disk(run_id: str) -> dict[str, Any] | None:
+    state_file = LOGS_DIR / f"state_{run_id}.json"
+    if not state_file.exists():
+        return None
+    data = json.loads(state_file.read_text())
+    _runs[run_id] = data
+    return data
+
+
+def _resolve_action_request(body: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    raw = dict(body or {})
+    payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+    action = str(raw.get("action") or raw.get("action_type") or payload.get("action") or "").strip()
+    merged = {**payload, **raw}
+    return action, merged
+
+
 def _persist_tracking(run_id: str, state: dict) -> None:
     try:
         track_file = LOGS_DIR / f"tracking_{run_id}.json"
@@ -1850,7 +1873,7 @@ def _is_generic_target_role(role: str) -> bool:
 def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[str]:
     requested = [str(r).strip() for r in (config_roles or []) if str(r).strip()]
     if requested and not all(_is_generic_target_role(r) for r in requested):
-        requested = requested + ["Staff Engineer", "Architect", "Data Science Lead"]
+        requested = requested + [role for role in DEFAULT_SMART_TARGET_ROLES if role not in requested]
         normalized: list[str] = []
         seen = set()
         for role in requested:
@@ -1866,29 +1889,30 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
     skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
     inferred: list[str] = []
     inferred.extend([title for title in exp_titles if title])
-    inferred.extend(["Staff Engineer", "Architect", "Data Science Lead"])
+    inferred.extend(DEFAULT_SMART_TARGET_ROLES)
 
     ai_signal = any(tok in skills for tok in {"machine learning", "tensorflow", "azure openai", "llm", "ai architect", "solution architect", "deep learning"})
     if ai_signal:
         inferred.extend([
             "Senior Solution Architect",
             "AI Solution Architect",
-            "Generative AI Architect",
-            "Lead Data Scientist",
+            "AI/ML Solution Architect",
+            "GenAI Solution Architect",
+            "Principal Data Scientist",
             "Principal AI Engineer",
             "Machine Learning Architect",
         ])
 
     normalized: list[str] = []
     seen = set()
-    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]:
+    for role in inferred + requested + DEFAULT_SMART_TARGET_ROLES + ["Machine Learning Engineer", "Principal AI Engineer", "Lead Data Scientist"]:
         role = re.sub(r"\s+", " ", str(role or "")).strip()
         if role and role.lower() not in seen:
             seen.add(role.lower())
             normalized.append(role)
         if len(normalized) >= 10:
             break
-    return normalized or ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]
+    return normalized or list(DEFAULT_SMART_TARGET_ROLES)
 
 
 @traceable(name="api.build_intent")
@@ -2391,12 +2415,7 @@ async def start_hunt(
 async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
     if run_id not in _runs:
-        # Try to reload from persisted file
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            data = json.loads(state_file.read_text())
-            _runs[run_id] = data
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
 
     state = _runs[run_id]
@@ -2447,7 +2466,8 @@ async def get_status(run_id: str):
 @traceable(name="api.get_jobs")
 async def get_jobs(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     jobs  = [{**job, "url": sanitize_job_url(job.get("direct_job_url") or job.get("url", "")), "direct_job_url": sanitize_job_url(job.get("direct_job_url") or job.get("url", ""))} for job in (state.get("scored_jobs", []) or [])]
     return {
@@ -2461,7 +2481,8 @@ async def get_jobs(run_id: str):
 @traceable(name="api.get_applications")
 async def get_applications(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     return {
         "run_id": run_id,
@@ -2478,7 +2499,8 @@ async def get_applications(run_id: str):
 @traceable(name="api.feedback")
 async def post_feedback(run_id: str, body: dict):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     payload = dict(body or {})
     if not str(payload.get("text") or payload.get("comment") or "").strip():
@@ -2495,10 +2517,7 @@ async def post_feedback(run_id: str, body: dict):
 @traceable(name="api.get_feedback")
 async def get_feedback(run_id: str):
     if run_id not in _runs:
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            _runs[run_id] = json.loads(state_file.read_text())
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     return {
@@ -2532,10 +2551,7 @@ async def admin_feedback():
 @traceable(name="api.sync_feedback")
 async def sync_feedback(run_id: str):
     if run_id not in _runs:
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            _runs[run_id] = json.loads(state_file.read_text())
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     context = _sync_feedback_to_agent_brain(state)
@@ -2553,15 +2569,16 @@ async def sync_feedback(run_id: str):
 @traceable(name="api.run_action")
 async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    action = (body or {}).get("action")
+    action, request_data = _resolve_action_request(body)
 
     if action == "approve_ranking":
         selected_values = (
-            (body or {}).get("selected_job_ids")
-            or (body or {}).get("selected_job_urls")
-            or (body or {}).get("selected_jobs")
+            request_data.get("selected_job_ids")
+            or request_data.get("selected_job_urls")
+            or request_data.get("selected_jobs")
             or []
         )
         ranked = state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs", [])
@@ -2633,7 +2650,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         return {"ok": True, "message": "drafts rejected; returned to ranking approval"}
 
     if action == "update_profile_skills":
-        incoming = [str(x).strip() for x in ((body or {}).get("skills") or []) if str(x).strip()]
+        incoming = [str(x).strip() for x in (request_data.get("skills") or []) if str(x).strip()]
         if not incoming:
             raise HTTPException(400, "skills missing")
         prof = state.setdefault("profile", {})
@@ -2653,7 +2670,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
 @app.get("/hunt/{run_id}/artifacts")
 async def get_artifacts(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     return {"run_id": run_id, "artifacts": _runs[run_id].get("artifacts", {})}
 
 
