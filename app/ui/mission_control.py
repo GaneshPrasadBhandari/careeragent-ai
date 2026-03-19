@@ -1922,6 +1922,8 @@ def main():
                     else:
                         st.caption("No cross-run feedback rows available yet.")
                 render_admin_analytics(status)
+        with rail_col:
+            render_quick_nav_rail(api_base, run_id, status, show_admin)
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
         render_executive_summary(status)
