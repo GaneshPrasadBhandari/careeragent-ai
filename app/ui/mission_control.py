@@ -537,7 +537,7 @@ def _api_post_feedback_event(api_base: str, run_id: str, *, source: str, rating:
 
 def _api_post_job_feedback(api_base: str, run_id: str, job_id: str, rating: int, comment: str) -> tuple[bool, str]:
     try:
-        normalized_comment = comment.strip() or "No comment"
+        normalized_comment = comment.strip() or ("User signaled approval" if int(rating) > 0 else "User signaled rejection")
         payload = {
             "source": "user",
             "job_id": job_id,
@@ -798,13 +798,20 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         st.warning("Ranking evaluator is waiting for your decision. Select recommended jobs and approve, or reject to re-plan from intake.")
         ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", []) or status.get("approved_jobs_preview", [])
         if ranked_jobs:
-            options = {
-                f"{j.get('title','Role')} · {j.get('company','')} "
-                f"(match {j.get('score',0)*100:.0f}% | interview {j.get('interview_probability_percent',0):.0f}%)": j.get("id")
-                for j in ranked_jobs
-            }
-            selected_labels = st.multiselect("Recommended jobs for approval", list(options.keys()), default=list(options.keys()))
-            selected_ids = [options[x] for x in selected_labels]
+            option_rows = []
+            for idx, job in enumerate(ranked_jobs, start=1):
+                label = (
+                    f"{idx:02d}. {job.get('title','Role')} · {job.get('company','')} · "
+                    f"{job.get('source','unknown')} · "
+                    f"match {job.get('score',0)*100:.0f}% · interview {job.get('interview_probability_percent',0):.0f}%"
+                )
+                option_rows.append((label, str(job.get("id") or job.get("url") or f"job_{idx}")))
+            selected_labels = st.multiselect(
+                "Recommended jobs for approval",
+                [label for label, _ in option_rows],
+                default=[label for label, _ in option_rows],
+            )
+            selected_ids = [job_id for label, job_id in option_rows if label in selected_labels]
             selected_urls = [
                 j.get("url")
                 for j in ranked_jobs
