@@ -963,7 +963,8 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     state["jobs_approved"] = len(qualified)
     gap = _gap_analysis(state.get("profile") or {}, scored, threshold=threshold)
     state.setdefault("layer_debug", {})["L5"] = {
-        "qualified_jobs": qualified[:10],
+        "qualified_jobs": qualified,
+        "qualified_jobs_preview": qualified[:12],
         "threshold": threshold,
         "gap_analysis": gap,
     }
@@ -1487,7 +1488,8 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             for skill in (gap.get("missing_skills_checklist") or [])[:12]
         }
         state["layer_debug"]["L5"] = {
-            "qualified_jobs": qualified[:10],
+            "qualified_jobs": qualified,
+            "qualified_jobs_preview": qualified[:12],
             "threshold": threshold,
             "gap_analysis": gap,
         }

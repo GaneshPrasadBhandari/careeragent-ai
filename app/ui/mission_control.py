@@ -1052,7 +1052,8 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         return
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
-    min_score = st.slider("Job board score filter", 0.0, 1.0, 0.45, 0.05)
+    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 5)
+    min_score = min_score_pct / 100.0
     min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5)
     only_remote = st.checkbox("Show remote only in board", value=False)
 
@@ -1545,8 +1546,9 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         selected_region_code = region_options[selected_region_label]
 
         remote_only = st.checkbox("Remote Only", value=True)
-        threshold   = st.slider("Match Threshold", 0.30, 0.90, 0.45, 0.05,
-                                help="Minimum score for a job to qualify")
+        threshold_pct = st.slider("Match Threshold (%)", 0, 100, 45, 5,
+                                  help="Minimum score for a job to qualify")
+        threshold = threshold_pct / 100.0
         posted_hours = st.selectbox(
             "Posted within",
             [1, 3, 6, 12, 24, 48, 72, 168],
