@@ -271,12 +271,18 @@ class LeadScoutService:
         profile_skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
         all_keywords = list(dict.fromkeys(keywords + profile_skills))
         seed_role = roles[0] if roles else "AI Engineer"
-        llm_variants = self._semantic_role_variants(
-            seed_role=seed_role,
-            profile=profile,
-            keywords=all_keywords,
-            self_learning_context=self_learning_context,
-        )
+        anchor_roles = [role for role in roles if any(token in role.lower() for token in ("ai architect", "architect", "data science lead"))]
+        anchor_roles = anchor_roles[:2] or [seed_role]
+        llm_variants: list[str] = []
+        for anchor in anchor_roles:
+            llm_variants.extend(
+                self._semantic_role_variants(
+                    seed_role=anchor,
+                    profile=profile,
+                    keywords=all_keywords,
+                    self_learning_context=self_learning_context,
+                )
+            )
 
         seniority = self._detect_seniority(profile, roles)
         ai_ml = [k for k in all_keywords if any(t in k.lower() for t in [
@@ -311,6 +317,19 @@ class LeadScoutService:
         return final or ["AI Engineer Python remote", "Machine Learning Engineer remote"]
 
     def _semantic_role_variants(self, *, seed_role: str, profile: dict, keywords: list[str], self_learning_context: str = "") -> list[str]:
+        if any(token in seed_role.lower() for token in ("ai architect", "architect", "data science lead")):
+            return [
+                "AI Architect",
+                "Senior AI Architect",
+                "Principal AI Architect",
+                "Lead AI Architect",
+                "Generative AI Architect",
+                "AI Solution Architect",
+                "Data Science Lead",
+                "Lead Data Scientist",
+                "Principal Data Science Lead",
+                "Applied AI Architect",
+            ]
         prompt = (
             "Generate 8 JSON array search variations for job discovery. "
             "Focus on semantic equivalents, adjacent titles, and architecture/leadership variations. "
