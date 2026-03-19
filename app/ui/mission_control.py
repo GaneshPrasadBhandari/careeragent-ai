@@ -833,7 +833,7 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         c1, c2 = st.columns(2)
         with c1:
             if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
-                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids, "selected_job_urls": selected_urls}):
+                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids}):
                     st.success("Ranking approved. Continuing to drafting layer...")
                     st.rerun()
         with c2:
