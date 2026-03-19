@@ -338,6 +338,16 @@ DEFAULT_OUTPUTS = [
     "Bridge docs appear after L9 completes.",
 ]
 
+NAV_SECTIONS = [
+    "🧾 Executive Summary",
+    "📋 Pipeline Layers",
+    "💼 Job Board",
+    "🧩 Match Analysis",
+    "🎓 Learning Center",
+    "📊 Analytics",
+    "🛡️ Executive Analytics",
+]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API HELPERS
@@ -579,6 +589,7 @@ def _init_session():
         "hunt_running":   False,
         "admin_unlocked": False,
         "admin_auth":     False,
+        "active_section": NAV_SECTIONS[0],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -612,6 +623,7 @@ def render_stat_cards(status: Optional[dict]) -> None:
     approved   = status.get("jobs_approved",     0) if status else 0
     cand_name  = status.get("candidate_name",    "—") if status else "—"
     skills_n   = status.get("skills_extracted",  0) if status else 0
+    ready_pct  = min(100.0, (approved / jobs_disc) * 100.0) if jobs_disc else 0.0
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -634,7 +646,7 @@ def render_stat_cards(status: Optional[dict]) -> None:
         <div class="stat-card">
             <div class="stat-label">Approved</div>
             <div class="stat-value {'orange' if approved > 0 else ''}">{approved}</div>
-            <div class="stat-sub">Jobs ready to apply</div>
+            <div class="stat-sub">Jobs ready to apply · {ready_pct:.0f}% of discovered</div>
         </div>""", unsafe_allow_html=True)
     with c4:
         st.markdown(f"""
@@ -1174,6 +1186,9 @@ def render_executive_summary(status: Optional[dict]) -> None:
     analytics = status.get("analytics_summary") or {}
     applications = analytics.get("total_applications", status.get("jobs_applied", 0))
     companies = analytics.get("companies") or []
+    jobs_discovered = int(status.get("jobs_discovered", 0) or 0)
+    jobs_approved = int(status.get("jobs_approved", 0) or 0)
+    ready_ratio = (jobs_approved / jobs_discovered) if jobs_discovered else 0.0
     top_jobs = ((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or ((status.get("layer_debug") or {}).get("L4") or {}).get("top_jobs") or []
     deduped_jobs = []
     seen_jobs = set()
@@ -1197,11 +1212,20 @@ def render_executive_summary(status: Optional[dict]) -> None:
         f"""
         * Candidate: **{status.get('candidate_name', '—')}**
         * Skills extracted: **{status.get('skills_extracted', 0)}**
-        * Jobs discovered/scored: **{status.get('jobs_discovered', 0)} / {status.get('jobs_scored', 0)}**
-        * Jobs approved for action: **{status.get('jobs_approved', 0)}**
+        * Jobs discovered/scored: **{jobs_discovered} / {status.get('jobs_scored', 0)}**
+        * Jobs approved for action: **{jobs_approved}**
+        * Ready-to-apply ratio: **{ready_ratio * 100:.1f}%** of discovered jobs
         * Current run state: **{status.get('status', 'idle')}**
         """
     )
+
+    if jobs_discovered and ready_ratio < 0.85:
+        st.warning(
+            f"Ready-to-apply coverage is {ready_ratio * 100:.1f}%. "
+            "Phase 6 should keep this at or above 85% of discovered jobs whenever enough viable matches exist."
+        )
+    elif jobs_discovered:
+        st.success(f"Ready-to-apply coverage is healthy at {ready_ratio * 100:.1f}% of discovered jobs.")
 
     if deduped_jobs:
         st.markdown("#### Recommended jobs")
@@ -1368,7 +1392,21 @@ def render_admin_analytics(status: Optional[dict]) -> None:
 
     if feedback_events:
         st.markdown("#### Beta feedback stream")
-        st.dataframe(feedback_events[-20:], use_container_width=True, hide_index=True)
+        st.dataframe(
+            [
+                {
+                    "Timestamp": event.get("ts"),
+                    "Source": (event.get("meta") or {}).get("source_label") or (event.get("meta") or {}).get("channel") or event.get("source"),
+                    "Normalized source": event.get("source"),
+                    "Rating": event.get("rating"),
+                    "Feedback": event.get("text"),
+                    "Job ID": ((event.get("meta") or {}).get("job_id")),
+                }
+                for event in feedback_events[-20:]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
     else:
         st.caption("No beta feedback submissions yet.")
 
@@ -1421,7 +1459,7 @@ def render_admin_analytics(status: Optional[dict]) -> None:
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str], dict]:
+def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str], dict, str]:
     """
     Returns (api_base, resume_bytes, resume_filename, run_id, config)
     """
@@ -1445,6 +1483,20 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         dot    = "●"
         st.markdown(f'<div style="font-size:13px;color:{color}">{dot} {label}</div>',
                     unsafe_allow_html=True)
+
+        st.divider()
+
+        st.caption("MISSION NAVIGATION")
+        visible_sections = NAV_SECTIONS[:-1] + (["🛡️ Executive Analytics"] if st.session_state.get("admin_auth") else [])
+        active_section = st.radio(
+            "Mission navigation",
+            visible_sections,
+            index=visible_sections.index(st.session_state.get("active_section", visible_sections[0])) if st.session_state.get("active_section") in visible_sections else 0,
+            key="active_section_radio",
+            label_visibility="collapsed",
+        )
+        st.session_state["active_section"] = active_section
+        st.caption("Use these left-panel options to move between dashboard sections.")
 
         st.divider()
 
@@ -1542,9 +1594,22 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             with st.form("sidebar_feedback_form", clear_on_submit=True):
                 sidebar_source = st.selectbox(
                     "Feedback source",
-                    ["LinkedIn User", "Other Portal User", "Employer", "General UI"],
+                    [
+                        "LinkedIn User",
+                        "Other Job Portal User",
+                        "Recruiter / Employer",
+                        "Internal Admin Review",
+                        "General UI / UX",
+                        "Other",
+                    ],
                     index=0,
                     key="sidebar_feedback_source",
+                )
+                custom_source = st.text_input(
+                    "Custom feedback source",
+                    key="sidebar_feedback_source_custom",
+                    placeholder="Example: Referral, Friend, Hiring manager",
+                    disabled=sidebar_source != "Other",
                 )
                 sidebar_rating = st.slider("Run feedback", 1, 5, 4, 1, key="sidebar_feedback_rating")
                 sidebar_text = st.text_area(
@@ -1558,14 +1623,15 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                 if not sidebar_text.strip():
                     st.warning("Please write a short feedback note before sending.")
                 else:
-                    normalized_source = "employer" if sidebar_source == "Employer" else "user"
+                    source_label = custom_source.strip() if sidebar_source == "Other" and custom_source.strip() else sidebar_source
+                    normalized_source = "employer" if sidebar_source == "Recruiter / Employer" else "user"
                     ok, msg = _api_post_feedback_event(
                         api_base,
                         st.session_state["run_id"],
                         source=normalized_source,
                         rating=sidebar_rating,
-                        text=f"[{sidebar_source}] {sidebar_text.strip()}",
-                        meta={"channel": sidebar_source},
+                        text=f"[{source_label}] {sidebar_text.strip()}",
+                        meta={"channel": source_label, "source_label": source_label},
                     )
                     (st.success if ok else st.error)(msg)
 
@@ -1612,23 +1678,6 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         # ── Show current run ID ───────────────────────────────────────────────
         if st.session_state.get("run_id"):
             st.caption(f"Run ID: `{st.session_state['run_id']}`")
-            st.divider()
-            st.caption("FEEDBACK")
-            with st.form("sidebar_feedback_form", clear_on_submit=True):
-                sidebar_rating = st.slider("Run feedback", 1, 5, 4, 1, key="sidebar_feedback_rating")
-                sidebar_text = st.text_area(
-                    "What should improve?",
-                    height=90,
-                    key="sidebar_feedback_text",
-                    placeholder="Report matching issues, duplicate jobs, UI readability problems, or missing sources.",
-                )
-                sidebar_submit = st.form_submit_button("Send feedback")
-            if sidebar_submit:
-                if not sidebar_text.strip():
-                    st.warning("Please write a short feedback note before sending.")
-                else:
-                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], sidebar_rating, sidebar_text)
-                    (st.success if ok else st.error)(msg)
 
         admin_secret = (os.getenv("ADMIN_PASSWORD") or os.getenv("CAREERAGENT_ADMIN_PASSWORD") or "").strip()
         st.divider()
@@ -1648,7 +1697,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         else:
             st.caption("Admin password is not configured in this environment. Any non-empty password unlocks read-only analytics.")
 
-    return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config
+    return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config, st.session_state.get("active_section", NAV_SECTIONS[0])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1660,7 +1709,7 @@ def main():
     _inject_css()
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
-    api_base, _resume_bytes, _filename, run_id, _config = render_sidebar()
+    api_base, _resume_bytes, _filename, run_id, _config, active_section = render_sidebar()
 
     # ── Poll backend for status ───────────────────────────────────────────────
     status = st.session_state.get("run_status")
@@ -1713,25 +1762,11 @@ def main():
     # ── Progress bar ─────────────────────────────────────────────────────────
     render_progress_bar(status, layers_data)
 
-    # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_labels = [
-        "🧾  Executive Summary",
-        "📋  Pipeline Layers",
-        "💼  Job Board",
-        "🧩  Match Analysis",
-        "🎓  Learning Center",
-        "📊  Analytics",
-        "🛡️  Executive Analytics",
-    ]
     show_admin = bool(st.session_state.get("admin_auth"))
     try:
-        tabs = st.tabs(tab_labels)
-        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics, tab_admin = tabs
-
-        with tab_summary:
+        if active_section == "🧾 Executive Summary":
             render_executive_summary(status)
-
-        with tab_pipeline:
+        elif active_section == "📋 Pipeline Layers":
             st.markdown('<div class="section-header">Layer Details — click to expand</div>',
                         unsafe_allow_html=True)
 
@@ -1750,14 +1785,11 @@ def main():
             render_json_downloads(status)
             with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
                 st.json(status or {"info": "No run status yet"})
-
-        with tab_jobs:
+        elif active_section == "💼 Job Board":
             render_job_board(api_base, run_id, status)
-
-        with tab_match:
+        elif active_section == "🧩 Match Analysis":
             render_match_analysis(status)
-
-        with tab_learn:
+        elif active_section == "🎓 Learning Center":
             if not status or status.get("progress_pct", 0) < 50:
                 st.markdown("""
                 <div class="empty-state">
@@ -1774,11 +1806,9 @@ def main():
                     <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
                 </div>
                 """, unsafe_allow_html=True)
-
-        with tab_analytics:
+        elif active_section == "📊 Analytics":
             render_analytics(status)
-
-        with tab_admin:
+        elif active_section == "🛡️ Executive Analytics":
             if show_admin:
                 if st.session_state.get("run_id"):
                     st.markdown("#### Admin feedback intake")
@@ -1817,6 +1847,8 @@ def main():
                 render_admin_analytics(status)
             else:
                 st.info("Use the sidebar Admin Login section to unlock Executive Analytics.")
+        else:
+            render_executive_summary(status)
     except Exception as exc:
         st.error(f"Mission Control recovered from a tab rendering error: {exc}")
         render_executive_summary(status)

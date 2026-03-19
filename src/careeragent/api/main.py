@@ -836,12 +836,13 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
         source_targets[source] = source_targets.get(source, 0)
 
     selected: list[dict] = []
-    target = min(max(8, int(math.ceil(len(ranked) * 0.18))), 24) if ranked else 0
+    target = min(len(ranked), max(8, int(math.ceil(len(ranked) * 0.85)))) if ranked else 0
     top_score = max((max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0)) for job in ranked), default=0.0)
-    strong_cutoff = max(0.45, min(float(threshold), 0.58))
+    strong_cutoff = max(0.40, min(float(threshold), 0.58))
     if top_score >= 0.85:
         strong_cutoff = min(strong_cutoff, top_score - 0.18)
-    per_source_cap = max(3, int(math.ceil(max(1, target) * 0.35)))
+    per_source_cap = max(6, int(math.ceil(max(1, target) * 0.55)))
+    remaining: list[dict] = []
     for job in ranked:
         score = max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0))
         lexical = float(job.get("keyword_score") or 0.0)
@@ -849,13 +850,17 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
         cognitive_yes = bool((job.get("cognitive_decision") or {}).get("approved"))
         interview = float(job.get("interview_probability_percent") or 0.0)
         if score < strong_cutoff:
+            remaining.append(job)
             continue
-        if lexical < 0.30 and semantic < 0.46:
+        if lexical < 0.28 and semantic < 0.42:
+            remaining.append(job)
             continue
-        if not cognitive_yes and semantic < 0.50 and interview < 58.0:
+        if not cognitive_yes and semantic < 0.46 and interview < 52.0:
+            remaining.append(job)
             continue
         source = str(job.get("source") or "unknown").lower()
         if source_targets.get(source, 0) >= per_source_cap:
+            remaining.append(job)
             continue
         selected.append(job)
         source_targets[source] = source_targets.get(source, 0) + 1
@@ -863,7 +868,18 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
             break
 
     if not selected:
-        selected = ranked[: min(8, len(ranked))]
+        selected = ranked[: min(target or 8, len(ranked))]
+
+    if len(selected) < target:
+        selected_keys = {sanitize_job_url(job.get("url") or job.get("direct_job_url") or "") or str(job.get("id") or "") for job in selected}
+        for job in remaining + ranked:
+            key = sanitize_job_url(job.get("url") or job.get("direct_job_url") or "") or str(job.get("id") or "")
+            if not key or key in selected_keys:
+                continue
+            selected.append(job)
+            selected_keys.add(key)
+            if len(selected) >= target:
+                break
     return selected
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:

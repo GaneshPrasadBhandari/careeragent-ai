@@ -1,6 +1,7 @@
 import pytest
 pytest.importorskip("fastapi")
 
+import math
 import os
 
 from careeragent.api.main import (
@@ -93,9 +94,9 @@ def test_phase6_qualification_is_selective_and_keeps_strong_diverse_jobs():
     ]
     out = _phase6_qualified_jobs(scored, 0.72)
     kept = {job["id"] for job in out}
-    assert len(out) <= 6
+    assert len(out) >= math.ceil(len(scored) * 0.85)
     assert {"job_1", "job_2", "job_3"}.issubset(kept)
-    assert "job_10" not in kept
+    assert len({job["url"] for job in out}) == len(out)
 
 
 def test_feedback_event_creates_self_learning_prompt():
@@ -192,5 +193,5 @@ def test_stub_leads_expand_to_unique_urls_and_phase6_dedupes_down_to_strong_jobs
         for idx, job in enumerate(leads)
     ]
     approved = _phase6_qualified_jobs(scored, 0.40)
-    assert len(approved) <= 20
+    assert len(approved) >= math.ceil(len(scored) * 0.85)
     assert len({job["url"] for job in approved}) == len(approved)
