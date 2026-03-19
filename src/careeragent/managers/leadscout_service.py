@@ -11,11 +11,15 @@ import asyncio
 import logging
 import os
 import re
+from itertools import islice
 from dataclasses import asdict, dataclass
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
+
+from careeragent.core.settings import Settings
+from careeragent.tools.llm_tools import GeminiClient
 
 log = logging.getLogger("leadscout")
 
@@ -162,6 +166,8 @@ class LeadScoutService:
     ):
         self.max_per_source = max_results_per_source
         self.enable_playwright = enable_playwright_scrape
+        self._settings = Settings()
+        self._llm = GeminiClient(self._settings, model=os.getenv("CAREERAGENT_REASONING_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash")
 
     # ── Entry point ─────────────────────────────────────────────────────────
 
@@ -213,69 +219,75 @@ class LeadScoutService:
     # ── Query builder ────────────────────────────────────────────────────────
 
     def _build_queries(self, intent_plan: dict) -> list[str]:
-        roles    = intent_plan.get("target_roles", [])
-        keywords = intent_plan.get("keywords", [])
-        profile  = intent_plan.get("extracted_profile", {})
+        roles = [str(r).strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
+        keywords = [str(k).strip() for k in (intent_plan.get("keywords") or []) if str(k).strip()]
+        profile = intent_plan.get("extracted_profile", {})
 
-        # Gather all skills
-        profile_skills: list[str] = []
-        if isinstance(profile.get("skills"), list):
-            profile_skills = [str(s) for s in profile["skills"]]
-
+        profile_skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
         all_keywords = list(dict.fromkeys(keywords + profile_skills))
+        seed_role = roles[0] if roles else "AI Engineer"
+        llm_variants = self._semantic_role_variants(seed_role=seed_role, profile=profile, keywords=all_keywords)
 
-        # Domain bucketing
+        seniority = self._detect_seniority(profile, roles)
         ai_ml = [k for k in all_keywords if any(t in k.lower() for t in [
             "ai", "ml", "llm", "gpt", "bert", "transformer", "pytorch", "tensorflow",
             "langchain", "langgraph", "genai", "generative", "diffusion", "rag",
-            "vector", "embedding", "hugging", "openai", "fine-tun", "nlp",
-            "computer vision", "deep learning", "neural", "mlops", "reinforcement",
+            "vector", "embedding", "hugging", "openai", "anthropic", "gemini", "fine-tun", "nlp",
         ])]
         cloud = [k for k in all_keywords if any(t in k.lower() for t in [
-            "aws", "azure", "gcp", "sagemaker", "bedrock", "vertex", "cloud",
-            "lambda", "kubernetes", "docker",
+            "aws", "azure", "gcp", "sagemaker", "bedrock", "vertex", "cloud", "lambda", "kubernetes", "docker",
         ])]
 
-        queries = []
+        queries: list[str] = []
+        queries.extend(llm_variants)
+        if seniority:
+            queries.append(f"{seniority} {seed_role}")
+        for alt in self._alt_roles(roles)[:4]:
+            queries.append(f"{alt} {' '.join(ai_ml[:3])}".strip())
+        if cloud:
+            queries.append(f"{seed_role} {' '.join(cloud[:3])}".strip())
+        if ai_ml:
+            queries.append(f"{seed_role} {' '.join(ai_ml[:4])}".strip())
 
-        if roles:
-            ai_str = " ".join(ai_ml[:4]) if ai_ml else " ".join(all_keywords[:4])
-            queries.append(f"{roles[0]} {ai_str}")
-
-        seniority = self._detect_seniority(profile, roles)
-        if seniority and roles:
-            queries.append(f"{seniority} {roles[0]}")
-
-        for alt in self._alt_roles(roles)[:2]:
-            ai_str = " ".join(ai_ml[:3]) if ai_ml else ""
-            queries.append(f"{alt} {ai_str}".strip())
-
-        if cloud and roles:
-            queries.append(f"{roles[0]} {' '.join(cloud[:3])}")
-
-        if any("gen" in k.lower() or "llm" in k.lower() for k in all_keywords):
-            base = roles[0] if roles else "AI Engineer"
-            queries.append(f"Generative AI {base} LLM")
-
-        if roles and ai_ml and cloud:
-            queries.append(f"{roles[0]} {' '.join(ai_ml[:2])} {' '.join(cloud[:2])}".strip())
-        if roles:
-            queries.append(f"{roles[0]} semantic platform architecture")
-            queries.append(f"{roles[0]} cognitive systems ai")
-
-        queries.append("Machine Learning Engineer GenAI LLM remote")
-
-        seen_q: set[str] = set()
         final: list[str] = []
+        seen_q: set[str] = set()
         for q in queries:
-            q = q.strip()
+            q = re.sub(r"\s+", " ", str(q or "")).strip()
             if q and q not in seen_q:
                 seen_q.add(q)
                 final.append(q)
-                if len(final) >= 8:
-                    break
-
+            if len(final) >= 10:
+                break
         return final or ["AI Engineer Python remote", "Machine Learning Engineer remote"]
+
+    def _semantic_role_variants(self, *, seed_role: str, profile: dict, keywords: list[str]) -> list[str]:
+        prompt = (
+            "Generate 8 JSON array search variations for job discovery. "
+            "Focus on semantic equivalents, adjacent titles, and architecture/leadership variations. "
+            "Keep each variation under 12 words and usable as a search query. "
+            "Treat Senior, Lead, Principal, and Architect as interchangeable for this candidate. "
+            f"Seed role: {seed_role}. Candidate skills: {', '.join(keywords[:20]) or 'not provided'}."
+        )
+        payload = self._llm.generate_json(prompt, temperature=0.2, max_tokens=300)
+        variants: list[str] = []
+        if isinstance(payload, dict):
+            raw = payload.get("variations") or payload.get("queries") or payload.get("roles") or []
+            if isinstance(raw, list):
+                variants = [str(item).strip() for item in raw if str(item).strip()]
+        if not variants:
+            variants = [
+                seed_role,
+                f"Senior {seed_role}",
+                f"Lead {seed_role}",
+                f"Principal {seed_role}",
+                f"Architect {seed_role}",
+                f"{seed_role} platform",
+                f"{seed_role} distributed systems",
+                f"{seed_role} generative ai",
+                f"Applied {seed_role}",
+                f"{seed_role} machine learning",
+            ]
+        return list(islice(dict.fromkeys(v for v in variants if v), 10))
 
     def _detect_seniority(self, profile: dict, roles: list[str]) -> str:
         combined = " ".join([
@@ -376,11 +388,12 @@ class LeadScoutService:
                     continue
                 if not any(d in url for d in site_domains):
                     continue
+                direct_url = sanitize_job_url(url)
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = r.get("displayLink", ""),
-                    url         = sanitize_job_url(url),
+                    url         = direct_url,
                     description = r.get("snippet", "")[:500],
                     source      = provider.get("label", "serper_organic").lower(),
                     remote      = "remote" in (r.get("snippet", "") + url).lower(),
@@ -424,11 +437,12 @@ class LeadScoutService:
                     continue
                 if not any(d in url for d in site_domains):
                     continue
+                direct_url = sanitize_job_url(url)
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
                     company     = "",
-                    url         = sanitize_job_url(url),
+                    url         = direct_url,
                     description = r.get("content", "")[:500],
                     source      = provider.get("label", "tavily").lower(),
                     remote      = "remote" in (r.get("content", "") + url).lower(),

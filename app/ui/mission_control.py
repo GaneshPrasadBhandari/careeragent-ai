@@ -920,9 +920,9 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                     Match Explanation: {job.get('match_explanation') or job.get('executive_summary') or 'Recommendation summary unavailable'}
                 </div>
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
-                    LLM reasoning: {job.get('llm_reasoning') or why}
+                    LLM reasoning: {job.get('cognitive_reasoning') or job.get('llm_reasoning') or why}
                 </div>
-                <div style="font-size:11px;color:#58a6ff;margin-top:6px">{JobURLManager.external_link_html(job.get('url'), 'Open job post')}</div>
+                <div style="font-size:11px;color:#58a6ff;margin-top:6px">{JobURLManager.external_link_html(job.get('direct_job_url') or job.get('url'), 'Open Link')}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
@@ -974,7 +974,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
             title = f"{idx}. {job.get('title', 'Role')} — {job.get('company', 'Unknown company')}"
             with st.expander(title, expanded=(idx == 1)):
                 st.markdown(f"**Executive summary:** {job.get('executive_summary') or 'No executive summary yet.'}")
-                st.markdown(JobURLManager.external_link_html(job.get("url"), "Open job post"), unsafe_allow_html=True)
+                st.markdown(JobURLManager.external_link_html(job.get("direct_job_url") or job.get("url"), "Open Link"), unsafe_allow_html=True)
                 st.markdown(f"**Match explanation:** {job.get('match_explanation') or 'No match explanation yet.'}")
                 rationale = job.get("recommendation_rationale") or []
                 if rationale:
@@ -1045,8 +1045,9 @@ def render_executive_summary(status: Optional[dict]) -> None:
         for job in deduped_jobs[:5]:
             st.markdown(
                 f"- **{job.get('title', 'Role')}** at **{job.get('company', 'Unknown company')}** — "
-                f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'} "
-                f"{JobURLManager.markdown_link(job.get('url'), 'Open job')}"
+                f"{job.get('executive_summary') or job.get('match_explanation') or job.get('llm_reasoning') or 'No summary available.'}  \n"
+                f"Reasoning: {job.get('cognitive_reasoning') or job.get('llm_reasoning') or 'No reasoning available.'}  \n"
+                f"{JobURLManager.markdown_link(job.get('direct_job_url') or job.get('url'), 'Open Link')}"
             )
     else:
         st.caption("Recommended jobs will appear here after L4/L5 scoring.")
@@ -1204,9 +1205,15 @@ def render_admin_analytics(status: Optional[dict]) -> None:
     else:
         st.caption("No user ratings submitted yet.")
 
-    st.markdown("#### Self-Learning optimization prompt")
+    st.markdown("#### Feedback Loop")
+    feedback_loop = analytics_summary.get("feedback_loop") or {}
+    st.write({
+        "strictness_mode": feedback_loop.get("strictness_mode") or (status.get("feedback_learning_state") or {}).get("strictness_mode"),
+        "targeting_mode": feedback_loop.get("targeting_mode") or (status.get("feedback_learning_state") or {}).get("targeting_mode"),
+        "system_prompt_update": feedback_loop.get("system_prompt_update") or status.get("system_prompt_update"),
+    })
     st.code(
-        ((analytics_summary.get("feedback_loop") or {}).get("self_learning_prompt"))
+        (feedback_loop.get("self_learning_prompt"))
         or status.get("self_learning_prompt")
         or "No self-learning prompt generated yet.",
         language="markdown",

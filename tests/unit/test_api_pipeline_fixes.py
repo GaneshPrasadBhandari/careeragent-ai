@@ -6,11 +6,14 @@ import os
 from careeragent.api.main import (
     _augment_scored_jobs,
     _build_cover_letter_text,
+    _build_intent,
     _build_learning_resource_pack,
+    _extract_profile_from_text,
     _langsmith_status,
     _normalize_config,
     _phase6_qualified_jobs,
     _record_feedback_event,
+    _stub_leads,
 )
 
 
@@ -92,3 +95,54 @@ def test_learning_resource_pack_contains_direct_links():
     assert "http" in pack["official_documentation"]
     assert "youtube.com" in pack["youtube_search"]
     assert len(pack["top_websites"]) == 3
+
+
+def test_resume_parser_recovers_senior_ai_titles():
+    profile = _extract_profile_from_text("""Ganesh Prasad Bhandari
+Professional Summary
+Dynamic AI/ML professional with 16+ years of experience.
+Professional Experience
+Senior Solution Architect
+Data Science Team Lead (Python)
+Senior Data Scientist
+Key Skills
+Python, TensorFlow, Azure OpenAI, AWS
+""")
+    titles = [item["title"] for item in profile["experience"]]
+    assert "Senior Solution Architect" in titles
+    assert "Data Science Team Lead (Python)" in titles
+    assert any(item["years"] >= 16 for item in profile["experience"])
+
+
+def test_build_intent_prefers_resume_roles_over_generic_default():
+    profile = {
+        "skills": ["Python", "TensorFlow", "Azure OpenAI", "AWS", "Machine Learning"],
+        "experience": [{"title": "Senior Solution Architect", "years": 16}],
+        "raw_text": "16+ years AI ML Generative AI Azure OpenAI",
+    }
+    cfg = _normalize_config({})
+    intent = _build_intent(profile, cfg)
+    assert intent["target_roles"][0] == "Senior Solution Architect"
+    assert "AI Solution Architect" in intent["target_roles"]
+
+
+def test_stub_leads_expand_to_unique_urls_and_high_phase6_approval():
+    profile = {
+        "skills": ["Python", "TensorFlow", "Azure OpenAI", "AWS", "Machine Learning", "AI Architect"],
+        "experience": [{"title": "Senior Solution Architect", "years": 16}],
+    }
+    leads = _stub_leads(profile, max_jobs=80)
+    assert len({job["url"] for job in leads}) == 80
+
+    scored = [
+        {
+            **job,
+            "score": 0.62 if idx < 72 else 0.41,
+            "cognitive_score": 0.95 if idx < 72 else 0.55,
+            "interview_probability_percent": 78 if idx < 50 else 61,
+            "cognitive_decision": {"approved": idx < 72},
+        }
+        for idx, job in enumerate(leads)
+    ]
+    approved = _phase6_qualified_jobs(scored, 0.40)
+    assert len(approved) >= 70
