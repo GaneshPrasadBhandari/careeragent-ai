@@ -1083,10 +1083,10 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         return
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
-    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 5)
+    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 5, key="job_board_score_filter")
     min_score = min_score_pct / 100.0
-    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5)
-    only_remote = st.checkbox("Show remote only in board", value=False)
+    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5, key="job_board_interview_filter")
+    only_remote = st.checkbox("Show remote only in board", value=False, key="job_board_remote_only")
 
     filtered = [
         j for j in jobs
@@ -1927,7 +1927,6 @@ def main():
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
         render_executive_summary(status)
-        render_job_board(api_base, run_id, status)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:
