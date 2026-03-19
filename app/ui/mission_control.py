@@ -408,7 +408,7 @@ class JobURLManager:
         try:
             parts = urlsplit(raw)
             query = parse_qs(parts.query, keep_blank_values=False)
-            for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
+            for key in ("url", "u", "q", "redirect", "redirect_url", "dest", "destination", "target"):
                 value = query.get(key, [""])[0]
                 if value.startswith(("http://", "https://")):
                     return JobURLManager.sanitize(unquote(value))
@@ -437,6 +437,14 @@ class JobURLManager:
 
 def sanitize_job_url(url: Optional[str]) -> str:
     return JobURLManager.sanitize(url)
+
+
+def render_job_link(url: Optional[str], *, label: str = "Open job", key: Optional[str] = None) -> None:
+    safe_url = JobURLManager.sanitize(url)
+    if safe_url:
+        st.link_button(label, safe_url, use_container_width=False)
+    else:
+        st.caption("No job link available")
 
 
 def _compact_text(value: Optional[str], *, limit: int = 260) -> str:
@@ -1106,7 +1114,6 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
                 <div style="font-size:11px;color:#5C677D;margin-top:2px">
                     LLM reasoning: {job.get('cognitive_reasoning') or job.get('llm_reasoning') or why}
                 </div>
-                <div style="font-size:11px;color:#58a6ff;margin-top:6px">{JobURLManager.external_link_html(job.get('direct_job_url') or job.get('url'), 'Open Link')}</div>
             </div>
             <div style="text-align:right">
                 <div class="job-score" style="color:{'#3fb950' if score_c=='green' else '#f0883e' if score_c=='orange' else '#8b949e'}">{score*100:.0f}%</div>
@@ -1115,6 +1122,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
             </div>
         </div>
         """, unsafe_allow_html=True)
+        render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
         st.text_input(
             f"Comment for {job_id}",
             key=comment_key,
@@ -1173,7 +1181,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
             title = f"{idx}. {job.get('title', 'Role')} — {job.get('company', 'Unknown company')}"
             with st.expander(title, expanded=(idx == 1)):
                 st.markdown(f"**Executive summary:** {job.get('executive_summary') or 'No executive summary yet.'}")
-                st.markdown(JobURLManager.external_link_html(job.get("direct_job_url") or job.get("url"), "Open Link"), unsafe_allow_html=True)
+                render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
                 st.markdown(f"**Match explanation:** {job.get('match_explanation') or 'No match explanation yet.'}")
                 rationale = job.get("recommendation_rationale") or []
                 if rationale:
@@ -1268,10 +1276,33 @@ def render_executive_summary(status: Optional[dict]) -> None:
                     st.write(summary)
                     st.caption(f"Reasoning: {reasoning}")
                 with right:
-                    st.markdown(JobURLManager.external_link_html(job.get("direct_job_url") or job.get("url"), "Open Link"), unsafe_allow_html=True)
+                    render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
                 st.markdown("<hr style='margin:8px 0 12px 0'>", unsafe_allow_html=True)
     else:
         st.caption("Recommended jobs will appear here after L4/L5 scoring.")
+
+
+def render_quick_nav_rail(api_base: str, run_id: Optional[str], status: Optional[dict], show_admin: bool) -> None:
+    layer_debug = (status or {}).get("layer_debug") or {}
+    quick_jobs = ((layer_debug.get("L5") or {}).get("qualified_jobs") or (layer_debug.get("L4") or {}).get("all_jobs") or [])[:10]
+    st.markdown("#### Open jobs")
+    if quick_jobs:
+        for idx, job in enumerate(quick_jobs, start=1):
+            title = job.get("title") or "Role"
+            company = job.get("company") or job.get("source") or "Unknown"
+            score = round(float(job.get("score") or 0.0) * 100.0, 1)
+            st.markdown(f"**{idx}. {title}**")
+            st.caption(f"{company} • Match {score:.1f}%")
+            render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    else:
+        st.caption("Job links will appear here after L4 scoring completes.")
+
+    if show_admin and run_id:
+        st.markdown("#### Admin shortcuts")
+        if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain", use_container_width=True):
+            ok, msg = _api_sync_feedback(api_base, run_id)
+            (st.success if ok else st.error)(msg)
 
 def render_analytics(status: Optional[dict]) -> None:
     """Analytics tab."""
@@ -1797,28 +1828,49 @@ def main():
     else:
         st.caption("Use the left mission navigation to move between sections. The dashboard opens on Executive Summary by default.")
     try:
-        if active_section == "🧾 Executive Summary":
-            render_executive_summary(status)
-        elif active_section == "📋 Pipeline Layers":
-            st.markdown('<div class="section-header">Layer Details — click to expand</div>', unsafe_allow_html=True)
-            running_layer = next((i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None)
-            for ld in LAYERS:
-                layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
-                is_expanded = ld["id"] == running_layer
-                render_layer_card(ld, layer_state, expanded=is_expanded)
+        tab_labels = [
+            "🧾  Executive Summary",
+            "📋  Pipeline Layers",
+            "💼  Job Board",
+            "🧩  Match Analysis",
+            "🎓  Learning Center",
+            "📊  Analytics",
+        ]
+        if show_admin:
+            tab_labels.append("🛡️  Executive Analytics")
+        tabs = st.tabs(tab_labels)
+        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
 
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            render_agent_feed(status)
-            render_hitl_controls(api_base, run_id, status)
-            render_stepwise_details(status)
-            render_json_downloads(status)
-            with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
-                st.json(status or {"info": "No run status yet"})
-        elif active_section == "💼 Job Board":
+        with tab_summary:
+            if active_section == "🧾 Executive Summary":
+                render_executive_summary(status)
+            else:
+                render_executive_summary(status)
+
+        with tab_pipeline:
+            if active_section == "📋 Pipeline Layers":
+                st.markdown('<div class="section-header">Layer Details — click to expand</div>', unsafe_allow_html=True)
+                running_layer = next((i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None)
+                for ld in LAYERS:
+                    layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
+                    is_expanded = ld["id"] == running_layer
+                    render_layer_card(ld, layer_state, expanded=is_expanded)
+
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                render_agent_feed(status)
+                render_hitl_controls(api_base, run_id, status)
+                render_stepwise_details(status)
+                render_json_downloads(status)
+                with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
+                    st.json(status or {"info": "No run status yet"})
+
+        with tab_jobs:
             render_job_board(api_base, run_id, status)
-        elif active_section == "🧩 Match Analysis":
+
+        with tab_match:
             render_match_analysis(status)
-        elif active_section == "🎓 Learning Center":
+
+        with tab_learn:
             if not status or status.get("progress_pct", 0) < 50:
                 st.markdown("""
                 <div class="empty-state">
@@ -1835,30 +1887,9 @@ def main():
                     <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
                 </div>
                 """, unsafe_allow_html=True)
-        elif active_section == "📊 Analytics":
-            render_analytics(status)
-        elif active_section == "🛡️ Executive Analytics" and show_admin:
-            if st.session_state.get("run_id"):
-                st.markdown("#### Admin feedback intake")
-                with st.form("beta_feedback_form", clear_on_submit=True):
-                    rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
-                    improve_text = st.text_area(
-                        "What should we improve?",
-                        height=120,
-                        key="beta_feedback_text",
-                        placeholder="Tell us what felt broken, confusing, or missing.",
-                    )
-                    submit_feedback = st.form_submit_button("Send beta feedback")
-                if submit_feedback:
-                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
-                    (st.success if ok else st.error)(msg)
 
-                feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
-                st.markdown("#### Persisted job feedback review")
-                if feedback_rows:
-                    st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("No persisted feedback rows yet.")
+        with tab_analytics:
+            render_analytics(status)
 
         if show_admin:
             with tabs[6]:
@@ -1890,9 +1921,6 @@ def main():
                         st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
                     else:
                         st.caption("No cross-run feedback rows available yet.")
-                    if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
-                        ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
-                        (st.success if ok else st.error)(msg)
                 render_admin_analytics(status)
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
