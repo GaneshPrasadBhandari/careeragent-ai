@@ -27,7 +27,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 from urllib.parse import quote_plus
 
 
@@ -1094,6 +1094,17 @@ def _qualified_from_state(state: dict) -> list[dict]:
     return qualified_from_state(state)
 
 
+async def _run_async_action(task_name: str, coro: Awaitable[Any]) -> None:
+    try:
+        await coro
+    except Exception as exc:
+        log.exception("Async action task failed (%s): %s", task_name, exc)
+
+
+def _spawn_async_action(task_name: str, coro: Awaitable[Any]) -> None:
+    asyncio.create_task(_run_async_action(task_name, coro))
+
+
 @traceable(name="api.continue_l6_l9")
 async def _continue_l6_to_l9(run_id: str, *, stop_after_l6_for_approval: bool) -> None:
     state = _runs[run_id]
@@ -1873,7 +1884,7 @@ def _is_generic_target_role(role: str) -> bool:
 def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[str]:
     requested = [str(r).strip() for r in (config_roles or []) if str(r).strip()]
     if requested and not all(_is_generic_target_role(r) for r in requested):
-        requested = requested + [role for role in DEFAULT_SMART_TARGET_ROLES if role not in requested]
+        requested = requested + ["Staff Engineer", "Architect", "Data Science Lead"]
         normalized: list[str] = []
         seen = set()
         for role in requested:
@@ -1889,7 +1900,7 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
     skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
     inferred: list[str] = []
     inferred.extend([title for title in exp_titles if title])
-    inferred.extend(DEFAULT_SMART_TARGET_ROLES)
+    inferred.extend(["Staff Engineer", "Architect", "Data Science Lead"])
 
     ai_signal = any(tok in skills for tok in {"machine learning", "tensorflow", "azure openai", "llm", "ai architect", "solution architect", "deep learning"})
     if ai_signal:
@@ -1905,14 +1916,14 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
 
     normalized: list[str] = []
     seen = set()
-    for role in inferred + requested + DEFAULT_SMART_TARGET_ROLES + ["Machine Learning Engineer", "Principal AI Engineer", "Lead Data Scientist"]:
+    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]:
         role = re.sub(r"\s+", " ", str(role or "")).strip()
         if role and role.lower() not in seen:
             seen.add(role.lower())
             normalized.append(role)
         if len(normalized) >= 10:
             break
-    return normalized or list(DEFAULT_SMART_TARGET_ROLES)
+    return normalized or ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]
 
 
 @traceable(name="api.build_intent")
@@ -1967,40 +1978,40 @@ def _stub_search_url(source: str, role: str, location: str, *, remote: bool, cou
 
 
 @traceable(name="api.stub_leads")
-def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) -> list[dict]:
-    """Return resilient fallback leads with live search URLs when providers are unavailable."""
-    config = config or {}
+def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
+    """Return realistic stub leads when API keys are unavailable."""
     skills = [str(skill).strip() for skill in (profile.get("skills") or ["Python"]) if str(skill).strip()][:6]
     roles = _infer_target_roles(profile, None)[:10] or ["AI Engineer", "Staff Engineer", "Architect"]
-    geo_prefs = config.get("geo_preferences") or {}
-    country_code = str(geo_prefs.get("country_selector") or "US").upper()
     companies = [
         "TechCorp Inc.", "StartupAI", "ScaleUp Inc.", "CloudForge", "DataNova", "Vertex Labs",
         "Northstar Health", "FinCore Systems", "Orbit Analytics", "BlueRiver Tech",
         "Atlas Platforms", "SignalPath AI", "Apex Commerce", "BrightOps", "Catalyst Data",
         "NextWave Robotics", "Summit Digital", "Harbor Cloud", "Lumen Insights", "Quantum Stack",
     ]
-    default_locations = {
-        "US": [("Remote", True), ("San Francisco, CA", True), ("New York, NY", False), ("Boston, MA", True), ("Seattle, WA", True), ("Austin, TX", False)],
-        "IN": [("Remote", True), ("Bengaluru, India", False), ("Hyderabad, India", False), ("Pune, India", False), ("Gurugram, India", False)],
-        "EU": [("Remote", True), ("Berlin, Germany", False), ("Amsterdam, Netherlands", False), ("Dublin, Ireland", False)],
-        "AU": [("Remote", True), ("Sydney, Australia", False), ("Melbourne, Australia", False)],
-        "UAE": [("Remote", True), ("Dubai, UAE", False), ("Abu Dhabi, UAE", False)],
-    }
-    configured_locations = [str(loc).strip() for loc in (geo_prefs.get("locations") or []) if str(loc).strip()]
-    locations = [(loc, "remote" in loc.lower()) for loc in configured_locations] or default_locations.get(country_code, default_locations["US"])
-    regional_sources = {
-        "US": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "ziprecruiter"],
-        "IN": ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"],
-        "EU": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "google_jobs"],
-        "AU": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "google_jobs"],
-        "UAE": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "google_jobs"],
-    }
-    sources = regional_sources.get(country_code, regional_sources["US"])
+    locations = [
+        ("Remote", True),
+        ("San Francisco, CA", True),
+        ("New York, NY", False),
+        ("Boston, MA", True),
+        ("Seattle, WA", True),
+        ("Austin, TX", False),
+        ("Chicago, IL", True),
+        ("Atlanta, GA", False),
+    ]
+    sources = ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"]
     suffixes = [
         "Platform", "AI Products", "Enterprise Data", "Applied AI", "Cloud Architecture",
         "ML Systems", "Data Science", "Automation", "Intelligent Workflows", "Decisioning",
     ]
+    search_slugs = {
+        "linkedin": "https://www.linkedin.com/jobs/view/{job_id}",
+        "indeed": "https://www.indeed.com/viewjob?jk={job_id}",
+        "glassdoor": "https://www.glassdoor.com/job-listing/demo-role-JV_IC1147401_KO0,9_KE10,14.htm?jl={job_id}",
+        "naukri": "https://www.naukri.com/job-listings-{query}-{job_id}",
+        "greenhouse": "https://boards.greenhouse.io/demo/jobs/{job_id}",
+        "lever": "https://jobs.lever.co/demo/{job_id}",
+        "workday": "https://demo.wd5.myworkdayjobs.com/en-US/Careers/job/{job_id}",
+    }
     seed_jobs: list[dict] = []
     for idx in range(max_jobs):
         role = roles[idx % len(roles)]
@@ -2009,6 +2020,8 @@ def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) 
         location, remote = locations[idx % len(locations)]
         source = sources[idx % len(sources)]
         title = role if suffix.lower() in role.lower() else f"{role} — {suffix}"
+        query = quote_plus(title.lower().replace("—", " ").replace("/", " "))
+        job_id = f"{idx+1:06d}"
         primary_skill = skills[idx % len(skills)] if skills else "Python"
         secondary_skill = skills[(idx + 1) % len(skills)] if len(skills) > 1 else primary_skill
         seed_jobs.append(
@@ -2016,7 +2029,7 @@ def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) 
                 "id": f"demo_{idx+1:03d}",
                 "title": title,
                 "company": company,
-                "url": sanitize_job_url(_stub_search_url(source, title, location, remote=remote, country_code=country_code)),
+                "url": sanitize_job_url(search_slugs[source].format(query=query, job_id=job_id)),
                 "location": location,
                 "remote": remote,
                 "description": (
@@ -2400,8 +2413,9 @@ async def start_hunt(
         _runs[run_id] = _build_initial_state(run_id, cfg)
         _runs[run_id]["resume_path"] = str(save_path)
 
-        # Launch pipeline in background
-        background_tasks.add_task(run_pipeline, run_id, save_path)
+        # Launch pipeline asynchronously so the HTTP request returns immediately
+        # even when downstream layers take longer on hosted deployments.
+        _spawn_async_action(f"start_hunt:{run_id}", run_pipeline(run_id, save_path))
         return {"run_id": run_id, "status": "started", "message": "Pipeline launched"}
     except HTTPException:
         raise
@@ -2593,10 +2607,12 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["pending_action"] = None
         state["status"] = "running"
         _persist_state(run_id)
-        background_tasks.add_task(
-            _continue_l6_to_l9,
-            run_id,
-            stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)),
+        _spawn_async_action(
+            f"approve_ranking:{run_id}",
+            _continue_l6_to_l9(
+                run_id,
+                stop_after_l6_for_approval=bool(state.get("config", {}).get("require_draft_approval", True)),
+            ),
         )
         return {"ok": True, "message": f"approved {len(approved)} jobs"}
 
@@ -2604,7 +2620,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["pending_action"] = None
         state["status"] = "running"
         _persist_state(run_id)
-        background_tasks.add_task(_continue_l7_to_l9, run_id)
+        _spawn_async_action(f"approve_drafts:{run_id}", _continue_l7_to_l9(run_id))
         return {"ok": True, "message": "drafts approved; resuming apply"}
 
     if action == "approve_followups":
@@ -2620,7 +2636,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["status"] = "running"
         _log_agent(state, 7, f"Human approved {len(followups)} follow-up drafts. Continuing tracking and analytics.")
         _persist_state(run_id)
-        background_tasks.add_task(_continue_l8_to_l9, run_id)
+        _spawn_async_action(f"approve_followups:{run_id}", _continue_l8_to_l9(run_id))
         return {"ok": True, "message": f"follow-up drafts approved ({len(followups)}); resuming"}
 
     if action == "reject_followups":
@@ -2638,7 +2654,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         _persist_state(run_id)
         resume_path = Path(state.get("resume_path") or "")
         if resume_path.exists():
-            background_tasks.add_task(run_pipeline, run_id, resume_path)
+            _spawn_async_action(f"reject_ranking:{run_id}", run_pipeline(run_id, resume_path))
             return {"ok": True, "message": "ranking rejected; restarting from L2"}
         raise HTTPException(400, "resume path missing; cannot re-run")
 
@@ -2661,7 +2677,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         state["status"] = "running"
         _log_agent(state, 5, f"Profile updated with {len(incoming)} user-confirmed skills. Re-running from L4.")
         _persist_state(run_id)
-        background_tasks.add_task(_rerun_from_l4_l5, run_id)
+        _spawn_async_action(f"update_profile_skills:{run_id}", _rerun_from_l4_l5(run_id))
         return {"ok": True, "message": f"profile updated with {len(incoming)} skills; rerunning from L4"}
 
     raise HTTPException(400, "unknown action")

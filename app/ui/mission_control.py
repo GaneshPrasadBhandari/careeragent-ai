@@ -1552,7 +1552,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.caption("TARGET ROLES")
         roles_input = st.text_area(
             "Target Roles",
-            value="\n".join(DEFAULT_TARGET_ROLES),
+            value="Software Engineer\nBackend Developer\nPlatform Engineer\nStaff Engineer\nArchitect\nData Science Lead",
             height=80,
             label_visibility="collapsed",
             help="One role per line. These defaults are optimized for senior AI / GenAI / architect / principal data-science searches.",
@@ -1864,18 +1864,40 @@ def main():
                 else:
                     st.caption("No persisted feedback rows yet.")
 
-                st.markdown("#### All-user feedback ledger")
-                all_feedback_rows = _api_get_all_feedback(api_base)
-                if all_feedback_rows:
-                    st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
-                else:
-                    st.caption("No cross-run feedback rows available yet.")
-                if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
-                    ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
-                    (st.success if ok else st.error)(msg)
-            render_admin_analytics(status)
-        else:
-            render_executive_summary(status)
+        if show_admin:
+            with tabs[6]:
+                if st.session_state.get("run_id"):
+                    st.markdown("#### Admin feedback intake")
+                    with st.form("beta_feedback_form", clear_on_submit=True):
+                        rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+                        improve_text = st.text_area(
+                            "What should we improve?",
+                            height=120,
+                            key="beta_feedback_text",
+                            placeholder="Tell us what felt broken, confusing, or missing.",
+                        )
+                        submit_feedback = st.form_submit_button("Send beta feedback")
+                    if submit_feedback:
+                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                        (st.success if ok else st.error)(msg)
+
+                    feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
+                    st.markdown("#### Persisted job feedback review")
+                    if feedback_rows:
+                        st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No persisted feedback rows yet.")
+
+                    st.markdown("#### All-user feedback ledger")
+                    all_feedback_rows = _api_get_all_feedback(api_base)
+                    if all_feedback_rows:
+                        st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No cross-run feedback rows available yet.")
+                    if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
+                        ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
+                        (st.success if ok else st.error)(msg)
+                render_admin_analytics(status)
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
         render_executive_summary(status)
