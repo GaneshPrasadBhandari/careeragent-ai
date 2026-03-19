@@ -2016,7 +2016,7 @@ def _stub_search_url(source: str, role: str, location: str, *, remote: bool, cou
 
 
 @traceable(name="api.stub_leads")
-def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
+def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) -> list[dict]:
     """Return realistic stub leads when API keys are unavailable."""
     skills = [str(skill).strip() for skill in (profile.get("skills") or ["Python"]) if str(skill).strip()][:6]
     roles = _infer_target_roles(profile, None)[:10] or ["AI Engineer", "Staff Engineer", "Architect"]
@@ -2036,7 +2036,12 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
         ("Chicago, IL", True),
         ("Atlanta, GA", False),
     ]
-    sources = ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"]
+    config = config or {}
+    geo = config.get("geo_preferences") or {}
+    country_code = str(geo.get("country_selector") or "US").upper()
+    sources = ["linkedin", "indeed", "glassdoor", "ziprecruiter", "greenhouse", "lever", "workday"]
+    if country_code == "IN":
+        sources = ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"]
     suffixes = [
         "Platform", "AI Products", "Enterprise Data", "Applied AI", "Cloud Architecture",
         "ML Systems", "Data Science", "Automation", "Intelligent Workflows", "Decisioning",
@@ -2045,6 +2050,7 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
         "linkedin": "https://www.linkedin.com/jobs/view/{job_id}",
         "indeed": "https://www.indeed.com/viewjob?jk={job_id}",
         "glassdoor": "https://www.glassdoor.com/job-listing/demo-role-JV_IC1147401_KO0,9_KE10,14.htm?jl={job_id}",
+        "ziprecruiter": "https://www.ziprecruiter.com/jobs-search?search={query}&job_id={job_id}",
         "naukri": "https://www.naukri.com/job-listings-{query}-{job_id}",
         "greenhouse": "https://boards.greenhouse.io/demo/jobs/{job_id}",
         "lever": "https://jobs.lever.co/demo/{job_id}",
