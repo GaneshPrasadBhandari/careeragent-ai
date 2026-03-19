@@ -349,7 +349,7 @@ NAV_SECTIONS = [
 ]
 
 DEFAULT_TARGET_ROLES = [
-    "AI Engineer",
+    "AI Engineers",
     "AI/ML Solution Architect",
     "GenAI Solution Architect",
     "Principal Data Scientist",
@@ -607,9 +607,7 @@ def _init_session():
 
 
 def _preferred_active_section(status: Optional[dict]) -> str:
-    pending = str((status or {}).get("pending_action") or "").strip().lower()
-    if pending:
-        return "📋 Pipeline Layers"
+    _ = str((status or {}).get("pending_action") or "").strip().lower()
     return "🧾 Executive Summary"
 
 
@@ -847,7 +845,8 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         c1, c2 = st.columns(2)
         with c1:
             if st.button("✅ Approve Ranked Jobs", key="approve_ranking_btn"):
-                if _api_action(api_base, run_id, "approve_ranking", {"selected_job_ids": selected_ids}):
+                payload = {"selected_job_ids": selected_ids, "selected_job_urls": selected_urls}
+                if _api_action(api_base, run_id, "approve_ranking", payload):
                     st.success("Ranking approved. Continuing to drafting layer...")
                     st.rerun()
         with c2:
@@ -1552,7 +1551,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.caption("TARGET ROLES")
         roles_input = st.text_area(
             "Target Roles",
-            value="Software Engineer\nBackend Developer\nPlatform Engineer\nStaff Engineer\nArchitect\nData Science Lead",
+            value="\n".join(DEFAULT_TARGET_ROLES),
             height=80,
             label_visibility="collapsed",
             help="One role per line. These defaults are optimized for senior AI / GenAI / architect / principal data-science searches.",
@@ -1751,11 +1750,8 @@ def main():
                 st.session_state["hunt_running"] = False
 
     preferred_section = _preferred_active_section(status)
-    if st.session_state.get("active_section") != preferred_section:
-        if str((status or {}).get("pending_action") or "").strip():
-            st.session_state["active_section"] = preferred_section
-        elif not run_id:
-            st.session_state["active_section"] = preferred_section
+    if not run_id:
+        st.session_state["active_section"] = preferred_section
     active_section = st.session_state.get("active_section", preferred_section)
 
     # ── Extract layer data ────────────────────────────────────────────────────
@@ -1797,7 +1793,7 @@ def main():
 
     show_admin = bool(st.session_state.get("admin_auth"))
     if str((status or {}).get("pending_action") or "").strip():
-        st.info("Human approval is waiting in **Pipeline Layers**. The dashboard auto-focused that section so you can continue the workflow.")
+        st.info("Human approval is waiting in **Pipeline Layers**. The dashboard stays on **Executive Summary** by default; use the left navigation to open the approval controls when ready.")
     else:
         st.caption("Use the left mission navigation to move between sections. The dashboard opens on Executive Summary by default.")
     try:

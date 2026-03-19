@@ -105,7 +105,7 @@ for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
 _runs: dict[str, dict] = {}   # run_id → state dict
 _GLOBAL_SELF_LEARNING_CONTEXT = os.getenv("CAREERAGENT_SELF_LEARNING_CONTEXT", "").strip()
 DEFAULT_SMART_TARGET_ROLES = [
-    "AI Engineer",
+    "AI Engineers",
     "AI/ML Solution Architect",
     "GenAI Solution Architect",
     "Principal Data Scientist",
@@ -1916,14 +1916,15 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
 
     normalized: list[str] = []
     seen = set()
-    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]:
+    default_backbone = list(DEFAULT_SMART_TARGET_ROLES) + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]
+    for role in inferred + requested + default_backbone:
         role = re.sub(r"\s+", " ", str(role or "")).strip()
         if role and role.lower() not in seen:
             seen.add(role.lower())
             normalized.append(role)
         if len(normalized) >= 10:
             break
-    return normalized or ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]
+    return normalized or (list(DEFAULT_SMART_TARGET_ROLES) + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"])
 
 
 @traceable(name="api.build_intent")
@@ -2595,13 +2596,20 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
             or request_data.get("selected_jobs")
             or []
         )
-        ranked = state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs", [])
+        ranked = list(state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs") or [])
+        if not ranked:
+            ranked = _qualified_from_state(state)
         approved = pick_approved_jobs(ranked, selected_values)
+        if selected_values and not approved:
+            ranked = _qualified_from_state(state)
+            approved = pick_approved_jobs(ranked, selected_values)
         if selected_values and not approved:
             raise HTTPException(
                 400,
                 "No selected jobs matched ranked results. Send selected_job_ids or selected_job_urls from /hunt/{run_id}/jobs.",
             )
+        if not approved:
+            approved = ranked
         state["approved_jobs"] = approved
         state["jobs_approved"] = len(approved)
         state["pending_action"] = None

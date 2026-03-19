@@ -14,6 +14,21 @@ def test_pick_approved_jobs_matches_multiple_identifier_formats() -> None:
     assert pick_approved_jobs(ranked, ["Eng|Acme"])[0]["id"] == "a1"
 
 
+def test_pick_approved_jobs_matches_sanitized_redirect_urls() -> None:
+    ranked = [
+        {
+            "id": "a1",
+            "url": "https://jobs.example.com/redirect?url=https%3A%2F%2Fwww.linkedin.com%2Fjobs%2Fview%2F123%3Futm_source%3Dfoo&trk=public_jobs",
+            "direct_job_url": "https://www.linkedin.com/jobs/view/123?utm_campaign=abc",
+            "title": "AI Engineers",
+            "company": "Acme",
+        }
+    ]
+
+    approved = pick_approved_jobs(ranked, ["https://www.linkedin.com/jobs/view/123"])
+    assert approved[0]["id"] == "a1"
+
+
 def test_qualified_from_state_fallback_order() -> None:
     assert qualified_from_state({"approved_jobs": [{"id": "approved"}]}) == [{"id": "approved"}]
 

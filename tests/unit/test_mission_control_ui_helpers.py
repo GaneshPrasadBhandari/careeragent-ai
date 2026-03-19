@@ -25,6 +25,6 @@ def test_job_url_manager_removes_tracking_and_redirects() -> None:
     assert JobURLManager.sanitize(raw) == "https://www.linkedin.com/jobs/view/123"
 
 
-def test_preferred_active_section_switches_to_pipeline_for_hitl() -> None:
-    assert _preferred_active_section({"pending_action": "approve_ranking"}) == "📋 Pipeline Layers"
+def test_preferred_active_section_defaults_to_executive_summary_even_for_hitl() -> None:
+    assert _preferred_active_section({"pending_action": "approve_ranking"}) == "🧾 Executive Summary"
     assert _preferred_active_section({"pending_action": ""}) == "🧾 Executive Summary"
