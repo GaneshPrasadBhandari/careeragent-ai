@@ -1612,6 +1612,23 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         # ── Show current run ID ───────────────────────────────────────────────
         if st.session_state.get("run_id"):
             st.caption(f"Run ID: `{st.session_state['run_id']}`")
+            st.divider()
+            st.caption("FEEDBACK")
+            with st.form("sidebar_feedback_form", clear_on_submit=True):
+                sidebar_rating = st.slider("Run feedback", 1, 5, 4, 1, key="sidebar_feedback_rating")
+                sidebar_text = st.text_area(
+                    "What should improve?",
+                    height=90,
+                    key="sidebar_feedback_text",
+                    placeholder="Report matching issues, duplicate jobs, UI readability problems, or missing sources.",
+                )
+                sidebar_submit = st.form_submit_button("Send feedback")
+            if sidebar_submit:
+                if not sidebar_text.strip():
+                    st.warning("Please write a short feedback note before sending.")
+                else:
+                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], sidebar_rating, sidebar_text)
+                    (st.success if ok else st.error)(msg)
 
         admin_secret = (os.getenv("ADMIN_PASSWORD") or os.getenv("CAREERAGENT_ADMIN_PASSWORD") or "").strip()
         st.divider()
