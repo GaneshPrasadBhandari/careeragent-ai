@@ -195,3 +195,26 @@ def test_stub_leads_expand_to_unique_urls_and_phase6_dedupes_down_to_strong_jobs
     approved = _phase6_qualified_jobs(scored, 0.40)
     assert len(approved) >= math.ceil(len(scored) * 0.85)
     assert len({job["url"] for job in approved}) == len(approved)
+
+
+def test_stub_leads_use_search_urls_for_us_and_skip_naukri():
+    profile = {"skills": ["Python"], "experience": [{"title": "AI Engineer", "years": 10}]}
+    leads = _stub_leads(
+        profile,
+        max_jobs=14,
+        config={"geo_preferences": {"country_selector": "US", "locations": ["Boston, MA"]}},
+    )
+    assert leads
+    assert all("naukri.com" not in str(job["url"]).lower() for job in leads)
+    assert any("/jobs/search" in str(job["url"]) for job in leads if job["source"] == "linkedin")
+    assert all("/view/" not in str(job["url"]) for job in leads if job["source"] in {"linkedin", "greenhouse", "lever", "workday"})
+
+
+def test_stub_leads_allow_naukri_for_india():
+    profile = {"skills": ["Python"], "experience": [{"title": "AI Engineer", "years": 10}]}
+    leads = _stub_leads(
+        profile,
+        max_jobs=14,
+        config={"geo_preferences": {"country_selector": "IN", "locations": ["Bengaluru, India"]}},
+    )
+    assert any("naukri.com" in str(job["url"]).lower() for job in leads)

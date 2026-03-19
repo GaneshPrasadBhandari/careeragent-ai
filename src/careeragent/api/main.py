@@ -104,6 +104,12 @@ for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
 _runs: dict[str, dict] = {}   # run_id → state dict
 _GLOBAL_SELF_LEARNING_CONTEXT = os.getenv("CAREERAGENT_SELF_LEARNING_CONTEXT", "").strip()
+DEFAULT_SMART_TARGET_ROLES = [
+    "AI Engineer",
+    "AI/ML Solution Architect",
+    "GenAI Solution Architect",
+    "Principal Data Scientist",
+]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -190,9 +196,9 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
 
 def _normalize_config(config: dict) -> dict:
     cfg = dict(config) if isinstance(config, dict) else {}
-    cfg.setdefault("target_roles", ["Software Engineer"])
+    cfg.setdefault("target_roles", list(DEFAULT_SMART_TARGET_ROLES))
     if not isinstance(cfg.get("target_roles"), list):
-        cfg["target_roles"] = [str(cfg.get("target_roles") or "Software Engineer")]
+        cfg["target_roles"] = [str(cfg.get("target_roles") or DEFAULT_SMART_TARGET_ROLES[0])]
     cfg.setdefault("match_threshold", 0.40)
     cfg.setdefault("geo_preferences", {"remote": True, "locations": [], "country_selector": "US"})
     if not isinstance(cfg.get("geo_preferences"), dict):
@@ -1454,7 +1460,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                     scout.search_jobs(intent), timeout=90
                 )
             else:
-                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
 
             # Recovery guard: when external providers are unavailable (or return
             # zero leads), keep the L3->L9 pipeline operational with demo leads.
@@ -1464,7 +1470,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                     3,
                     "No live jobs returned from providers; switching to resilient demo lead fallback.",
                 )
-                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
 
             state["job_leads"]       = leads[: int(state["config"].get("max_jobs", 100))]
             state["jobs_discovered"] = len(state["job_leads"])
@@ -1492,11 +1498,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
             await mark_error(3, "Discovery timeout after 90s")
-            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
             state["jobs_discovered"] = len(state["job_leads"])
         except Exception as exc:
             await mark_error(3, str(exc))
-            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
             state["jobs_discovered"] = len(state["job_leads"])
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
@@ -1619,6 +1625,23 @@ def _persist_state(run_id: str) -> None:
         state_file.write_text(json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.debug("State persist error: %s", exc)
+
+
+def _load_run_state_from_disk(run_id: str) -> dict[str, Any] | None:
+    state_file = LOGS_DIR / f"state_{run_id}.json"
+    if not state_file.exists():
+        return None
+    data = json.loads(state_file.read_text())
+    _runs[run_id] = data
+    return data
+
+
+def _resolve_action_request(body: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    raw = dict(body or {})
+    payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+    action = str(raw.get("action") or raw.get("action_type") or payload.get("action") or "").strip()
+    merged = {**payload, **raw}
+    return action, merged
 
 
 def _persist_tracking(run_id: str, state: dict) -> None:
@@ -1884,8 +1907,9 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
         inferred.extend([
             "Senior Solution Architect",
             "AI Solution Architect",
-            "Generative AI Architect",
-            "Lead Data Scientist",
+            "AI/ML Solution Architect",
+            "GenAI Solution Architect",
+            "Principal Data Scientist",
             "Principal AI Engineer",
             "Machine Learning Architect",
         ])
@@ -1930,6 +1954,27 @@ def _build_intent(profile: dict, config: dict) -> dict:
         "salary_max_usd":    config.get("salary_max", 200_000),
         "self_learning_context": self_learning_context,
     }
+
+
+def _stub_search_url(source: str, role: str, location: str, *, remote: bool, country_code: str) -> str:
+    query = quote_plus(role.replace("—", " ").replace("/", " "))
+    location_query = quote_plus(location)
+    google_location = quote_plus(location if location and location.lower() != "remote" else "United States")
+    remote_suffix = "+remote" if remote else ""
+    templates = {
+        "linkedin": f"https://www.linkedin.com/jobs/search/?keywords={query}&location={location_query}",
+        "indeed": f"https://www.indeed.com/jobs?q={query}{remote_suffix}&l={location_query}",
+        "glassdoor": f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&locT=C&locId=1",
+        "greenhouse": f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{google_location}",
+        "lever": f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{google_location}",
+        "workday": f"https://www.google.com/search?q=site%3Amyworkdayjobs.com+OR+site%3Aworkdayjobs.com+{query}+{google_location}",
+        "ziprecruiter": f"https://www.ziprecruiter.com/jobs-search?search={query}&location={location_query}",
+        "google_jobs": f"https://www.google.com/search?q={query}+jobs+{google_location}",
+        "naukri": f"https://www.naukri.com/{quote_plus(role.lower())}-jobs-in-{quote_plus(location.lower() or 'india')}",
+    }
+    if source == "naukri" and country_code != "IN":
+        return templates["google_jobs"]
+    return templates.get(source, templates["google_jobs"])
 
 
 @traceable(name="api.stub_leads")
@@ -2384,12 +2429,7 @@ async def start_hunt(
 async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
     if run_id not in _runs:
-        # Try to reload from persisted file
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            data = json.loads(state_file.read_text())
-            _runs[run_id] = data
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
 
     state = _runs[run_id]
@@ -2440,7 +2480,8 @@ async def get_status(run_id: str):
 @traceable(name="api.get_jobs")
 async def get_jobs(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     jobs  = [{**job, "url": sanitize_job_url(job.get("direct_job_url") or job.get("url", "")), "direct_job_url": sanitize_job_url(job.get("direct_job_url") or job.get("url", ""))} for job in (state.get("scored_jobs", []) or [])]
     return {
@@ -2454,7 +2495,8 @@ async def get_jobs(run_id: str):
 @traceable(name="api.get_applications")
 async def get_applications(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     return {
         "run_id": run_id,
@@ -2471,7 +2513,8 @@ async def get_applications(run_id: str):
 @traceable(name="api.feedback")
 async def post_feedback(run_id: str, body: dict):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     payload = dict(body or {})
     if not str(payload.get("text") or payload.get("comment") or "").strip():
@@ -2488,10 +2531,7 @@ async def post_feedback(run_id: str, body: dict):
 @traceable(name="api.get_feedback")
 async def get_feedback(run_id: str):
     if run_id not in _runs:
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            _runs[run_id] = json.loads(state_file.read_text())
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     return {
@@ -2525,10 +2565,7 @@ async def admin_feedback():
 @traceable(name="api.sync_feedback")
 async def sync_feedback(run_id: str):
     if run_id not in _runs:
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            _runs[run_id] = json.loads(state_file.read_text())
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     context = _sync_feedback_to_agent_brain(state)
@@ -2546,15 +2583,16 @@ async def sync_feedback(run_id: str):
 @traceable(name="api.run_action")
 async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    action = (body or {}).get("action")
+    action, request_data = _resolve_action_request(body)
 
     if action == "approve_ranking":
         selected_values = (
-            (body or {}).get("selected_job_ids")
-            or (body or {}).get("selected_job_urls")
-            or (body or {}).get("selected_jobs")
+            request_data.get("selected_job_ids")
+            or request_data.get("selected_job_urls")
+            or request_data.get("selected_jobs")
             or []
         )
         ranked = state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs", [])
@@ -2628,7 +2666,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         return {"ok": True, "message": "drafts rejected; returned to ranking approval"}
 
     if action == "update_profile_skills":
-        incoming = [str(x).strip() for x in ((body or {}).get("skills") or []) if str(x).strip()]
+        incoming = [str(x).strip() for x in (request_data.get("skills") or []) if str(x).strip()]
         if not incoming:
             raise HTTPException(400, "skills missing")
         prof = state.setdefault("profile", {})
@@ -2648,7 +2686,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
 @app.get("/hunt/{run_id}/artifacts")
 async def get_artifacts(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     return {"run_id": run_id, "artifacts": _runs[run_id].get("artifacts", {})}
 
 
