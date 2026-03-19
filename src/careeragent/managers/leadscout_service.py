@@ -13,6 +13,7 @@ import os
 import re
 from itertools import islice
 from dataclasses import asdict, dataclass
+from collections import Counter
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
 
@@ -60,25 +61,45 @@ CORE_SOURCE_ROTATION = [
 COUNTRY_SOURCE_ROTATION = {
     "US": CORE_SOURCE_ROTATION,
     "IN": [
+        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+        {"label": "Indeed", "domains": ["indeed.com"]},
+        {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+        {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
+        {"label": "Google Jobs", "domains": ["google.com", "googleusercontent.com"]},
         {"label": "Naukri", "domains": ["naukri.com"]},
         {"label": "Wellfound", "domains": ["wellfound.com", "angel.co"]},
         {"label": "Monster", "domains": ["monsterindia.com", "foundit.in"]},
-        {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
+        {"label": "Greenhouse", "domains": ["boards.greenhouse.io", "greenhouse.io"]},
     ],
     "EU": [
         {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
         {"label": "Indeed", "domains": ["indeed.com"]},
         {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+        {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
+        {"label": "Greenhouse", "domains": ["boards.greenhouse.io", "greenhouse.io"]},
+        {"label": "Lever", "domains": ["jobs.lever.co", "lever.co"]},
+        {"label": "Google Jobs", "domains": ["google.com", "googleusercontent.com"]},
+        {"label": "Wellfound", "domains": ["wellfound.com", "angel.co"]},
     ],
     "AU": [
         {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
         {"label": "Indeed", "domains": ["indeed.com"]},
         {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+        {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
+        {"label": "Greenhouse", "domains": ["boards.greenhouse.io", "greenhouse.io"]},
+        {"label": "Lever", "domains": ["jobs.lever.co", "lever.co"]},
+        {"label": "Google Jobs", "domains": ["google.com", "googleusercontent.com"]},
+        {"label": "Wellfound", "domains": ["wellfound.com", "angel.co"]},
     ],
     "UAE": [
         {"label": "LinkedIn", "domains": ["linkedin.com/jobs"]},
         {"label": "Indeed", "domains": ["indeed.com"]},
         {"label": "Glassdoor", "domains": ["glassdoor.com"]},
+        {"label": "ZipRecruiter", "domains": ["ziprecruiter.com"]},
+        {"label": "Greenhouse", "domains": ["boards.greenhouse.io", "greenhouse.io"]},
+        {"label": "Lever", "domains": ["jobs.lever.co", "lever.co"]},
+        {"label": "Google Jobs", "domains": ["google.com", "googleusercontent.com"]},
+        {"label": "Wellfound", "domains": ["wellfound.com", "angel.co"]},
     ],
 }
 
@@ -134,6 +155,16 @@ def infer_source_from_url(url: str) -> str:
     return host
 
 
+def _normalize_job_identity(title: str, company: str, location: str = "") -> str:
+    clean = []
+    for value in (title, company, location):
+        txt = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+        txt = re.sub(r"\b(remote|hybrid|onsite|on site|usa|united states|india|europe|australia|uae)\b", "", txt).strip()
+        if txt:
+            clean.append(re.sub(r"\s+", " ", txt))
+    return " | ".join(clean[:3])
+
+
 @dataclass
 class JobLead:
     id:          str
@@ -168,6 +199,7 @@ class LeadScoutService:
         self.enable_playwright = enable_playwright_scrape
         self._settings = Settings()
         self._llm = GeminiClient(self._settings, model=os.getenv("CAREERAGENT_REASONING_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash")
+        self.last_search_telemetry: dict[str, Any] = {}
 
     # ── Entry point ─────────────────────────────────────────────────────────
 
@@ -198,7 +230,7 @@ class LeadScoutService:
             if isinstance(batch, list):
                 leads.extend(batch)
 
-        # Deduplicate by URL
+        # Deduplicate by URL first, then collapse obvious same-job duplicates across portals.
         seen, unique = set(), []
         for lead in leads:
             lead.url = sanitize_job_url(lead.url)
@@ -209,8 +241,20 @@ class LeadScoutService:
                 seen.add(key)
                 unique.append(lead)
 
-        log.info("LeadScout found %d unique leads (%d raw)", len(unique), len(leads))
-        return [l.to_dict() for l in unique[: self.max_per_source * 4]]
+        quota_targets = self._build_source_quota_targets(regions)
+        diversified = self._dedupe_similar_jobs(unique)
+        diversified = self._enforce_source_quotas(diversified, quota_targets=quota_targets)
+        self.last_search_telemetry = {
+            "source_counts": dict(Counter((lead.source or infer_source_from_url(lead.url) or "unknown") for lead in diversified)),
+            "source_quota_targets": quota_targets,
+            "queries": queries,
+            "regions": [region.get("location") for region in regions],
+            "raw": len(leads),
+            "unique": len(unique),
+            "usable": len(diversified),
+        }
+        log.info("LeadScout found %d diversified leads (%d unique / %d raw)", len(diversified), len(unique), len(leads))
+        return [l.to_dict() for l in diversified[: self.max_per_source * 4]]
 
     # Aliases
     find_jobs   = search_jobs
@@ -360,6 +404,51 @@ class LeadScoutService:
         if not selector:
             selector = next((code for code, preset in COUNTRY_SEARCH_PRESETS.items() if preset.get("location") == region.get("location")), "US")
         return COUNTRY_SOURCE_ROTATION.get(selector, COUNTRY_SOURCE_ROTATION["US"])
+
+    def _build_source_quota_targets(self, regions: list[dict[str, str]]) -> dict[str, int]:
+        quotas: dict[str, int] = {}
+        for region in regions or [COUNTRY_SEARCH_PRESETS["US"]]:
+            for provider in self._source_rotation_for_region(region)[:8]:
+                quotas.setdefault(provider["label"].lower(), 1)
+        return quotas
+
+    def _dedupe_similar_jobs(self, leads: list[JobLead]) -> list[JobLead]:
+        unique: list[JobLead] = []
+        seen_identity: set[str] = set()
+        for lead in leads:
+            identity = _normalize_job_identity(lead.title, lead.company, lead.location)
+            if identity and identity in seen_identity:
+                continue
+            if identity:
+                seen_identity.add(identity)
+            unique.append(lead)
+        return unique
+
+    def _enforce_source_quotas(self, leads: list[JobLead], *, quota_targets: dict[str, int]) -> list[JobLead]:
+        by_source: dict[str, list[JobLead]] = {}
+        for lead in leads:
+            source = str(lead.source or infer_source_from_url(lead.url) or "unknown").lower()
+            by_source.setdefault(source, []).append(lead)
+
+        selected: list[JobLead] = []
+        selected_urls: set[str] = set()
+
+        for source, target in quota_targets.items():
+            inventory = [lead for key, entries in by_source.items() if source in key for lead in entries]
+            for lead in inventory[: max(1, int(target))]:
+                if lead.url and lead.url not in selected_urls:
+                    selected.append(lead)
+                    selected_urls.add(lead.url)
+
+        cap = self.max_per_source * 4
+        for lead in leads:
+            if len(selected) >= cap:
+                break
+            if not lead.url or lead.url in selected_urls:
+                continue
+            selected.append(lead)
+            selected_urls.add(lead.url)
+        return selected
 
     # ── Source: Serper /search (organic) ────────────────────────────────────
 
