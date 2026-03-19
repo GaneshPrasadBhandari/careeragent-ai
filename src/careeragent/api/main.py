@@ -2005,12 +2005,14 @@ def _stub_search_url(source: str, role: str, location: str, *, remote: bool, cou
     templates = {
         "linkedin": f"https://www.linkedin.com/jobs/search/?keywords={query}&location={location_query}",
         "indeed": f"https://www.indeed.com/jobs?q={query}{remote_suffix}&l={location_query}",
-        "glassdoor": f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&locT=C&locId=1",
+        "glassdoor": f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&locT=C&locId=1&locKeyword={location_query}",
+        "ziprecruiter": f"https://www.ziprecruiter.com/jobs-search?search={query}&location={location_query}",
+        "google_jobs": f"https://www.google.com/search?q={query}+jobs+{google_location}",
         "greenhouse": f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{google_location}",
         "lever": f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{google_location}",
         "workday": f"https://www.google.com/search?q=site%3Amyworkdayjobs.com+OR+site%3Aworkdayjobs.com+{query}+{google_location}",
-        "ziprecruiter": f"https://www.ziprecruiter.com/jobs-search?search={query}&location={location_query}",
-        "google_jobs": f"https://www.google.com/search?q={query}+jobs+{google_location}",
+        "dice": f"https://www.dice.com/jobs?q={query}&location={location_query}",
+        "monster": f"https://www.monster.com/jobs/search/?q={query}&where={location_query}",
         "naukri": f"https://www.naukri.com/{quote_plus(role.lower())}-jobs-in-{quote_plus(location.lower() or 'india')}",
     }
     if source == "naukri" and country_code != "IN":
@@ -2042,22 +2044,25 @@ def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) 
     config = config or {}
     geo = config.get("geo_preferences") or {}
     country_code = str(geo.get("country_selector") or "US").upper()
-    sources = ["linkedin", "indeed", "glassdoor", "ziprecruiter", "greenhouse", "lever", "workday"]
+    sources = ["linkedin", "indeed", "glassdoor", "ziprecruiter", "google_jobs", "greenhouse", "lever", "workday"]
     if country_code == "IN":
-        sources = ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"]
+        sources = ["linkedin", "indeed", "glassdoor", "naukri", "google_jobs", "greenhouse", "lever", "workday"]
     suffixes = [
         "Platform", "AI Products", "Enterprise Data", "Applied AI", "Cloud Architecture",
         "ML Systems", "Data Science", "Automation", "Intelligent Workflows", "Decisioning",
     ]
     search_slugs = {
-        "linkedin": "https://www.linkedin.com/jobs/search/?keywords={query}&job_id={job_id}",
-        "indeed": "https://www.indeed.com/viewjob?jk={job_id}",
-        "glassdoor": "https://www.glassdoor.com/job-listing/demo-role-JV_IC1147401_KO0,9_KE10,14.htm?jl={job_id}",
-        "ziprecruiter": "https://www.ziprecruiter.com/jobs-search?search={query}&job_id={job_id}",
+        "linkedin": "https://www.linkedin.com/jobs/search/?keywords={query}&job_stub_id={job_id}",
+        "indeed": "https://www.indeed.com/jobs?q={query}&from=searchOnHP&job_stub_id={job_id}",
+        "glassdoor": "https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&job_stub_id={job_id}",
+        "ziprecruiter": "https://www.ziprecruiter.com/jobs-search?search={query}&job_stub_id={job_id}",
+        "google_jobs": "https://www.google.com/search?q={query}+jobs&job_stub_id={job_id}",
         "naukri": "https://www.naukri.com/job-listings-{query}-{job_id}",
         "greenhouse": "https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{job_id}",
         "lever": "https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{job_id}",
         "workday": "https://www.google.com/search?q=site%3Amyworkdayjobs.com+OR+site%3Aworkdayjobs.com+{query}+{job_id}",
+        "dice": "https://www.dice.com/jobs?q={query}&job_stub_id={job_id}",
+        "monster": "https://www.monster.com/jobs/search/?q={query}&job_stub_id={job_id}",
     }
     seed_jobs: list[dict] = []
     for idx in range(max_jobs):
