@@ -73,16 +73,29 @@ def test_normalize_config_handles_malformed_nested_values():
     assert cfg["geo_preferences"] == {"remote": True, "locations": [], "country_selector": "US"}
 
 
-def test_phase6_qualification_keeps_most_jobs_above_half_score():
+def test_phase6_qualification_is_selective_and_keeps_strong_diverse_jobs():
     scored = [
-        {"id": f"job_{idx}", "score": score, "interview_probability_percent": score * 100}
+        {
+            "id": f"job_{idx}",
+            "score": score,
+            "keyword_score": max(0.35, score - 0.08),
+            "semantic_score": max(0.40, score - 0.05),
+            "cognitive_score": score,
+            "interview_probability_percent": score * 100,
+            "cognitive_decision": {"approved": score >= 0.57},
+            "source": "linkedin" if idx < 4 else ("indeed" if idx < 7 else "glassdoor"),
+            "title": f"AI Engineer {idx}",
+            "company": f"Company {idx}",
+            "location": "Remote",
+            "url": f"https://example.com/job/{idx}",
+        }
         for idx, score in enumerate([0.83, 0.79, 0.74, 0.71, 0.68, 0.65, 0.61, 0.57, 0.54, 0.49], start=1)
     ]
     out = _phase6_qualified_jobs(scored, 0.72)
     kept = {job["id"] for job in out}
-    above_half = [job for job in scored if job["score"] > 0.5]
-    retained = [job for job in above_half if job["id"] in kept]
-    assert len(retained) >= 7
+    assert len(out) <= 6
+    assert {"job_1", "job_2", "job_3"}.issubset(kept)
+    assert "job_10" not in kept
 
 
 def test_feedback_event_creates_self_learning_prompt():
@@ -160,7 +173,7 @@ def test_sync_feedback_to_agent_brain_creates_context():
     assert state["self_learning_context"] == context
 
 
-def test_stub_leads_expand_to_unique_urls_and_high_phase6_approval():
+def test_stub_leads_expand_to_unique_urls_and_phase6_dedupes_down_to_strong_jobs():
     profile = {
         "skills": ["Python", "TensorFlow", "Azure OpenAI", "AWS", "Machine Learning", "AI Architect"],
         "experience": [{"title": "Senior Solution Architect", "years": 16}],
@@ -179,4 +192,5 @@ def test_stub_leads_expand_to_unique_urls_and_high_phase6_approval():
         for idx, job in enumerate(leads)
     ]
     approved = _phase6_qualified_jobs(scored, 0.40)
-    assert len(approved) >= 70
+    assert len(approved) <= 20
+    assert len({job["url"] for job in approved}) == len(approved)

@@ -68,8 +68,13 @@ def _inject_css() -> None:
     .stMarkdown,
     .stText,
     .stCaption,
-    p, li, label, span, div {
+    p, li, label {
         color: #1B263B;
+    }
+    [data-testid="stMarkdownContainer"] * {
+        color: inherit;
+        white-space: normal;
+        word-break: break-word;
     }
 
     /* ── Main content cards / containers ── */
@@ -86,6 +91,7 @@ def _inject_css() -> None:
         background: transparent !important;
         border-bottom: 2px solid transparent !important;
         font-weight: 600 !important;
+        white-space: nowrap !important;
     }
     [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
         color: #FF4B4B !important;
@@ -118,6 +124,18 @@ def _inject_css() -> None:
     }
     .stInfo, .stSuccess, .stWarning, .stError {
         color: #1B263B !important;
+    }
+    [data-testid="stExpander"] details summary p,
+    [data-testid="stExpander"] details summary span,
+    [data-testid="stExpander"] details summary div {
+        color: #1B263B !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+    }
+    [data-testid="stDownloadButton"] button,
+    [data-testid="stButton"] button {
+        white-space: normal !important;
+        line-height: 1.25 !important;
     }
 
     /* ── Sidebar ── */
@@ -515,6 +533,11 @@ def _api_post_job_feedback(api_base: str, run_id: str, job_id: str, rating: int,
 
 def _api_get_feedback(api_base: str, run_id: str) -> list[dict]:
     resp = _api_get(api_base, f"/hunt/{run_id}/feedback", timeout=8)
+    return resp.get("feedback", []) if resp else []
+
+
+def _api_get_all_feedback(api_base: str) -> list[dict]:
+    resp = _api_get(api_base, "/admin/feedback", timeout=12)
     return resp.get("feedback", []) if resp else []
 
 
@@ -1222,6 +1245,7 @@ def render_analytics(status: Optional[dict]) -> None:
                 "Purpose": purpose,
                 "Provider": detail.get("provider", "-"),
                 "Model": detail.get("model", "-"),
+                "Fallback Options": ", ".join(detail.get("options") or []),
                 "Reason": detail.get("why", ""),
             })
         st.dataframe(stack_rows, use_container_width=True, hide_index=True)
@@ -1545,6 +1569,23 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         # ── Show current run ID ───────────────────────────────────────────────
         if st.session_state.get("run_id"):
             st.caption(f"Run ID: `{st.session_state['run_id']}`")
+            st.divider()
+            st.caption("FEEDBACK")
+            with st.form("sidebar_feedback_form", clear_on_submit=True):
+                sidebar_rating = st.slider("Run feedback", 1, 5, 4, 1, key="sidebar_feedback_rating")
+                sidebar_text = st.text_area(
+                    "What should improve?",
+                    height=90,
+                    key="sidebar_feedback_text",
+                    placeholder="Report matching issues, duplicate jobs, UI readability problems, or missing sources.",
+                )
+                sidebar_submit = st.form_submit_button("Send feedback")
+            if sidebar_submit:
+                if not sidebar_text.strip():
+                    st.warning("Please write a short feedback note before sending.")
+                else:
+                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], sidebar_rating, sidebar_text)
+                    (st.success if ok else st.error)(msg)
 
         admin_secret = (os.getenv("ADMIN_PASSWORD") or os.getenv("CAREERAGENT_ADMIN_PASSWORD") or "").strip()
         st.divider()
@@ -1717,6 +1758,13 @@ def main():
                         st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
                     else:
                         st.caption("No persisted feedback rows yet.")
+
+                    st.markdown("#### All-user feedback ledger")
+                    all_feedback_rows = _api_get_all_feedback(api_base)
+                    if all_feedback_rows:
+                        st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No cross-run feedback rows available yet.")
 
                     if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
                         ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
