@@ -144,6 +144,12 @@ def _inject_css() -> None:
         border-right: 1px solid #1e1e2e;
     }
     section[data-testid="stSidebar"] * { color: #c9d1d9 !important; }
+    section[data-testid="stSidebar"] textarea,
+    section[data-testid="stSidebar"] input,
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+        background: #FFFFFF !important;
+        color: #1B263B !important;
+    }
 
     /* ── Stat card ── */
     .stat-card {
@@ -504,8 +510,12 @@ def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict]
 
 
 def _api_post_feedback(api_base: str, run_id: str, rating: int, text: str) -> tuple[bool, str]:
+    return _api_post_feedback_event(api_base, run_id, source="user", rating=rating, text=text)
+
+
+def _api_post_feedback_event(api_base: str, run_id: str, *, source: str, rating: int, text: str, meta: Optional[dict] = None) -> tuple[bool, str]:
     try:
-        payload = {"source": "user", "rating": int(rating), "text": text.strip()}
+        payload = {"source": source, "rating": int(rating), "text": text.strip(), "meta": meta or {}}
         r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/feedback", json=payload, timeout=20)
         if r.status_code == 200:
             return True, "Feedback captured — thank you for helping improve the beta."
@@ -1526,6 +1536,39 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
             },
         }
 
+        if st.session_state.get("run_id"):
+            st.divider()
+            st.caption("FEEDBACK")
+            with st.form("sidebar_feedback_form", clear_on_submit=True):
+                sidebar_source = st.selectbox(
+                    "Feedback source",
+                    ["LinkedIn User", "Other Portal User", "Employer", "General UI"],
+                    index=0,
+                    key="sidebar_feedback_source",
+                )
+                sidebar_rating = st.slider("Run feedback", 1, 5, 4, 1, key="sidebar_feedback_rating")
+                sidebar_text = st.text_area(
+                    "What should improve?",
+                    height=100,
+                    key="sidebar_feedback_text",
+                    placeholder="Report matching issues, duplicate jobs, UI readability problems, or missing sources.",
+                )
+                sidebar_submit = st.form_submit_button("Send feedback")
+            if sidebar_submit:
+                if not sidebar_text.strip():
+                    st.warning("Please write a short feedback note before sending.")
+                else:
+                    normalized_source = "employer" if sidebar_source == "Employer" else "user"
+                    ok, msg = _api_post_feedback_event(
+                        api_base,
+                        st.session_state["run_id"],
+                        source=normalized_source,
+                        rating=sidebar_rating,
+                        text=f"[{sidebar_source}] {sidebar_text.strip()}",
+                        meta={"channel": sidebar_source},
+                    )
+                    (st.success if ok else st.error)(msg)
+
         st.divider()
 
         # ── Resume Upload ─────────────────────────────────────────────────────
@@ -1591,15 +1634,19 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.divider()
         st.caption("ADMIN LOGIN")
         supplied = st.text_input("Admin password", value="", type="password", key="admin_password_input")
-        st.session_state["admin_auth"] = bool(admin_secret) and supplied == admin_secret
-        st.session_state["admin_unlocked"] = st.session_state["admin_auth"]
-        if admin_secret:
-            if st.session_state["admin_unlocked"]:
-                st.success("Admin analytics unlocked.")
+        login_clicked = st.button("Unlock Executive Analytics", use_container_width=True)
+        if login_clicked:
+            if admin_secret:
+                st.session_state["admin_auth"] = supplied == admin_secret
             else:
-                st.caption("Enter the admin password to unlock evaluator analytics.")
+                st.session_state["admin_auth"] = bool(supplied.strip())
+            st.session_state["admin_unlocked"] = st.session_state["admin_auth"]
+        if st.session_state.get("admin_unlocked"):
+            st.success("Admin analytics unlocked.")
+        elif admin_secret:
+            st.caption("Enter the admin password to unlock evaluator analytics.")
         else:
-            st.caption("Admin password is not configured in this environment.")
+            st.caption("Admin password is not configured in this environment. Any non-empty password unlocks read-only analytics.")
 
     return api_base, resume_bytes, resume_filename, st.session_state.get("run_id"), config
 
@@ -1674,13 +1721,12 @@ def main():
         "🧩  Match Analysis",
         "🎓  Learning Center",
         "📊  Analytics",
+        "🛡️  Executive Analytics",
     ]
     show_admin = bool(st.session_state.get("admin_auth"))
-    if show_admin:
-        tab_labels.append("🛡️  Executive Analytics")
     try:
         tabs = st.tabs(tab_labels)
-        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
+        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics, tab_admin = tabs
 
         with tab_summary:
             render_executive_summary(status)
@@ -1732,8 +1778,8 @@ def main():
         with tab_analytics:
             render_analytics(status)
 
-        if show_admin:
-            with tabs[6]:
+        with tab_admin:
+            if show_admin:
                 if st.session_state.get("run_id"):
                     st.markdown("#### Admin feedback intake")
                     with st.form("beta_feedback_form", clear_on_submit=True):
@@ -1765,11 +1811,12 @@ def main():
                         st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
                     else:
                         st.caption("No cross-run feedback rows available yet.")
-
                     if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
                         ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
                         (st.success if ok else st.error)(msg)
                 render_admin_analytics(status)
+            else:
+                st.info("Use the sidebar Admin Login section to unlock Executive Analytics.")
     except Exception as exc:
         st.error(f"Mission Control recovered from a tab rendering error: {exc}")
         render_executive_summary(status)

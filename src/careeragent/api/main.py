@@ -836,21 +836,26 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
         source_targets[source] = source_targets.get(source, 0)
 
     selected: list[dict] = []
-    target = min(max(6, int(math.ceil(len(ranked) * 0.25))), 20) if ranked else 0
-    strong_cutoff = max(float(threshold), 0.55)
+    target = min(max(8, int(math.ceil(len(ranked) * 0.18))), 24) if ranked else 0
+    top_score = max((max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0)) for job in ranked), default=0.0)
+    strong_cutoff = max(0.45, min(float(threshold), 0.58))
+    if top_score >= 0.85:
+        strong_cutoff = min(strong_cutoff, top_score - 0.18)
+    per_source_cap = max(3, int(math.ceil(max(1, target) * 0.35)))
     for job in ranked:
         score = max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0))
         lexical = float(job.get("keyword_score") or 0.0)
         semantic = float(job.get("semantic_score") or 0.0)
         cognitive_yes = bool((job.get("cognitive_decision") or {}).get("approved"))
+        interview = float(job.get("interview_probability_percent") or 0.0)
         if score < strong_cutoff:
             continue
-        if lexical < 0.35 and semantic < 0.50:
+        if lexical < 0.30 and semantic < 0.46:
             continue
-        if not cognitive_yes and semantic < 0.55:
+        if not cognitive_yes and semantic < 0.50 and interview < 58.0:
             continue
         source = str(job.get("source") or "unknown").lower()
-        if source_targets.get(source, 0) >= max(2, target // 3):
+        if source_targets.get(source, 0) >= per_source_cap:
             continue
         selected.append(job)
         source_targets[source] = source_targets.get(source, 0) + 1
@@ -858,7 +863,7 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
             break
 
     if not selected:
-        selected = ranked[: min(5, len(ranked))]
+        selected = ranked[: min(8, len(ranked))]
     return selected
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
