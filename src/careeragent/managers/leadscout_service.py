@@ -222,11 +222,17 @@ class LeadScoutService:
         roles = [str(r).strip() for r in (intent_plan.get("target_roles") or []) if str(r).strip()]
         keywords = [str(k).strip() for k in (intent_plan.get("keywords") or []) if str(k).strip()]
         profile = intent_plan.get("extracted_profile", {})
+        self_learning_context = str(intent_plan.get("self_learning_context") or "").strip()
 
         profile_skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
         all_keywords = list(dict.fromkeys(keywords + profile_skills))
         seed_role = roles[0] if roles else "AI Engineer"
-        llm_variants = self._semantic_role_variants(seed_role=seed_role, profile=profile, keywords=all_keywords)
+        llm_variants = self._semantic_role_variants(
+            seed_role=seed_role,
+            profile=profile,
+            keywords=all_keywords,
+            self_learning_context=self_learning_context,
+        )
 
         seniority = self._detect_seniority(profile, roles)
         ai_ml = [k for k in all_keywords if any(t in k.lower() for t in [
@@ -260,13 +266,14 @@ class LeadScoutService:
                 break
         return final or ["AI Engineer Python remote", "Machine Learning Engineer remote"]
 
-    def _semantic_role_variants(self, *, seed_role: str, profile: dict, keywords: list[str]) -> list[str]:
+    def _semantic_role_variants(self, *, seed_role: str, profile: dict, keywords: list[str], self_learning_context: str = "") -> list[str]:
         prompt = (
             "Generate 8 JSON array search variations for job discovery. "
             "Focus on semantic equivalents, adjacent titles, and architecture/leadership variations. "
             "Keep each variation under 12 words and usable as a search query. "
             "Treat Senior, Lead, Principal, and Architect as interchangeable for this candidate. "
-            f"Seed role: {seed_role}. Candidate skills: {', '.join(keywords[:20]) or 'not provided'}."
+            f"Seed role: {seed_role}. Candidate skills: {', '.join(keywords[:20]) or 'not provided'}. "
+            f"Long-term reviewer learning context: {self_learning_context[:400] or 'none'}."
         )
         payload = self._llm.generate_json(prompt, temperature=0.2, max_tokens=300)
         variants: list[str] = []

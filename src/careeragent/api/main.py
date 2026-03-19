@@ -103,6 +103,7 @@ for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
 
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
 _runs: dict[str, dict] = {}   # run_id → state dict
+_GLOBAL_SELF_LEARNING_CONTEXT = os.getenv("CAREERAGENT_SELF_LEARNING_CONTEXT", "").strip()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -178,6 +179,7 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
         "learning_resources": {},
         "analytics_summary": {},
         "self_learning_prompt": "",
+        "self_learning_context": _GLOBAL_SELF_LEARNING_CONTEXT,
         "system_prompt_update": "",
         "feedback_learning_state": {"strictness_mode": "balanced", "targeting_mode": "broad_semantic"},
         "langsmith":        _langsmith_status(run_id),
@@ -374,6 +376,7 @@ def _build_analytics_summary(state: dict) -> dict:
     companies = sorted({str(item.get("company") or "").strip() for item in applied if str(item.get("company") or "").strip()})
     latest = max((item.get("applied_at") for item in applied if item.get("applied_at")), default=None)
     feedback_events = state.get("feedback_events", [])[-25:]
+    self_learning_context = str(state.get("self_learning_context") or _GLOBAL_SELF_LEARNING_CONTEXT or "").strip()
     learning_loop = state.get("learning_loop", {})
     prompt = str(state.get("self_learning_prompt") or "").strip()
     if not prompt:
@@ -397,6 +400,7 @@ def _build_analytics_summary(state: dict) -> dict:
             "employer_outcomes": state.get("employer_outcomes", {}),
             "feedback_events": feedback_events,
             "self_learning_prompt": prompt,
+            "self_learning_context": self_learning_context,
             "system_prompt_update": str(state.get("system_prompt_update") or prompt),
             "strictness_mode": state.get("feedback_learning_state", {}).get("strictness_mode", "balanced"),
             "targeting_mode": state.get("feedback_learning_state", {}).get("targeting_mode", "broad_semantic"),
@@ -584,17 +588,27 @@ def _feedback_is_genuine(source: str, text: str) -> tuple[bool, float, str]:
     return True, round(conf, 2), "Structured feedback signal detected"
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _record_feedback_event(state: dict, payload: dict) -> dict:
     source = str(payload.get("source") or "user").strip().lower()
-    text = str(payload.get("text") or "").strip()
+    text = str(payload.get("text") or payload.get("comment") or "").strip()
     meta = dict(payload.get("meta") or {})
-    rating = payload.get("rating")
+    job_id = str(payload.get("job_id") or meta.get("job_id") or "").strip()
+    if job_id:
+        meta["job_id"] = job_id
+    rating = _coerce_int(payload.get("rating"))
     is_genuine, confidence, reason = _feedback_is_genuine(source, text)
     event = {
         "ts": _now(),
         "source": source,
         "text": text[:600],
-        "rating": int(rating) if str(rating).isdigit() else None,
+        "rating": rating,
         "meta": meta,
         "evaluation": {
             "is_genuine": is_genuine,
@@ -623,7 +637,7 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
         "apply semantic title expansion across all sources, and show user-facing reasoning in recommendations. "
         f"Latest feedback source={source}, confidence={confidence}, note={text[:180] or 'n/a'}."
     )
-    state["self_learning_prompt"] = state["system_prompt_update"]
+    state["self_learning_prompt"] = "Self-Learning Optimization Prompt: " + state["system_prompt_update"]
     if source == "employer":
         outcomes = state.setdefault("employer_outcomes", {"interview": 0, "selected": 0, "rejected": 0, "unknown": 0})
         if "interview" in low:
@@ -635,6 +649,80 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
         else:
             outcomes["unknown"] += 1
     return event
+
+
+def _fallback_self_learning_context(feedback_events: list[dict]) -> str:
+    if not feedback_events:
+        return (
+            "No persisted feedback is available yet. Keep discovery balanced, prioritize relevant remote roles, "
+            "and surface clear reasoning for every recommendation."
+        )
+
+    likes, dislikes, mentioned_jobs = [], [], []
+    for event in feedback_events[-25:]:
+        text = str(event.get("text") or "").strip()
+        rating = event.get("rating")
+        job_id = str((event.get("meta") or {}).get("job_id") or "").strip()
+        if job_id:
+            mentioned_jobs.append(job_id)
+        if isinstance(rating, int) and rating >= 4:
+            likes.append(text)
+        else:
+            dislikes.append(text)
+
+    guidance = [
+        "Apply reviewer feedback before future hunts.",
+        f"Positive signals captured: {len(likes)}.",
+        f"Negative signals captured: {len(dislikes)}.",
+    ]
+    if dislikes:
+        guidance.append(f"Bias discovery away from these complaints: {' | '.join(dislikes[:3])[:500]}")
+    if likes:
+        guidance.append(f"Preserve these successful patterns: {' | '.join(likes[:3])[:500]}")
+    if mentioned_jobs:
+        guidance.append(f"Feedback referenced job ids: {', '.join(dict.fromkeys(mentioned_jobs))}.")
+    return " ".join(guidance)
+
+
+def _summarize_feedback_to_context(feedback_events: list[dict]) -> str:
+    settings = Settings()
+    client = GeminiClient(settings, model=os.getenv("CAREERAGENT_REASONING_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash")
+    payload = [
+        {
+            "source": item.get("source"),
+            "rating": item.get("rating"),
+            "job_id": ((item.get("meta") or {}).get("job_id")),
+            "text": item.get("text"),
+        }
+        for item in feedback_events[-30:]
+    ]
+    prompt = (
+        "You are updating CareerAgent's long-term hunt memory. Summarize the feedback below into a single "
+        "self_learning_context string under 160 words. The summary should describe how LeadScout should adjust "
+        "future hunts, including targeting, strictness, geography, and semantic role expansion. "
+        "Return plain text only.\n\n"
+        f"Feedback JSON:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+    text = client.generate_text(prompt, temperature=0.2, max_tokens=250)
+    cleaned = str(text or "").strip()
+    return cleaned or _fallback_self_learning_context(feedback_events)
+
+
+def _sync_feedback_to_agent_brain(state: dict) -> str:
+    global _GLOBAL_SELF_LEARNING_CONTEXT
+
+    feedback_events = list(state.get("feedback_events") or [])
+    context = _summarize_feedback_to_context(feedback_events)
+    state["self_learning_context"] = context
+    state["self_learning_prompt"] = (
+        "Self-Learning Optimization Prompt: "
+        f"{context} "
+        f"{str(state.get('system_prompt_update') or '').strip()}".strip()
+    )
+    _GLOBAL_SELF_LEARNING_CONTEXT = context
+    os.environ["CAREERAGENT_SELF_LEARNING_CONTEXT"] = context
+    state["analytics_summary"] = _build_analytics_summary(state)
+    return context
 
 
 def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
@@ -1654,6 +1742,7 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
 
 @traceable(name="api.build_intent")
 def _build_intent(profile: dict, config: dict) -> dict:
+    self_learning_context = str(config.get("self_learning_context") or _GLOBAL_SELF_LEARNING_CONTEXT or "").strip()
     roles = _infer_target_roles(profile, config.get("target_roles"))
 
     # Pass ALL skills, not just 8 — LeadScout needs these for multi-query bucketing
@@ -1677,6 +1766,7 @@ def _build_intent(profile: dict, config: dict) -> dict:
         "geo_preferences":   config.get("geo_preferences", {"remote": True, "locations": ["United States"]}),
         "salary_min_usd":    config.get("salary_min", 90_000),
         "salary_max_usd":    config.get("salary_max", 200_000),
+        "self_learning_context": self_learning_context,
     }
 
 
@@ -2124,6 +2214,7 @@ async def get_status(run_id: str):
         "employer_outcomes": state.get("employer_outcomes", {}),
         "learning_resources": state.get("learning_resources", {}),
         "analytics_summary": state.get("analytics_summary", {}),
+        "self_learning_context": state.get("self_learning_context", ""),
         "self_learning_prompt": state.get("self_learning_prompt", ""),
         "system_prompt_update": state.get("system_prompt_update", ""),
         "feedback_learning_state": state.get("feedback_learning_state", {}),
@@ -2186,6 +2277,44 @@ async def post_feedback(run_id: str, body: dict):
         fh.write(json.dumps(event) + "\n")
     _persist_state(run_id)
     return {"ok": True, "event": event, "totals": state.get("learning_loop", {})}
+
+
+@app.get("/hunt/{run_id}/feedback")
+@traceable(name="api.get_feedback")
+async def get_feedback(run_id: str):
+    if run_id not in _runs:
+        state_file = LOGS_DIR / f"state_{run_id}.json"
+        if state_file.exists():
+            _runs[run_id] = json.loads(state_file.read_text())
+        else:
+            raise HTTPException(404, f"Run {run_id} not found")
+    state = _runs[run_id]
+    return {
+        "run_id": run_id,
+        "feedback": state.get("feedback_events", []),
+        "self_learning_context": state.get("self_learning_context", ""),
+    }
+
+
+@app.post("/hunt/{run_id}/feedback/sync")
+@traceable(name="api.sync_feedback")
+async def sync_feedback(run_id: str):
+    if run_id not in _runs:
+        state_file = LOGS_DIR / f"state_{run_id}.json"
+        if state_file.exists():
+            _runs[run_id] = json.loads(state_file.read_text())
+        else:
+            raise HTTPException(404, f"Run {run_id} not found")
+    state = _runs[run_id]
+    context = _sync_feedback_to_agent_brain(state)
+    feedback_file = LOGS_DIR / f"feedback_sync_{run_id}.json"
+    feedback_file.write_text(json.dumps({
+        "run_id": run_id,
+        "synced_at": _now(),
+        "self_learning_context": context,
+    }, indent=2), encoding="utf-8")
+    _persist_state(run_id)
+    return {"ok": True, "self_learning_context": context}
 
 
 @app.post("/hunt/{run_id}/action")
