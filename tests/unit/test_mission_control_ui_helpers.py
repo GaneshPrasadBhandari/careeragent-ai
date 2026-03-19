@@ -1,6 +1,7 @@
 from app.ui.mission_control import (
     JobURLManager,
     _preferred_active_section,
+    build_top_portal_links,
     normalize_api_base,
     preferred_job_url,
     resolve_default_api_base,
@@ -38,3 +39,12 @@ def test_job_url_manager_adds_https_for_www_links() -> None:
 def test_preferred_job_url_falls_back_to_redirect_and_application_urls() -> None:
     assert preferred_job_url({"redirect_url": "https://jobs.example.com/redirect?url=https%3A%2F%2Fboards.greenhouse.io%2Facme%2Fjobs%2F123"}) == "https://boards.greenhouse.io/acme/jobs/123"
     assert preferred_job_url({"application_url": "www.workday.com/company/job/456?utm_source=test"}) == "https://workday.com/company/job/456"
+
+
+def test_build_top_portal_links_returns_top_8_search_portals() -> None:
+    links = build_top_portal_links("AI Engineer", "Boston, MA", remote=True)
+    labels = [label for label, _ in links]
+    assert labels == ["LinkedIn", "Indeed", "Glassdoor", "ZipRecruiter", "Dice", "Monster", "Greenhouse", "Lever"]
+    assert len({url for _, url in links}) == 8
+    assert any("glassdoor.com/Job/jobs.htm" in url for _, url in links)
+    assert any("indeed.com/jobs" in url for _, url in links)

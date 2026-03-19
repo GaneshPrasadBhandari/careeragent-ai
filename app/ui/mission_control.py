@@ -482,6 +482,44 @@ def _compact_text(value: Optional[str], *, limit: int = 260) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def build_top_portal_links(role: Optional[str], location: Optional[str], *, remote: bool = False) -> list[tuple[str, str]]:
+    query = quote_plus(str(role or "AI Engineer").replace("—", " ").replace("/", " ").strip() or "AI Engineer")
+    location_text = str(location or "United States").strip() or "United States"
+    location_query = quote_plus(location_text)
+    remote_suffix = "+remote" if remote else ""
+    return [
+        ("LinkedIn", f"https://www.linkedin.com/jobs/search/?keywords={query}&location={location_query}"),
+        ("Indeed", f"https://www.indeed.com/jobs?q={query}{remote_suffix}&l={location_query}"),
+        ("Glassdoor", f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&locKeyword={location_query}"),
+        ("ZipRecruiter", f"https://www.ziprecruiter.com/jobs-search?search={query}&location={location_query}"),
+        ("Dice", f"https://www.dice.com/jobs?q={query}&location={location_query}"),
+        ("Monster", f"https://www.monster.com/jobs/search/?q={query}&where={location_query}"),
+        ("Greenhouse", f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{location_query}"),
+        ("Lever", f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{location_query}"),
+    ]
+
+
+def render_top_portal_shortcuts(status: Optional[dict]) -> None:
+    if not status:
+        return
+    top_jobs = ((status.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or ((status.get("layer_debug") or {}).get("L4") or {}).get("top_jobs") or []
+    seed_job = top_jobs[0] if top_jobs else {}
+    role = seed_job.get("title") or ((status.get("profile") or {}).get("target_role") if isinstance(status.get("profile"), dict) else None) or "AI Engineer"
+    location = seed_job.get("location") or "United States"
+    remote = bool(seed_job.get("remote"))
+    st.markdown("#### Top 8 job portal shortcuts")
+    st.caption("Open the same search across the major portals even when a specific job post link is blocked, expired, or redirects incorrectly.")
+    links = build_top_portal_links(role, location, remote=remote)
+    for row_start in range(0, len(links), 4):
+        cols = st.columns(4)
+        for col, (label, url) in zip(cols, links[row_start: row_start + 4]):
+            with col:
+                try:
+                    st.link_button(label, url, use_container_width=True)
+                except Exception:
+                    st.markdown(JobURLManager.markdown_link(url, label))
+
+
 def external_link_html(url: Optional[str], label: str = "Open job") -> str:
     return JobURLManager.external_link_html(url, label)
 
@@ -1288,6 +1326,8 @@ def render_executive_summary(status: Optional[dict]) -> None:
     elif jobs_discovered:
         st.success(f"Ready-to-apply coverage is healthy at {ready_ratio * 100:.1f}% of discovered jobs.")
 
+    render_top_portal_shortcuts(status)
+
     if deduped_jobs:
         st.markdown("#### Recommended jobs")
         recommended_limit = min(len(deduped_jobs), 20 if jobs_discovered >= 80 else 5)
@@ -1853,7 +1893,7 @@ def main():
 
     show_admin = bool(st.session_state.get("admin_auth"))
     if str((status or {}).get("pending_action") or "").strip():
-        st.info("Human approval is waiting in **Pipeline Layers**. The dashboard stays on **Executive Summary** by default; use the left navigation to open the approval controls when ready.")
+        st.info("Human approval is ready below on **Executive Summary** and also inside **Pipeline Layers** so you can approve/reject without switching tabs.")
     else:
         st.caption("Use the left mission navigation to move between sections. The dashboard opens on Executive Summary by default.")
     try:
@@ -1873,8 +1913,10 @@ def main():
         with tab_summary:
             if active_section == "🧾 Executive Summary":
                 render_executive_summary(status)
+                render_hitl_controls(api_base, run_id, status)
             else:
                 render_executive_summary(status)
+                render_hitl_controls(api_base, run_id, status)
 
         with tab_pipeline:
             if active_section == "📋 Pipeline Layers":

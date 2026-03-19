@@ -201,13 +201,16 @@ def test_stub_leads_use_search_urls_for_us_and_skip_naukri():
     profile = {"skills": ["Python"], "experience": [{"title": "AI Engineer", "years": 10}]}
     leads = _stub_leads(
         profile,
-        max_jobs=14,
+        max_jobs=16,
         config={"geo_preferences": {"country_selector": "US", "locations": ["Boston, MA"]}},
     )
     assert leads
     assert all("naukri.com" not in str(job["url"]).lower() for job in leads)
+    assert {job["source"] for job in leads[:8]} == {"linkedin", "indeed", "glassdoor", "ziprecruiter", "google_jobs", "greenhouse", "lever", "workday"}
     assert any("/jobs/search" in str(job["url"]) for job in leads if job["source"] == "linkedin")
-    assert all("/view/" not in str(job["url"]) for job in leads if job["source"] in {"linkedin", "greenhouse", "lever", "workday"})
+    assert any("indeed.com/jobs" in str(job["url"]) for job in leads if job["source"] == "indeed")
+    assert any("glassdoor.com/Job/jobs.htm" in str(job["url"]) for job in leads if job["source"] == "glassdoor")
+    assert all("/view/" not in str(job["url"]) for job in leads if job["source"] in {"linkedin", "indeed", "glassdoor", "ziprecruiter", "google_jobs", "greenhouse", "lever", "workday"})
 
 
 def test_stub_leads_allow_naukri_for_india():
