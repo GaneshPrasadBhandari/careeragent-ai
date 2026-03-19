@@ -104,6 +104,12 @@ for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
 # ── In-process run registry (replace with Redis/DB for multi-worker) ──────────
 _runs: dict[str, dict] = {}   # run_id → state dict
 _GLOBAL_SELF_LEARNING_CONTEXT = os.getenv("CAREERAGENT_SELF_LEARNING_CONTEXT", "").strip()
+DEFAULT_SMART_TARGET_ROLES = [
+    "AI Engineer",
+    "AI/ML Solution Architect",
+    "GenAI Solution Architect",
+    "Principal Data Scientist",
+]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -190,9 +196,9 @@ def _build_initial_state(run_id: str, config: dict) -> dict:
 
 def _normalize_config(config: dict) -> dict:
     cfg = dict(config) if isinstance(config, dict) else {}
-    cfg.setdefault("target_roles", ["Software Engineer"])
+    cfg.setdefault("target_roles", list(DEFAULT_SMART_TARGET_ROLES))
     if not isinstance(cfg.get("target_roles"), list):
-        cfg["target_roles"] = [str(cfg.get("target_roles") or "Software Engineer")]
+        cfg["target_roles"] = [str(cfg.get("target_roles") or DEFAULT_SMART_TARGET_ROLES[0])]
     cfg.setdefault("match_threshold", 0.40)
     cfg.setdefault("geo_preferences", {"remote": True, "locations": [], "country_selector": "US"})
     if not isinstance(cfg.get("geo_preferences"), dict):
@@ -1443,7 +1449,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                     scout.search_jobs(intent), timeout=90
                 )
             else:
-                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
 
             # Recovery guard: when external providers are unavailable (or return
             # zero leads), keep the L3->L9 pipeline operational with demo leads.
@@ -1453,7 +1459,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                     3,
                     "No live jobs returned from providers; switching to resilient demo lead fallback.",
                 )
-                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+                leads = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
 
             state["job_leads"]       = leads[: int(state["config"].get("max_jobs", 100))]
             state["jobs_discovered"] = len(state["job_leads"])
@@ -1481,11 +1487,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
         except asyncio.TimeoutError:
             await mark_error(3, "Discovery timeout after 90s")
-            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
             state["jobs_discovered"] = len(state["job_leads"])
         except Exception as exc:
             await mark_error(3, str(exc))
-            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100))
+            state["job_leads"]       = _stub_leads(state["profile"], max_jobs=state["config"].get("max_jobs", 100), config=state.get("config") or {})
             state["jobs_discovered"] = len(state["job_leads"])
 
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
@@ -1608,6 +1614,23 @@ def _persist_state(run_id: str) -> None:
         state_file.write_text(json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.debug("State persist error: %s", exc)
+
+
+def _load_run_state_from_disk(run_id: str) -> dict[str, Any] | None:
+    state_file = LOGS_DIR / f"state_{run_id}.json"
+    if not state_file.exists():
+        return None
+    data = json.loads(state_file.read_text())
+    _runs[run_id] = data
+    return data
+
+
+def _resolve_action_request(body: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    raw = dict(body or {})
+    payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+    action = str(raw.get("action") or raw.get("action_type") or payload.get("action") or "").strip()
+    merged = {**payload, **raw}
+    return action, merged
 
 
 def _persist_tracking(run_id: str, state: dict) -> None:
@@ -1850,7 +1873,7 @@ def _is_generic_target_role(role: str) -> bool:
 def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[str]:
     requested = [str(r).strip() for r in (config_roles or []) if str(r).strip()]
     if requested and not all(_is_generic_target_role(r) for r in requested):
-        requested = requested + ["Staff Engineer", "Architect", "Data Science Lead"]
+        requested = requested + [role for role in DEFAULT_SMART_TARGET_ROLES if role not in requested]
         normalized: list[str] = []
         seen = set()
         for role in requested:
@@ -1866,29 +1889,30 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
     skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
     inferred: list[str] = []
     inferred.extend([title for title in exp_titles if title])
-    inferred.extend(["Staff Engineer", "Architect", "Data Science Lead"])
+    inferred.extend(DEFAULT_SMART_TARGET_ROLES)
 
     ai_signal = any(tok in skills for tok in {"machine learning", "tensorflow", "azure openai", "llm", "ai architect", "solution architect", "deep learning"})
     if ai_signal:
         inferred.extend([
             "Senior Solution Architect",
             "AI Solution Architect",
-            "Generative AI Architect",
-            "Lead Data Scientist",
+            "AI/ML Solution Architect",
+            "GenAI Solution Architect",
+            "Principal Data Scientist",
             "Principal AI Engineer",
             "Machine Learning Architect",
         ])
 
     normalized: list[str] = []
     seen = set()
-    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]:
+    for role in inferred + requested + DEFAULT_SMART_TARGET_ROLES + ["Machine Learning Engineer", "Principal AI Engineer", "Lead Data Scientist"]:
         role = re.sub(r"\s+", " ", str(role or "")).strip()
         if role and role.lower() not in seen:
             seen.add(role.lower())
             normalized.append(role)
         if len(normalized) >= 10:
             break
-    return normalized or ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]
+    return normalized or list(DEFAULT_SMART_TARGET_ROLES)
 
 
 @traceable(name="api.build_intent")
@@ -1921,41 +1945,62 @@ def _build_intent(profile: dict, config: dict) -> dict:
     }
 
 
+def _stub_search_url(source: str, role: str, location: str, *, remote: bool, country_code: str) -> str:
+    query = quote_plus(role.replace("—", " ").replace("/", " "))
+    location_query = quote_plus(location)
+    google_location = quote_plus(location if location and location.lower() != "remote" else "United States")
+    remote_suffix = "+remote" if remote else ""
+    templates = {
+        "linkedin": f"https://www.linkedin.com/jobs/search/?keywords={query}&location={location_query}",
+        "indeed": f"https://www.indeed.com/jobs?q={query}{remote_suffix}&l={location_query}",
+        "glassdoor": f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query}&locT=C&locId=1",
+        "greenhouse": f"https://www.google.com/search?q=site%3Aboards.greenhouse.io+{query}+{google_location}",
+        "lever": f"https://www.google.com/search?q=site%3Ajobs.lever.co+{query}+{google_location}",
+        "workday": f"https://www.google.com/search?q=site%3Amyworkdayjobs.com+OR+site%3Aworkdayjobs.com+{query}+{google_location}",
+        "ziprecruiter": f"https://www.ziprecruiter.com/jobs-search?search={query}&location={location_query}",
+        "google_jobs": f"https://www.google.com/search?q={query}+jobs+{google_location}",
+        "naukri": f"https://www.naukri.com/{quote_plus(role.lower())}-jobs-in-{quote_plus(location.lower() or 'india')}",
+    }
+    if source == "naukri" and country_code != "IN":
+        return templates["google_jobs"]
+    return templates.get(source, templates["google_jobs"])
+
+
 @traceable(name="api.stub_leads")
-def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
-    """Return realistic stub leads when API keys are unavailable."""
+def _stub_leads(profile: dict, max_jobs: int = 100, config: dict | None = None) -> list[dict]:
+    """Return resilient fallback leads with live search URLs when providers are unavailable."""
+    config = config or {}
     skills = [str(skill).strip() for skill in (profile.get("skills") or ["Python"]) if str(skill).strip()][:6]
     roles = _infer_target_roles(profile, None)[:10] or ["AI Engineer", "Staff Engineer", "Architect"]
+    geo_prefs = config.get("geo_preferences") or {}
+    country_code = str(geo_prefs.get("country_selector") or "US").upper()
     companies = [
         "TechCorp Inc.", "StartupAI", "ScaleUp Inc.", "CloudForge", "DataNova", "Vertex Labs",
         "Northstar Health", "FinCore Systems", "Orbit Analytics", "BlueRiver Tech",
         "Atlas Platforms", "SignalPath AI", "Apex Commerce", "BrightOps", "Catalyst Data",
         "NextWave Robotics", "Summit Digital", "Harbor Cloud", "Lumen Insights", "Quantum Stack",
     ]
-    locations = [
-        ("Remote", True),
-        ("San Francisco, CA", True),
-        ("New York, NY", False),
-        ("Boston, MA", True),
-        ("Seattle, WA", True),
-        ("Austin, TX", False),
-        ("Chicago, IL", True),
-        ("Atlanta, GA", False),
-    ]
-    sources = ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"]
+    default_locations = {
+        "US": [("Remote", True), ("San Francisco, CA", True), ("New York, NY", False), ("Boston, MA", True), ("Seattle, WA", True), ("Austin, TX", False)],
+        "IN": [("Remote", True), ("Bengaluru, India", False), ("Hyderabad, India", False), ("Pune, India", False), ("Gurugram, India", False)],
+        "EU": [("Remote", True), ("Berlin, Germany", False), ("Amsterdam, Netherlands", False), ("Dublin, Ireland", False)],
+        "AU": [("Remote", True), ("Sydney, Australia", False), ("Melbourne, Australia", False)],
+        "UAE": [("Remote", True), ("Dubai, UAE", False), ("Abu Dhabi, UAE", False)],
+    }
+    configured_locations = [str(loc).strip() for loc in (geo_prefs.get("locations") or []) if str(loc).strip()]
+    locations = [(loc, "remote" in loc.lower()) for loc in configured_locations] or default_locations.get(country_code, default_locations["US"])
+    regional_sources = {
+        "US": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "ziprecruiter"],
+        "IN": ["linkedin", "indeed", "glassdoor", "naukri", "greenhouse", "lever", "workday"],
+        "EU": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "google_jobs"],
+        "AU": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "google_jobs"],
+        "UAE": ["linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "google_jobs"],
+    }
+    sources = regional_sources.get(country_code, regional_sources["US"])
     suffixes = [
         "Platform", "AI Products", "Enterprise Data", "Applied AI", "Cloud Architecture",
         "ML Systems", "Data Science", "Automation", "Intelligent Workflows", "Decisioning",
     ]
-    search_slugs = {
-        "linkedin": "https://www.linkedin.com/jobs/view/{job_id}",
-        "indeed": "https://www.indeed.com/viewjob?jk={job_id}",
-        "glassdoor": "https://www.glassdoor.com/job-listing/demo-role-JV_IC1147401_KO0,9_KE10,14.htm?jl={job_id}",
-        "naukri": "https://www.naukri.com/job-listings-{query}-{job_id}",
-        "greenhouse": "https://boards.greenhouse.io/demo/jobs/{job_id}",
-        "lever": "https://jobs.lever.co/demo/{job_id}",
-        "workday": "https://demo.wd5.myworkdayjobs.com/en-US/Careers/job/{job_id}",
-    }
     seed_jobs: list[dict] = []
     for idx in range(max_jobs):
         role = roles[idx % len(roles)]
@@ -1964,8 +2009,6 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
         location, remote = locations[idx % len(locations)]
         source = sources[idx % len(sources)]
         title = role if suffix.lower() in role.lower() else f"{role} — {suffix}"
-        query = quote_plus(title.lower().replace("—", " ").replace("/", " "))
-        job_id = f"{idx+1:06d}"
         primary_skill = skills[idx % len(skills)] if skills else "Python"
         secondary_skill = skills[(idx + 1) % len(skills)] if len(skills) > 1 else primary_skill
         seed_jobs.append(
@@ -1973,7 +2016,7 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
                 "id": f"demo_{idx+1:03d}",
                 "title": title,
                 "company": company,
-                "url": sanitize_job_url(search_slugs[source].format(query=query, job_id=job_id)),
+                "url": sanitize_job_url(_stub_search_url(source, title, location, remote=remote, country_code=country_code)),
                 "location": location,
                 "remote": remote,
                 "description": (
@@ -2372,12 +2415,7 @@ async def start_hunt(
 async def get_status(run_id: str):
     """Poll this endpoint for real-time progress updates."""
     if run_id not in _runs:
-        # Try to reload from persisted file
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            data = json.loads(state_file.read_text())
-            _runs[run_id] = data
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
 
     state = _runs[run_id]
@@ -2428,7 +2466,8 @@ async def get_status(run_id: str):
 @traceable(name="api.get_jobs")
 async def get_jobs(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     jobs  = [{**job, "url": sanitize_job_url(job.get("direct_job_url") or job.get("url", "")), "direct_job_url": sanitize_job_url(job.get("direct_job_url") or job.get("url", ""))} for job in (state.get("scored_jobs", []) or [])]
     return {
@@ -2442,7 +2481,8 @@ async def get_jobs(run_id: str):
 @traceable(name="api.get_applications")
 async def get_applications(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     return {
         "run_id": run_id,
@@ -2459,7 +2499,8 @@ async def get_applications(run_id: str):
 @traceable(name="api.feedback")
 async def post_feedback(run_id: str, body: dict):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     payload = dict(body or {})
     if not str(payload.get("text") or payload.get("comment") or "").strip():
@@ -2476,10 +2517,7 @@ async def post_feedback(run_id: str, body: dict):
 @traceable(name="api.get_feedback")
 async def get_feedback(run_id: str):
     if run_id not in _runs:
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            _runs[run_id] = json.loads(state_file.read_text())
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     return {
@@ -2513,10 +2551,7 @@ async def admin_feedback():
 @traceable(name="api.sync_feedback")
 async def sync_feedback(run_id: str):
     if run_id not in _runs:
-        state_file = LOGS_DIR / f"state_{run_id}.json"
-        if state_file.exists():
-            _runs[run_id] = json.loads(state_file.read_text())
-        else:
+        if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
     context = _sync_feedback_to_agent_brain(state)
@@ -2534,15 +2569,16 @@ async def sync_feedback(run_id: str):
 @traceable(name="api.run_action")
 async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    action = (body or {}).get("action")
+    action, request_data = _resolve_action_request(body)
 
     if action == "approve_ranking":
         selected_values = (
-            (body or {}).get("selected_job_ids")
-            or (body or {}).get("selected_job_urls")
-            or (body or {}).get("selected_jobs")
+            request_data.get("selected_job_ids")
+            or request_data.get("selected_job_urls")
+            or request_data.get("selected_jobs")
             or []
         )
         ranked = state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs", [])
@@ -2614,7 +2650,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         return {"ok": True, "message": "drafts rejected; returned to ranking approval"}
 
     if action == "update_profile_skills":
-        incoming = [str(x).strip() for x in ((body or {}).get("skills") or []) if str(x).strip()]
+        incoming = [str(x).strip() for x in (request_data.get("skills") or []) if str(x).strip()]
         if not incoming:
             raise HTTPException(400, "skills missing")
         prof = state.setdefault("profile", {})
@@ -2634,7 +2670,8 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
 @app.get("/hunt/{run_id}/artifacts")
 async def get_artifacts(run_id: str):
     if run_id not in _runs:
-        raise HTTPException(404, f"Run {run_id} not found")
+        if _load_run_state_from_disk(run_id) is None:
+            raise HTTPException(404, f"Run {run_id} not found")
     return {"run_id": run_id, "artifacts": _runs[run_id].get("artifacts", {})}
 
 
