@@ -369,20 +369,27 @@ Job:
     return _heuristic_cognitive_verdict(job, profile)
 
 
-async def _cognitive_reason_job(job: dict, profile: dict) -> dict:
+async def _cognitive_reason_job(job: dict, profile: dict, timeout_sec: float = 8.0) -> dict:
     loop = asyncio.get_running_loop()
     try:
-        verdict = await loop.run_in_executor(_REASONING_POOL, _llm_cognitive_verdict, job, profile)
+        verdict = await asyncio.wait_for(
+            loop.run_in_executor(_REASONING_POOL, _llm_cognitive_verdict, job, profile),
+            timeout=timeout_sec,
+        )
     except Exception:
         verdict = _heuristic_cognitive_verdict(job, profile)
     return {**job, "cognitive_decision": verdict}
 
 
-async def _apply_cognitive_reasoning(jobs: list[dict], profile: dict) -> list[dict]:
+async def _apply_cognitive_reasoning(jobs: list[dict], profile: dict, *, per_job_timeout: float = 8.0, total_timeout: float = 25.0) -> list[dict]:
     if not jobs:
         return []
-    judged = await asyncio.gather(*[_cognitive_reason_job(job, profile) for job in jobs])
-    return list(judged)
+    tasks = [_cognitive_reason_job(job, profile, timeout_sec=per_job_timeout) for job in jobs]
+    try:
+        judged = await asyncio.wait_for(asyncio.gather(*tasks), timeout=total_timeout)
+        return list(judged)
+    except Exception:
+        return [{**job, "cognitive_decision": _heuristic_cognitive_verdict(job, profile)} for job in jobs]
 
 
 def _candidate_years_experience(profile: dict) -> float:
@@ -558,6 +565,66 @@ def _job_recommendation_rationale(job: dict, profile: dict) -> list[str]:
     if summary:
         rationale.append(f"Match explanation: {summary}")
     return rationale
+
+
+def _summarize_l4_jobs(scored: list[dict], *, threshold: float) -> dict[str, Any]:
+    ranked = sorted(scored, key=lambda j: float(j.get("score") or 0.0), reverse=True)
+    return {
+        "threshold": threshold,
+        "job_count": len(scored),
+        "top_jobs": ranked[:12],
+        "all_jobs": ranked[:100],
+        "job_links": [
+            {
+                "id": job.get("id") or job.get("job_id") or f"job_{idx+1:03d}",
+                "title": job.get("title") or "Role",
+                "company": job.get("company") or "",
+                "url": sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or ""),
+                "score": float(job.get("score") or 0.0),
+            }
+            for idx, job in enumerate(ranked[:100])
+        ],
+        "sources": dict(Counter(str(job.get("source") or "unknown") for job in scored)),
+    }
+
+
+async def _score_jobs_with_phase4_logic(state: dict, jobs: list[dict], *, threshold: float) -> list[dict]:
+    filtered_jobs = _apply_frontend_filters(jobs, state.get("config", {}))
+    candidate_jobs = filtered_jobs or list(jobs or [])
+
+    try:
+        from careeragent.managers.managers import ExtractionManager
+        ext_mgr = ExtractionManager()
+        scored = ext_mgr.extract_and_score(candidate_jobs, state.get("profile") or {}, threshold)
+    except Exception:
+        scored = _stub_score(candidate_jobs)
+
+    if not scored:
+        scored = _stub_score(candidate_jobs)
+
+    lead_lookup = {}
+    for idx, job in enumerate(candidate_jobs):
+        key = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or "") or str(job.get("id") or job.get("job_id") or f"job_{idx+1:03d}")
+        lead_lookup[key] = job
+
+    hydrated = []
+    for idx, job in enumerate(scored):
+        key = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or "") or str(job.get("id") or job.get("job_id") or f"job_{idx+1:03d}")
+        base = lead_lookup.get(key, {})
+        merged = {**base, **job}
+        merged["id"] = merged.get("id") or merged.get("job_id") or base.get("id") or f"job_{idx+1:03d}"
+        merged["url"] = sanitize_job_url(merged.get("direct_job_url") or merged.get("url") or merged.get("redirect_url") or base.get("url") or "")
+        merged["direct_job_url"] = merged["url"]
+        hydrated.append(merged)
+
+    scored = _hybrid_enrich_scores(hydrated, state.get("profile") or {})
+    scored = await _apply_cognitive_reasoning(scored, state.get("profile") or {})
+    scored = sorted(
+        scored,
+        key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("score") or 0.0)),
+        reverse=True,
+    )
+    return _augment_scored_jobs(scored, state.get("profile") or {})
 
 
 def _interview_call_percent(job: dict) -> float:
@@ -1003,22 +1070,12 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     threshold = float(state.get("config", {}).get("match_threshold", 0.45))
 
     _layer_running(state, 4, f"Re-scoring {state.get('jobs_discovered', 0)} jobs after profile update…", tools_used=["matcher", "scorer"], attempt_count=1)
-    scored = state.get("job_leads", []) or []
-    scored = _apply_frontend_filters(scored, state.get("config", {}))
-    if not scored:
-        scored = _stub_score(state.get("job_leads") or [])
-    scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
-    scored = await _apply_cognitive_reasoning(scored, state.get("profile") or {})
-    scored = sorted(scored, key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("score") or 0.0)), reverse=True)
-    scored = _augment_scored_jobs(scored, state.get("profile") or {})
+    scored = await _score_jobs_with_phase4_logic(state, state.get("job_leads", []) or [], threshold=threshold)
     state["scored_jobs"] = scored
     state["jobs_scored"] = len(scored)
     top_score = max((max(float(j.get("score") or 0.0), float(j.get("cognitive_score") or 0.0)) for j in scored), default=0.0)
     state["top_match_score"] = round(top_score * 100, 1)
-    state.setdefault("layer_debug", {})["L4"] = {
-        "threshold": threshold,
-        "top_jobs": sorted(scored, key=lambda j: j.get("score", 0), reverse=True)[:5],
-    }
+    state.setdefault("layer_debug", {})["L4"] = _summarize_l4_jobs(scored, threshold=threshold)
     _layer_ok(state, 4, f"{len(scored)} jobs re-scored, top match {state['top_match_score']}% ✓", scored=len(scored), top_score=state["top_match_score"], tools_used=["matcher", "scorer"], attempt_count=1)
 
     _layer_running(state, 5, "Re-ranking jobs after profile update…", tools_used=["ranking_evaluator", "gap_analysis"], attempt_count=1)
@@ -1508,32 +1565,12 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
         # ── L4: Scrape + Match + Score ────────────────────────────────────────
         await mark_running(4, f"Scoring {state['jobs_discovered']} jobs against your profile…", tools_used=["matcher", "scorer"], attempt_count=1)
         await asyncio.sleep(0.5)
-        try:
-            from careeragent.managers.managers import ExtractionManager, GeoFenceManager
-            geo_mgr  = GeoFenceManager()
-            ext_mgr  = ExtractionManager()
-            geo_prefs = state["config"].get("geo_preferences", {"remote": True, "locations": []})
-            filtered  = geo_mgr.filter_by_geo(state["job_leads"], geo_prefs)
-            threshold = state["config"].get("match_threshold", 0.45)
-            scored    = ext_mgr.extract_and_score(filtered, state["profile"], threshold)
-        except ImportError:
-            scored    = _stub_score(state["job_leads"])
-            threshold = 0.45
-
-        scored = _apply_frontend_filters(scored, state["config"])
-        if not scored:
-            scored = _stub_score(state.get("job_leads") or [])
-        scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
-        scored = await _apply_cognitive_reasoning(scored, state.get("profile") or {})
-        scored = sorted(scored, key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("score") or 0.0)), reverse=True)
-        scored = _augment_scored_jobs(scored, state.get("profile") or {})
+        threshold = float(state["config"].get("match_threshold", 0.45))
+        scored = await _score_jobs_with_phase4_logic(state, state.get("job_leads", []) or [], threshold=threshold)
         state["scored_jobs"]     = scored
         state["jobs_scored"]     = len(scored)
         top_score = max((max(float(j.get("score") or 0.0), float(j.get("cognitive_score") or 0.0)) for j in scored), default=0.0)
-        state["layer_debug"]["L4"] = {
-            "threshold": threshold,
-            "top_jobs": sorted(scored, key=lambda j: j.get("score", 0), reverse=True)[:5],
-        }
+        state["layer_debug"]["L4"] = _summarize_l4_jobs(scored, threshold=threshold)
         _record_eval(
             state,
             layer_id=4,
