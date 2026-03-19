@@ -16,22 +16,31 @@ def _normalize_selection_value(value: Any) -> str:
         return f"{left.strip().lower()}|{right.strip().lower()}"
     if text.startswith("//"):
         text = f"https:{text}"
+    elif text.startswith(("www.", "linkedin.com/", "jobs.", "boards.", "careers.")):
+        text = f"https://{text}"
     if not text.startswith(("http://", "https://")):
         return text.lower()
     try:
         parts = urlsplit(text)
         query = parse_qs(parts.query, keep_blank_values=False)
-        for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
+        for key in ("url", "u", "q", "redirect", "redirect_url", "dest", "destination", "target"):
             nested = query.get(key, [""])[0]
-            if nested.startswith(("http://", "https://")):
+            if nested.startswith(("http://", "https://", "www.")):
                 return _normalize_selection_value(unquote(nested))
         clean_query = "&".join(
             f"{k.lower()}={v}"
             for k, values in sorted(query.items())
-            if not k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
+            if not (
+                k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
+                or k.lower().endswith("_src")
+                or k.lower() == "source"
+            )
             for v in values
         )
-        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), clean_query, ""))
+        netloc = parts.netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        return urlunsplit((parts.scheme.lower(), netloc, parts.path.rstrip("/"), clean_query, ""))
     except Exception:
         return text.lower()
 
@@ -65,6 +74,9 @@ def job_selection_keyset(job: dict[str, Any]) -> set[str]:
         job.get("job_id"),
         job.get("url"),
         job.get("direct_job_url"),
+        job.get("redirect_url"),
+        job.get("job_url"),
+        job.get("application_url"),
         f"{job.get('title', '')}|{job.get('company', '')}",
     ):
         value = _normalize_selection_value(candidate)

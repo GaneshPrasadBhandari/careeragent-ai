@@ -579,7 +579,7 @@ def _summarize_l4_jobs(scored: list[dict], *, threshold: float) -> dict[str, Any
                 "id": job.get("id") or job.get("job_id") or f"job_{idx+1:03d}",
                 "title": job.get("title") or "Role",
                 "company": job.get("company") or "",
-                "url": sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or ""),
+                "url": sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or ""),
                 "score": float(job.get("score") or 0.0),
             }
             for idx, job in enumerate(ranked[:100])
@@ -604,16 +604,16 @@ async def _score_jobs_with_phase4_logic(state: dict, jobs: list[dict], *, thresh
 
     lead_lookup = {}
     for idx, job in enumerate(candidate_jobs):
-        key = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or "") or str(job.get("id") or job.get("job_id") or f"job_{idx+1:03d}")
+        key = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or "") or str(job.get("id") or job.get("job_id") or f"job_{idx+1:03d}")
         lead_lookup[key] = job
 
     hydrated = []
     for idx, job in enumerate(scored):
-        key = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or "") or str(job.get("id") or job.get("job_id") or f"job_{idx+1:03d}")
+        key = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or "") or str(job.get("id") or job.get("job_id") or f"job_{idx+1:03d}")
         base = lead_lookup.get(key, {})
         merged = {**base, **job}
         merged["id"] = merged.get("id") or merged.get("job_id") or base.get("id") or f"job_{idx+1:03d}"
-        merged["url"] = sanitize_job_url(merged.get("direct_job_url") or merged.get("url") or merged.get("redirect_url") or base.get("url") or "")
+        merged["url"] = sanitize_job_url(merged.get("direct_job_url") or merged.get("url") or merged.get("redirect_url") or merged.get("job_url") or merged.get("application_url") or base.get("url") or base.get("redirect_url") or base.get("job_url") or base.get("application_url") or "")
         merged["direct_job_url"] = merged["url"]
         hydrated.append(merged)
 
@@ -666,8 +666,8 @@ def _augment_scored_jobs(jobs: list[dict], profile: dict) -> list[dict]:
         j2 = {
             **j,
             "id": j.get("id") or f"job_{idx+1:03d}",
-            "url": sanitize_job_url(j.get("direct_job_url") or j.get("url") or j.get("redirect_url") or ""),
-            "direct_job_url": sanitize_job_url(j.get("direct_job_url") or j.get("url") or j.get("redirect_url") or ""),
+            "url": sanitize_job_url(j.get("direct_job_url") or j.get("url") or j.get("redirect_url") or j.get("job_url") or j.get("application_url") or ""),
+            "direct_job_url": sanitize_job_url(j.get("direct_job_url") or j.get("url") or j.get("redirect_url") or j.get("job_url") or j.get("application_url") or ""),
             "matched_skills": matched,
             "missing_skills": missing,
             "interview_probability_percent": interview_pct,
@@ -913,7 +913,7 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float, profile: dict |
     seen = set()
     seen_identity = set()
     for job in scored:
-        clean_url = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or "")
+        clean_url = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or "")
         identity = re.sub(
             r"\s+",
             " ",
@@ -1001,9 +1001,9 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float, profile: dict |
         selected = ranked[: min(target or 8, len(ranked))]
 
     if len(selected) < target:
-        selected_keys = {sanitize_job_url(job.get("url") or job.get("direct_job_url") or "") or str(job.get("id") or "") for job in selected}
+        selected_keys = {sanitize_job_url(job.get("url") or job.get("direct_job_url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or "") or str(job.get("id") or "") for job in selected}
         for job in remaining + ranked:
-            key = sanitize_job_url(job.get("url") or job.get("direct_job_url") or "") or str(job.get("id") or "")
+            key = sanitize_job_url(job.get("url") or job.get("direct_job_url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or "") or str(job.get("id") or "")
             if not key or key in selected_keys:
                 continue
             selected.append(job)
@@ -2530,7 +2530,7 @@ async def get_jobs(run_id: str):
         if _load_run_state_from_disk(run_id) is None:
             raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    jobs  = [{**job, "url": sanitize_job_url(job.get("direct_job_url") or job.get("url", "")), "direct_job_url": sanitize_job_url(job.get("direct_job_url") or job.get("url", ""))} for job in (state.get("scored_jobs", []) or [])]
+    jobs  = [{**job, "url": sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or ""), "direct_job_url": sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or job.get("job_url") or job.get("application_url") or "")} for job in (state.get("scored_jobs", []) or [])]
     return {
         "run_id":    run_id,
         "total":     len(jobs),

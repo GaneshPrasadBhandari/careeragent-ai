@@ -403,6 +403,8 @@ class JobURLManager:
             return ""
         if raw.startswith("//"):
             raw = f"https:{raw}"
+        elif raw.startswith(("www.", "linkedin.com/", "jobs.", "boards.", "careers.")):
+            raw = f"https://{raw}"
         if not raw.startswith(("http://", "https://")):
             return raw
         try:
@@ -410,15 +412,22 @@ class JobURLManager:
             query = parse_qs(parts.query, keep_blank_values=False)
             for key in ("url", "u", "q", "redirect", "redirect_url", "dest", "destination", "target"):
                 value = query.get(key, [""])[0]
-                if value.startswith(("http://", "https://")):
+                if value.startswith(("http://", "https://", "www.")):
                     return JobURLManager.sanitize(unquote(value))
             clean_query = "&".join(
                 f"{k}={v}"
                 for k, values in query.items()
-                if not k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
+                if not (
+                    k.lower().startswith(("utm_", "trk", "ref", "fbclid", "gclid"))
+                    or k.lower().endswith("_src")
+                    or k.lower() == "source"
+                )
                 for v in values
             )
-            return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), clean_query, ""))
+            netloc = parts.netloc
+            if netloc.lower().startswith("www."):
+                netloc = netloc[4:]
+            return urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), clean_query, ""))
         except Exception:
             return raw
 
@@ -435,14 +444,33 @@ class JobURLManager:
         return f'[{label}]({safe_url})' if safe_url else label
 
 
+def preferred_job_url(job: Optional[dict]) -> str:
+    payload = job or {}
+    for candidate in (
+        payload.get("direct_job_url"),
+        payload.get("url"),
+        payload.get("redirect_url"),
+        payload.get("job_url"),
+        payload.get("application_url"),
+    ):
+        safe_url = JobURLManager.sanitize(candidate)
+        if safe_url:
+            return safe_url
+    return ""
+
+
 def sanitize_job_url(url: Optional[str]) -> str:
     return JobURLManager.sanitize(url)
 
 
-def render_job_link(url: Optional[str], *, label: str = "Open job", key: Optional[str] = None) -> None:
-    safe_url = JobURLManager.sanitize(url)
+def render_job_link(url: Optional[str] = None, *, job: Optional[dict] = None, label: str = "Open job", key: Optional[str] = None) -> None:
+    safe_url = preferred_job_url(job) if job is not None else JobURLManager.sanitize(url)
     if safe_url:
-        st.link_button(label, safe_url, use_container_width=False)
+        try:
+            st.link_button(label, safe_url, use_container_width=False)
+        except Exception:
+            st.markdown(JobURLManager.markdown_link(safe_url, label))
+        st.caption(safe_url)
     else:
         st.caption("No job link available")
 
@@ -819,24 +847,25 @@ def render_hitl_controls(api_base: str, run_id: Optional[str], status: Optional[
         ranked_jobs = (status.get("layer_debug") or {}).get("L5", {}).get("qualified_jobs", []) or status.get("approved_jobs_preview", [])
         if ranked_jobs:
             option_rows = []
+            selected_lookup = {}
             for idx, job in enumerate(ranked_jobs, start=1):
                 label = (
                     f"{idx:02d}. {job.get('title','Role')} · {job.get('company','')} · "
                     f"{job.get('source','unknown')} · "
                     f"match {job.get('score',0)*100:.0f}% · interview {job.get('interview_probability_percent',0):.0f}%"
                 )
-                option_rows.append((label, str(job.get("id") or job.get("url") or f"job_{idx}")))
+                selected_lookup[label] = {
+                    "id": str(job.get("id") or job.get("job_id") or preferred_job_url(job) or f"job_{idx}"),
+                    "url": preferred_job_url(job),
+                }
+                option_rows.append(label)
             selected_labels = st.multiselect(
                 "Recommended jobs for approval",
-                [label for label, _ in option_rows],
-                default=[label for label, _ in option_rows],
+                option_rows,
+                default=option_rows,
             )
-            selected_ids = [job_id for label, job_id in option_rows if label in selected_labels]
-            selected_urls = [
-                j.get("url")
-                for j in ranked_jobs
-                if j.get("id") in selected_ids and j.get("url")
-            ]
+            selected_ids = [selected_lookup[label]["id"] for label in selected_labels if label in selected_lookup]
+            selected_urls = [selected_lookup[label]["url"] for label in selected_labels if selected_lookup.get(label, {}).get("url")]
             st.caption(f"Selected {len(selected_ids)} jobs for downstream drafting/apply layers.")
             with st.expander("Why these jobs are recommended"):
                 for j in ranked_jobs[:8]:
@@ -1122,7 +1151,7 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
             </div>
         </div>
         """, unsafe_allow_html=True)
-        render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
+        render_job_link(job=job, label="Open job")
         st.text_input(
             f"Comment for {job_id}",
             key=comment_key,
@@ -1181,7 +1210,7 @@ def render_match_analysis(status: Optional[dict]) -> None:
             title = f"{idx}. {job.get('title', 'Role')} — {job.get('company', 'Unknown company')}"
             with st.expander(title, expanded=(idx == 1)):
                 st.markdown(f"**Executive summary:** {job.get('executive_summary') or 'No executive summary yet.'}")
-                render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
+                render_job_link(job=job, label="Open job")
                 st.markdown(f"**Match explanation:** {job.get('match_explanation') or 'No match explanation yet.'}")
                 rationale = job.get("recommendation_rationale") or []
                 if rationale:
@@ -1225,7 +1254,7 @@ def render_executive_summary(status: Optional[dict]) -> None:
     deduped_jobs = []
     seen_jobs = set()
     for job in top_jobs:
-        key = sanitize_job_url(job.get("url")) or str(job.get("id") or "")
+        key = preferred_job_url(job) or str(job.get("id") or "")
         if not key or key in seen_jobs:
             continue
         seen_jobs.add(key)
@@ -1276,7 +1305,7 @@ def render_executive_summary(status: Optional[dict]) -> None:
                     st.write(summary)
                     st.caption(f"Reasoning: {reasoning}")
                 with right:
-                    render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
+                    render_job_link(job=job, label="Open job")
                 st.markdown("<hr style='margin:8px 0 12px 0'>", unsafe_allow_html=True)
     else:
         st.caption("Recommended jobs will appear here after L4/L5 scoring.")
@@ -1293,7 +1322,7 @@ def render_quick_nav_rail(api_base: str, run_id: Optional[str], status: Optional
             score = round(float(job.get("score") or 0.0) * 100.0, 1)
             st.markdown(f"**{idx}. {title}**")
             st.caption(f"{company} • Match {score:.1f}%")
-            render_job_link(job.get("direct_job_url") or job.get("url"), label="Open job")
+            render_job_link(job=job, label="Open job")
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     else:
         st.caption("Job links will appear here after L4 scoring completes.")

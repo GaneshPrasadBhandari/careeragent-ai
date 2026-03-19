@@ -2,6 +2,7 @@ from app.ui.mission_control import (
     JobURLManager,
     _preferred_active_section,
     normalize_api_base,
+    preferred_job_url,
     resolve_default_api_base,
 )
 
@@ -22,9 +23,18 @@ def test_resolve_default_api_base_is_locked_to_render_backend(monkeypatch) -> No
 
 def test_job_url_manager_removes_tracking_and_redirects() -> None:
     raw = "https://jobs.example.com/redirect?url=https%3A%2F%2Fwww.linkedin.com%2Fjobs%2Fview%2F123%3Futm_source%3Dfoo&trk=public_jobs"
-    assert JobURLManager.sanitize(raw) == "https://www.linkedin.com/jobs/view/123"
+    assert JobURLManager.sanitize(raw) == "https://linkedin.com/jobs/view/123"
 
 
 def test_preferred_active_section_defaults_to_executive_summary_even_for_hitl() -> None:
     assert _preferred_active_section({"pending_action": "approve_ranking"}) == "🧾 Executive Summary"
     assert _preferred_active_section({"pending_action": ""}) == "🧾 Executive Summary"
+
+
+def test_job_url_manager_adds_https_for_www_links() -> None:
+    assert JobURLManager.sanitize("www.linkedin.com/jobs/view/123?utm_source=foo") == "https://linkedin.com/jobs/view/123"
+
+
+def test_preferred_job_url_falls_back_to_redirect_and_application_urls() -> None:
+    assert preferred_job_url({"redirect_url": "https://jobs.example.com/redirect?url=https%3A%2F%2Fboards.greenhouse.io%2Facme%2Fjobs%2F123"}) == "https://boards.greenhouse.io/acme/jobs/123"
+    assert preferred_job_url({"application_url": "www.workday.com/company/job/456?utm_source=test"}) == "https://workday.com/company/job/456"
