@@ -13,6 +13,7 @@ from careeragent.api.main import (
     _normalize_config,
     _phase6_qualified_jobs,
     _record_feedback_event,
+    _sync_feedback_to_agent_brain,
     _stub_leads,
 )
 
@@ -90,6 +91,16 @@ def test_feedback_event_creates_self_learning_prompt():
     assert "Self-Learning Optimization Prompt" in state["self_learning_prompt"]
 
 
+def test_feedback_event_accepts_job_payload_shape():
+    state = {"learning_loop": {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0}}
+    event = _record_feedback_event(
+        state,
+        {"source": "user", "job_id": "job-123", "rating": -1, "comment": "Too many US jobs for India"},
+    )
+    assert event["meta"]["job_id"] == "job-123"
+    assert event["text"] == "Too many US jobs for India"
+
+
 def test_learning_resource_pack_contains_direct_links():
     pack = _build_learning_resource_pack("LangChain")
     assert "http" in pack["official_documentation"]
@@ -124,6 +135,29 @@ def test_build_intent_prefers_resume_roles_over_generic_default():
     intent = _build_intent(profile, cfg)
     assert intent["target_roles"][0] == "Senior Solution Architect"
     assert "AI Solution Architect" in intent["target_roles"]
+
+
+def test_build_intent_passes_self_learning_context():
+    profile = {"skills": ["Python"], "experience": [], "raw_text": ""}
+    cfg = _normalize_config({"self_learning_context": "Prefer India-first remote roles and broaden semantic matches."})
+    intent = _build_intent(profile, cfg)
+    assert "India-first remote roles" in intent["self_learning_context"]
+
+
+def test_sync_feedback_to_agent_brain_creates_context():
+    state = {
+        "feedback_events": [{"source": "user", "rating": -1, "text": "Too many US jobs", "meta": {"job_id": "job-1"}}],
+        "system_prompt_update": "broaden semantics",
+        "learning_loop": {"user_feedback": 1, "employer_feedback": 0, "accepted": 1, "rejected": 0},
+        "feedback_learning_state": {"strictness_mode": "less_strict", "targeting_mode": "broad_semantic"},
+        "employer_outcomes": {},
+        "apply_results": [],
+        "interviews": [],
+        "followup_queue": [],
+    }
+    context = _sync_feedback_to_agent_brain(state)
+    assert context
+    assert state["self_learning_context"] == context
 
 
 def test_stub_leads_expand_to_unique_urls_and_high_phase6_approval():

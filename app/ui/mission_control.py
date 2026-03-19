@@ -32,6 +32,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+if "admin_auth" not in st.session_state:
+    st.session_state["admin_auth"] = False
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STYLING
@@ -424,6 +426,39 @@ def _api_post_feedback(api_base: str, run_id: str, rating: int, text: str) -> tu
         return False, f"Feedback request failed: {exc}"
 
 
+def _api_post_job_feedback(api_base: str, run_id: str, job_id: str, rating: int, comment: str) -> tuple[bool, str]:
+    try:
+        payload = {
+            "source": "user",
+            "job_id": job_id,
+            "rating": int(rating),
+            "comment": comment.strip() or ("Thumbs up" if int(rating) > 0 else "Thumbs down"),
+            "meta": {"job_id": job_id},
+        }
+        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/feedback", json=payload, timeout=20)
+        if r.status_code == 200:
+            return True, "Job feedback saved."
+        return False, f"Feedback failed ({r.status_code}): {r.text[:200]}"
+    except Exception as exc:
+        return False, f"Feedback request failed: {exc}"
+
+
+def _api_get_feedback(api_base: str, run_id: str) -> list[dict]:
+    resp = _api_get(api_base, f"/hunt/{run_id}/feedback", timeout=8)
+    return resp.get("feedback", []) if resp else []
+
+
+def _api_sync_feedback(api_base: str, run_id: str) -> tuple[bool, str]:
+    try:
+        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/feedback/sync", timeout=30)
+        if r.status_code == 200:
+            context = str((r.json() or {}).get("self_learning_context") or "").strip()
+            return True, context or "Feedback synced."
+        return False, f"Sync failed ({r.status_code}): {r.text[:200]}"
+    except Exception as exc:
+        return False, f"Sync request failed: {exc}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE BOOTSTRAP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -440,6 +475,7 @@ def _init_session():
         "active_tab":     "Pipeline Layers",
         "hunt_running":   False,
         "admin_unlocked": False,
+        "admin_auth":     False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -913,11 +949,13 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
     ]
     st.caption(f"Showing {len(filtered)} / {len(jobs)} jobs")
 
-    for job in filtered[:40]:
+    for idx, job in enumerate(filtered[:40], start=1):
         score = job.get("score", 0)
         score_c = "green" if score >= 0.7 else ("orange" if score >= 0.45 else "")
         remote_b = "🌐 Remote" if job.get("remote") else f"📍 {job.get('location','')}"
         why = ", ".join(job.get("matched_skills", [])[:4]) or "Keyword overlap + semantic fit"
+        job_id = str(job.get("id") or job.get("job_id") or job.get("url") or f"job_{idx}")
+        comment_key = f"job_feedback_comment_{job_id}"
         st.markdown(f"""
         <div class="job-row">
             <div>
@@ -938,6 +976,21 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
             </div>
         </div>
         """, unsafe_allow_html=True)
+        st.text_input(
+            f"Comment for {job_id}",
+            key=comment_key,
+            label_visibility="collapsed",
+            placeholder="Optional note for why you like/dislike this role",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("👍", key=f"job_like_{job_id}", use_container_width=True):
+                ok, msg = _api_post_job_feedback(api_base, run_id, job_id, 1, st.session_state.get(comment_key, ""))
+                (st.success if ok else st.error)(msg)
+        with c2:
+            if st.button("👎", key=f"job_dislike_{job_id}", use_container_width=True):
+                ok, msg = _api_post_job_feedback(api_base, run_id, job_id, -1, st.session_state.get(comment_key, ""))
+                (st.success if ok else st.error)(msg)
 
 
 
@@ -1230,7 +1283,9 @@ def render_admin_analytics(status: Optional[dict]) -> None:
     })
     st.code(
         (feedback_loop.get("self_learning_prompt"))
+        or feedback_loop.get("self_learning_context")
         or status.get("self_learning_prompt")
+        or status.get("self_learning_context")
         or "No self-learning prompt generated yet.",
         language="markdown",
     )
@@ -1425,7 +1480,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.divider()
         st.caption("ADMIN LOGIN")
         supplied = st.text_input("Admin password", value="", type="password", key="admin_password_input")
-        st.session_state["admin_unlocked"] = bool(admin_secret) and supplied == admin_secret
+        st.session_state["admin_auth"] = bool(admin_secret) and supplied == admin_secret
+        st.session_state["admin_unlocked"] = st.session_state["admin_auth"]
         if admin_secret:
             if st.session_state["admin_unlocked"]:
                 st.success("Admin analytics unlocked.")
@@ -1475,25 +1531,20 @@ def main():
     run_state  = (status or {}).get("status", "idle")
     state_cls  = f"run-status {run_state}" if run_state in ("running","completed","error","pending_human_input") else "run-status"
 
-    hcol1, hcol2 = st.columns([8, 2])
-    with hcol1:
-        st.markdown(f"""
-        <h2 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#1B263B">
-            🎯 CareerAgent-AI — Mission Control
-        </h2>
-        <div style="font-size:12px;color:#5C677D">{run_label}</div>
-        """, unsafe_allow_html=True)
-    with hcol2:
-        st.markdown(f"""
-        <div style="text-align:right;padding-top:10px">
-            <span class="{state_cls}">{'— Idle' if run_state == 'idle' else ('Pending Human Input' if run_state in ('pending_human_input','needs_human_approval') else run_state.title())}</span>
-        </div>
-        """, unsafe_allow_html=True)
-        langsmith = (status or {}).get("langsmith", {}) if status else {}
-        fallback_url = f"https://smith.langchain.com/o/default/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
-        if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
-            link = langsmith.get("dashboard_url") or fallback_url
-            st.markdown(f"[🧭 LangSmith dashboard]({link})")
+    st.markdown(f"""
+    <h2 style="margin:0 0 4px;font-size:22px;font-weight:700;color:#1B263B">
+        🎯 CareerAgent-AI — Mission Control
+    </h2>
+    <div style="font-size:12px;color:#5C677D">{run_label}</div>
+    <div style="padding-top:10px">
+        <span class="{state_cls}">{'— Idle' if run_state == 'idle' else ('Pending Human Input' if run_state in ('pending_human_input','needs_human_approval') else run_state.title())}</span>
+    </div>
+    """, unsafe_allow_html=True)
+    langsmith = (status or {}).get("langsmith", {}) if status else {}
+    fallback_url = f"https://smith.langchain.com/o/default/projects/p/{langsmith.get('project') or 'careeragent-ai'}"
+    if langsmith.get("enabled") and (langsmith.get("dashboard_url") or langsmith.get("project")):
+        link = langsmith.get("dashboard_url") or fallback_url
+        st.markdown(f"[🧭 LangSmith dashboard]({link})")
 
     st.markdown("<hr style='border:none;border-top:1px solid #1e1e2e;margin:12px 0'>", unsafe_allow_html=True)
 
@@ -1513,83 +1564,98 @@ def main():
         "🎓  Learning Center",
         "📊  Analytics",
     ]
-    show_admin = bool(st.session_state.get("admin_unlocked"))
+    show_admin = bool(st.session_state.get("admin_auth"))
     if show_admin:
         tab_labels.append("🛡️  Executive Analytics")
-    tabs = st.tabs(tab_labels)
-    tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
+    try:
+        tabs = st.tabs(tab_labels)
+        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
 
-    with tab_summary:
-        render_executive_summary(status)
+        with tab_summary:
+            render_executive_summary(status)
 
-    with tab_pipeline:
-        st.markdown('<div class="section-header">Layer Details — click to expand</div>',
-                    unsafe_allow_html=True)
+        with tab_pipeline:
+            st.markdown('<div class="section-header">Layer Details — click to expand</div>',
+                        unsafe_allow_html=True)
 
-        running_layer = next(
-            (i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None
-        )
-        for ld in LAYERS:
-            layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
-            # Auto-expand the currently-running layer
-            is_expanded = (ld["id"] == running_layer)
-            render_layer_card(ld, layer_state, expanded=is_expanded)
+            running_layer = next(
+                (i for i, ls in enumerate(layers_data) if ls.get("status") == "running"), None
+            )
+            for ld in LAYERS:
+                layer_state = layers_data[ld["id"]] if layers_data else {"status": "waiting"}
+                is_expanded = (ld["id"] == running_layer)
+                render_layer_card(ld, layer_state, expanded=is_expanded)
 
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        render_agent_feed(status)
-        render_hitl_controls(api_base, run_id, status)
-        render_stepwise_details(status)
-        render_json_downloads(status)
-        with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
-            st.json(status or {"info": "No run status yet"})
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            render_agent_feed(status)
+            render_hitl_controls(api_base, run_id, status)
+            render_stepwise_details(status)
+            render_json_downloads(status)
+            with st.expander("🧠 Full run JSON / tools / API traces", expanded=False):
+                st.json(status or {"info": "No run status yet"})
 
-    with tab_jobs:
-        render_job_board(api_base, run_id, status)
+        with tab_jobs:
+            render_job_board(api_base, run_id, status)
 
-    with tab_match:
-        render_match_analysis(status)
+        with tab_match:
+            render_match_analysis(status)
 
-    with tab_learn:
-        if not status or status.get("progress_pct", 0) < 50:
-            st.markdown("""
-            <div class="empty-state">
-                <div class="empty-icon">🎓</div>
-                <div class="empty-title">Learning Center</div>
-                <div class="empty-sub">Personalized career coaching appears after pipeline completes</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            skills = status.get("profile", {}).get("skills", []) if isinstance(status.get("profile"), dict) else []
-            st.markdown(f"""
-            <div style="color:#c9d1d9">
-                <h4 style="color:#1B263B">Skills Profile</h4>
-                <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
-            </div>
-            """, unsafe_allow_html=True)
+        with tab_learn:
+            if not status or status.get("progress_pct", 0) < 50:
+                st.markdown("""
+                <div class="empty-state">
+                    <div class="empty-icon">🎓</div>
+                    <div class="empty-title">Learning Center</div>
+                    <div class="empty-sub">Personalized career coaching appears after pipeline completes</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                skills = status.get("profile", {}).get("skills", []) if isinstance(status.get("profile"), dict) else []
+                st.markdown(f"""
+                <div style="color:#c9d1d9">
+                    <h4 style="color:#1B263B">Skills Profile</h4>
+                    <p>{', '.join(skills[:15]) if skills else 'Run pipeline to extract skills'}</p>
+                </div>
+                """, unsafe_allow_html=True)
 
-    with tab_analytics:
-        render_analytics(status)
+        with tab_analytics:
+            render_analytics(status)
 
-    if show_admin:
-        with tabs[6]:
-            if st.session_state.get("run_id"):
-                st.markdown("#### Admin feedback intake")
-                with st.form("beta_feedback_form", clear_on_submit=True):
-                    rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
-                    improve_text = st.text_area(
-                        "What should we improve?",
-                        height=120,
-                        key="beta_feedback_text",
-                        placeholder="Tell us what felt broken, confusing, or missing.",
-                    )
-                    submit_feedback = st.form_submit_button("Send beta feedback")
-                if submit_feedback:
-                    if not improve_text.strip():
-                        st.warning("Please include a short note before submitting feedback.")
+        if show_admin:
+            with tabs[6]:
+                if st.session_state.get("run_id"):
+                    st.markdown("#### Admin feedback intake")
+                    with st.form("beta_feedback_form", clear_on_submit=True):
+                        rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+                        improve_text = st.text_area(
+                            "What should we improve?",
+                            height=120,
+                            key="beta_feedback_text",
+                            placeholder="Tell us what felt broken, confusing, or missing.",
+                        )
+                        submit_feedback = st.form_submit_button("Send beta feedback")
+                    if submit_feedback:
+                        if not improve_text.strip():
+                            st.warning("Please include a short note before submitting feedback.")
+                        else:
+                            ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                            (st.success if ok else st.error)(msg)
+
+                    feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
+                    st.markdown("#### Persisted job feedback review")
+                    if feedback_rows:
+                        st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
                     else:
-                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                        st.caption("No persisted feedback rows yet.")
+
+                    if st.button("Sync Feedback to Agent Brain", key="sync_feedback_agent_brain"):
+                        ok, msg = _api_sync_feedback(api_base, st.session_state["run_id"])
                         (st.success if ok else st.error)(msg)
-            render_admin_analytics(status)
+                render_admin_analytics(status)
+    except Exception as exc:
+        st.error(f"Mission Control recovered from a tab rendering error: {exc}")
+        render_executive_summary(status)
+        render_job_board(api_base, run_id, status)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     if st.session_state.get("live_update") and run_id:
