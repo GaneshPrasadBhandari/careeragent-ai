@@ -354,7 +354,10 @@ Job:
 
 async def _cognitive_reason_job(job: dict, profile: dict) -> dict:
     loop = asyncio.get_running_loop()
-    verdict = await loop.run_in_executor(_REASONING_POOL, _llm_cognitive_verdict, job, profile)
+    try:
+        verdict = await loop.run_in_executor(_REASONING_POOL, _llm_cognitive_verdict, job, profile)
+    except Exception:
+        verdict = _heuristic_cognitive_verdict(job, profile)
     return {**job, "cognitive_decision": verdict}
 
 
@@ -719,26 +722,23 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
 
     ranked = sorted(
         deduped,
-        key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("interview_probability_percent") or 0.0), float(j.get("cognitive_score") or 0.0), float(j.get("score") or 0.0)),
+        key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("interview_probability_percent") or 0.0), max(float(j.get("cognitive_score") or 0.0), float(j.get("score") or 0.0))),
         reverse=True,
     )
+    target = max(1, int(math.ceil(len(ranked) * 0.88)))
     cognitive_yes = [j for j in ranked if bool((j.get("cognitive_decision") or {}).get("approved"))]
-    if cognitive_yes:
-        return cognitive_yes
+    strict = [j for j in ranked if max(float(j.get("score") or 0.0), float(j.get("cognitive_score") or 0.0)) >= float(threshold)]
 
-    above_half = [j for j in ranked if float(j.get("score") or 0.0) > 0.5]
-    must_keep = max(1, int(math.ceil(len(above_half) * 0.8))) if above_half else 0
-    strict = [j for j in ranked if float(j.get("score") or 0.0) >= float(threshold)]
-    if strict:
-        target = max(len(strict), must_keep, int(round(len(ranked) * 0.8)))
-    else:
-        target = max(1, must_keep, int(round(len(ranked) * 0.8)))
-
-    top_score = float(ranked[0].get("score") or 0.0)
-    soft_floor = max(float(threshold) - 0.1, top_score * 0.76, 0.5 if above_half else 0.42)
-    widened = [j for j in ranked if float(j.get("score") or 0.0) >= soft_floor]
-    selected = widened[:target] if widened else ranked[:target]
-    return selected[: max(target, must_keep)]
+    selected: list[dict] = []
+    selected.extend(cognitive_yes)
+    for pool in (strict, ranked):
+        for job in pool:
+            key = str(job.get("direct_job_url") or job.get("url") or job.get("id") or "")
+            if key and all(str(existing.get("direct_job_url") or existing.get("url") or existing.get("id") or "") != key for existing in selected):
+                selected.append(job)
+            if len(selected) >= target:
+                return selected[:target]
+    return selected[:target] if selected else ranked[:target]
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
     profile_skills = {str(x).strip().lower() for x in (profile.get("skills") or []) if str(x).strip()}
@@ -800,13 +800,15 @@ async def _rerun_from_l4_l5(run_id: str) -> None:
     _layer_running(state, 4, f"Re-scoring {state.get('jobs_discovered', 0)} jobs after profile update…", tools_used=["matcher", "scorer"], attempt_count=1)
     scored = state.get("job_leads", []) or []
     scored = _apply_frontend_filters(scored, state.get("config", {}))
+    if not scored:
+        scored = _stub_score(state.get("job_leads") or [])
     scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
     scored = await _apply_cognitive_reasoning(scored, state.get("profile") or {})
     scored = sorted(scored, key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("score") or 0.0)), reverse=True)
     scored = _augment_scored_jobs(scored, state.get("profile") or {})
     state["scored_jobs"] = scored
     state["jobs_scored"] = len(scored)
-    top_score = max((float(j.get("score") or 0.0) for j in scored), default=0.0)
+    top_score = max((max(float(j.get("score") or 0.0), float(j.get("cognitive_score") or 0.0)) for j in scored), default=0.0)
     state["top_match_score"] = round(top_score * 100, 1)
     state.setdefault("layer_debug", {})["L4"] = {
         "threshold": threshold,
@@ -1299,13 +1301,15 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
             threshold = 0.45
 
         scored = _apply_frontend_filters(scored, state["config"])
+        if not scored:
+            scored = _stub_score(state.get("job_leads") or [])
         scored = _hybrid_enrich_scores(scored, state.get("profile") or {})
         scored = await _apply_cognitive_reasoning(scored, state.get("profile") or {})
         scored = sorted(scored, key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("score") or 0.0)), reverse=True)
         scored = _augment_scored_jobs(scored, state.get("profile") or {})
         state["scored_jobs"]     = scored
         state["jobs_scored"]     = len(scored)
-        top_score = max((j.get("score", 0) for j in scored), default=0)
+        top_score = max((max(float(j.get("score") or 0.0), float(j.get("cognitive_score") or 0.0)) for j in scored), default=0.0)
         state["layer_debug"]["L4"] = {
             "threshold": threshold,
             "top_jobs": sorted(scored, key=lambda j: j.get("score", 0), reverse=True)[:5],
@@ -1558,8 +1562,26 @@ def _extract_profile_from_text(text: str) -> dict:
         experience.append({"title": role.strip(), "years": years, "start": start, "end": end_s})
 
     if not experience:
+        fallback_titles: list[str] = []
+        exp_section = False
+        for line in lines:
+            low = line.lower()
+            if "professional experience" in low:
+                exp_section = True
+                continue
+            if exp_section and any(stop in low for stop in ("notable projects", "professional affiliations", "publications", "education")):
+                break
+            if not exp_section:
+                continue
+            if len(line) > 80 or any(ch in line.lower() for ch in ("@", "http://", "https://")):
+                continue
+            if re.search(r"(architect|scientist|lead|manager|engineer|consultant)", line, re.I):
+                fallback_titles.append(line.strip("•	 -"))
         yoe = re.search(r"(\d+)\+?\s*years?\s+(?:of\s+)?experience", text, re.I)
-        if yoe:
+        inferred_years = int(yoe.group(1)) if yoe else 0
+        if fallback_titles:
+            experience = [{"title": title, "years": inferred_years or 4} for title in list(dict.fromkeys(fallback_titles))[:8]]
+        elif yoe:
             experience = [{"title": "Software Professional", "years": int(yoe.group(1))}]
 
     education = []
@@ -1592,9 +1614,47 @@ def _extract_profile_from_text(text: str) -> dict:
     }
 
 
+def _is_generic_target_role(role: str) -> bool:
+    low = str(role or "").strip().lower()
+    return low in {"software engineer", "engineer", "developer", "software developer", "software architect"}
+
+
+def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[str]:
+    requested = [str(r).strip() for r in (config_roles or []) if str(r).strip()]
+    if requested and not all(_is_generic_target_role(r) for r in requested):
+        return requested
+
+    exp_titles = [str((item or {}).get("title") or "").strip() for item in (profile.get("experience") or []) if isinstance(item, dict)]
+    skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
+    inferred: list[str] = []
+    inferred.extend([title for title in exp_titles if title])
+
+    ai_signal = any(tok in skills for tok in {"machine learning", "tensorflow", "azure openai", "llm", "ai architect", "solution architect", "deep learning"})
+    if ai_signal:
+        inferred.extend([
+            "Senior Solution Architect",
+            "AI Solution Architect",
+            "Generative AI Architect",
+            "Lead Data Scientist",
+            "Principal AI Engineer",
+            "Machine Learning Architect",
+        ])
+
+    normalized: list[str] = []
+    seen = set()
+    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer"]:
+        role = re.sub(r"\s+", " ", str(role or "")).strip()
+        if role and role.lower() not in seen:
+            seen.add(role.lower())
+            normalized.append(role)
+        if len(normalized) >= 8:
+            break
+    return normalized or ["AI Engineer", "Machine Learning Engineer"]
+
+
 @traceable(name="api.build_intent")
 def _build_intent(profile: dict, config: dict) -> dict:
-    roles = config.get("target_roles") or ["AI Engineer", "Machine Learning Engineer"]
+    roles = _infer_target_roles(profile, config.get("target_roles"))
 
     # Pass ALL skills, not just 8 — LeadScout needs these for multi-query bucketing
     all_skills = profile.get("skills", [])
@@ -1651,6 +1711,8 @@ def _stub_leads(profile: dict, max_jobs: int = 100) -> list[dict]:
         base = dict(seed_jobs[idx % len(seed_jobs)])
         base["id"] = f"{base['id']}_{idx+1:03d}"
         base["posted_hours_ago"] = (idx % 72) + 1
+        base["url"] = sanitize_job_url(f"{base['url']}&job_stub_id={idx+1:03d}")
+        base["direct_job_url"] = base["url"]
         expanded.append(base)
     return expanded
 
