@@ -43,12 +43,82 @@ def _inject_css() -> None:
     st.markdown("""
     <style>
     /* ── Global ── */
-    html, body, [class*="css"] {
+    html, body {
         font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
         background-color: #F8F9FA;
         color: #1B263B;
     }
-    .stApp { background-color: #F8F9FA; }
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"] {
+        background-color: #F8F9FA;
+        color: #1B263B;
+    }
+    .stApp * {
+        font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+    }
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 1.25rem;
+        padding-bottom: 2rem;
+    }
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stText"],
+    [data-testid="stCaptionContainer"],
+    .stMarkdown,
+    .stText,
+    .stCaption,
+    p, li, label, span, div {
+        color: #1B263B;
+    }
+
+    /* ── Main content cards / containers ── */
+    [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stExpander"],
+    [data-testid="stMetric"],
+    [data-testid="stAlert"] {
+        color: #1B263B;
+    }
+
+    /* ── Tabs ── */
+    [data-testid="stTabs"] button[role="tab"] {
+        color: #5C677D !important;
+        background: transparent !important;
+        border-bottom: 2px solid transparent !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+        color: #FF4B4B !important;
+        border-bottom-color: #FF4B4B !important;
+    }
+    [data-testid="stTabs"] button[role="tab"] p,
+    [data-testid="stTabs"] button[role="tab"] span,
+    [data-testid="stTabs"] button[role="tab"] div {
+        color: inherit !important;
+        opacity: 1 !important;
+    }
+
+    /* ── Inputs / widgets in main area ── */
+    [data-testid="stTextInput"] label,
+    [data-testid="stTextArea"] label,
+    [data-testid="stSelectbox"] label,
+    [data-testid="stSlider"] label,
+    [data-testid="stCheckbox"] label,
+    [data-testid="stRadio"] label,
+    [data-testid="stFileUploader"] label,
+    [data-testid="stMultiSelect"] label {
+        color: #1B263B !important;
+    }
+    .stTextInput input,
+    .stTextArea textarea,
+    .stSelectbox div[data-baseweb="select"] > div,
+    .stMultiSelect div[data-baseweb="select"] > div {
+        color: #1B263B !important;
+        background: #FFFFFF !important;
+    }
+    .stInfo, .stSuccess, .stWarning, .stError {
+        color: #1B263B !important;
+    }
 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {
@@ -1324,8 +1394,8 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
     with st.sidebar:
         st.markdown("""
         <div style="padding:12px 0 20px">
-            <div style="font-size:18px;font-weight:700;color:#1B263B">🎯 CareerAgent-AI</div>
-            <div style="font-size:12px;color:#5C677D;margin-top:2px">Autonomous Job Hunt Engine</div>
+            <div style="font-size:18px;font-weight:700;color:#F8FAFC">🎯 CareerAgent-AI</div>
+            <div style="font-size:12px;color:#CBD5E1;margin-top:2px">Autonomous Job Hunt Engine</div>
         </div>
         """, unsafe_allow_html=True)
 
