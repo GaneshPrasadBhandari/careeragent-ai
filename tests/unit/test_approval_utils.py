@@ -44,3 +44,18 @@ def test_qualified_from_state_fallback_order() -> None:
         "scored_jobs": [{"id": "s1"}, {"id": "s2"}, {"id": "s3"}],
     }
     assert qualified_from_state(state) == [{"id": "s1"}, {"id": "s2"}, {"id": "s3"}]
+
+
+def test_pick_approved_jobs_matches_q_redirect_and_application_url_shapes() -> None:
+    ranked = [
+        {
+            "id": "a3",
+            "redirect_url": "https://jobs.example.com/out?q=https%3A%2F%2Fboards.greenhouse.io%2Facme%2Fjobs%2F789%3Fgh_src%3Dtracker",
+            "application_url": "www.boards.greenhouse.io/acme/jobs/789?utm_source=tracker",
+            "title": "ML Engineer",
+            "company": "Acme",
+        }
+    ]
+
+    approved = pick_approved_jobs(ranked, ["https://boards.greenhouse.io/acme/jobs/789"])
+    assert approved[0]["id"] == "a3"
