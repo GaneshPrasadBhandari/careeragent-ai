@@ -836,19 +836,26 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
         source_targets[source] = source_targets.get(source, 0)
 
     selected: list[dict] = []
-    target = min(len(ranked), max(8, int(math.ceil(len(ranked) * 0.85)))) if ranked else 0
+    target_floor = 70 if len(ranked) >= 80 else 20 if len(ranked) >= 20 else 8
+    target = min(len(ranked), max(target_floor, int(math.ceil(len(ranked) * 0.85)))) if ranked else 0
     top_score = max((max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0)) for job in ranked), default=0.0)
     strong_cutoff = max(0.40, min(float(threshold), 0.58))
     if top_score >= 0.85:
         strong_cutoff = min(strong_cutoff, top_score - 0.18)
-    per_source_cap = max(6, int(math.ceil(max(1, target) * 0.55)))
+    per_source_cap = max(10, int(math.ceil(max(1, target) * 0.70)))
     remaining: list[dict] = []
     for job in ranked:
         score = max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0))
         lexical = float(job.get("keyword_score") or 0.0)
         semantic = float(job.get("semantic_score") or 0.0)
+        cognitive_score = float(job.get("cognitive_score") or 0.0)
         cognitive_yes = bool((job.get("cognitive_decision") or {}).get("approved"))
         interview = float(job.get("interview_probability_percent") or 0.0)
+        if cognitive_score > 0.6:
+            selected.append({**job, "ranking_gate_override": "cognitive_score>0.6"})
+            if len(selected) >= target:
+                break
+            continue
         if score < strong_cutoff:
             remaining.append(job)
             continue
@@ -1617,7 +1624,7 @@ def _build_cover_letter_text(profile: dict, job: dict) -> str:
     phone = str(profile.get("phone") or "")
     skills = [str(s).strip() for s in (profile.get("skills") or []) if str(s).strip()]
     top_skills = ", ".join(skills[:8]) if skills else "AI/ML engineering, cloud architecture, and delivery leadership"
-    summary = str(profile.get("summary") or "I build production-ready AI systems with measurable business outcomes.")
+    summary = _sanitize_profile_summary(profile.get("summary") or "I build production-ready AI systems with measurable business outcomes.")
 
     experience_items = [str(x).strip() for x in (profile.get("experience") or []) if str(x).strip()]
     projects = [str(x).strip() for x in (profile.get("projects") or []) if str(x).strip()]
@@ -1673,6 +1680,18 @@ async def _parse_resume(resume_path: Path) -> dict:
         text = resume_path.read_text(errors="replace")
 
     return _extract_profile_from_text(text)
+
+
+def _sanitize_profile_summary(raw_summary: str) -> str:
+    summary = str(raw_summary or "")
+    summary = re.sub(r"https?://\S+", " ", summary)
+    summary = re.sub(r"\b(?:linkedin|github|portfolio|demo)\s*:\s*", " ", summary, flags=re.I)
+    summary = re.sub(r"[\#*_`]+", " ", summary)
+    summary = re.sub(r"\|", " • ", summary)
+    summary = re.sub(r"\b[\w.+-]+@[\w-]+\.\w+\b", " ", summary)
+    summary = re.sub(r"\+?\d[\d\s().-]{8,}\d", " ", summary)
+    summary = re.sub(r"\s+", " ", summary).strip(" ,;:-•")
+    return summary[:500]
 
 
 def _extract_profile_from_text(text: str) -> dict:
@@ -1738,12 +1757,24 @@ def _extract_profile_from_text(text: str) -> dict:
 
     projects = []
     for m in re.finditer(r"(?:project|projects)[:\-]?\s*([^\n]{8,140})", text, re.I):
-        val = m.group(1).strip(" .-")
+        val = re.sub(r"^[#*\-\s]+", "", m.group(1)).strip(" .-")
         if len(val) >= 8:
             projects.append(val)
     projects = list(dict.fromkeys(projects))[:8]
 
-    summary = " ".join(lines[1:5]) if len(lines) > 1 else text[:300]
+    summary_lines = []
+    for line in lines[1:12]:
+        low = line.lower()
+        if any(token in low for token in ("linkedin", "github", "portfolio", "demo", "http://", "https://", "@")):
+            continue
+        if re.fullmatch(r"[+()\d\s.-]{10,}", line):
+            continue
+        if len(line.split()) < 3:
+            continue
+        summary_lines.append(line)
+        if len(summary_lines) >= 3:
+            break
+    summary = _sanitize_profile_summary(" ".join(summary_lines) if summary_lines else text[:300])
 
     total_years = sum(int(e.get("years") or 0) for e in experience)
 
@@ -1756,7 +1787,7 @@ def _extract_profile_from_text(text: str) -> dict:
         "education": education,
         "projects": projects,
         "total_years_experience": total_years,
-        "summary": summary[:500],
+        "summary": summary,
         "raw_text": text[:6000],
     }
 
@@ -1769,12 +1800,23 @@ def _is_generic_target_role(role: str) -> bool:
 def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[str]:
     requested = [str(r).strip() for r in (config_roles or []) if str(r).strip()]
     if requested and not all(_is_generic_target_role(r) for r in requested):
-        return requested
+        requested = requested + ["Staff Engineer", "Architect", "Data Science Lead"]
+        normalized: list[str] = []
+        seen = set()
+        for role in requested:
+            role = re.sub(r"\s+", " ", str(role or "")).strip()
+            if role and role.lower() not in seen:
+                seen.add(role.lower())
+                normalized.append(role)
+            if len(normalized) >= 10:
+                break
+        return normalized
 
     exp_titles = [str((item or {}).get("title") or "").strip() for item in (profile.get("experience") or []) if isinstance(item, dict)]
     skills = {str(s).strip().lower() for s in (profile.get("skills") or []) if str(s).strip()}
     inferred: list[str] = []
     inferred.extend([title for title in exp_titles if title])
+    inferred.extend(["Staff Engineer", "Architect", "Data Science Lead"])
 
     ai_signal = any(tok in skills for tok in {"machine learning", "tensorflow", "azure openai", "llm", "ai architect", "solution architect", "deep learning"})
     if ai_signal:
@@ -1789,14 +1831,14 @@ def _infer_target_roles(profile: dict, config_roles: list[str] | None) -> list[s
 
     normalized: list[str] = []
     seen = set()
-    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer"]:
+    for role in inferred + requested + ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]:
         role = re.sub(r"\s+", " ", str(role or "")).strip()
         if role and role.lower() not in seen:
             seen.add(role.lower())
             normalized.append(role)
-        if len(normalized) >= 8:
+        if len(normalized) >= 10:
             break
-    return normalized or ["AI Engineer", "Machine Learning Engineer"]
+    return normalized or ["AI Engineer", "Machine Learning Engineer", "Staff Engineer", "Architect", "Data Science Lead"]
 
 
 @traceable(name="api.build_intent")
@@ -2024,7 +2066,7 @@ def _build_resume_markdown(profile: dict, keyword_hints: list[str]) -> str:
         exp_lines = ["- 16+ years delivering AI/ML platforms, cloud-native systems, and data operations at enterprise scale."]
 
     edu_lines = [f"- {e}" for e in (profile.get("education") or [])[:4]] or ["- Education details available"]
-    summary = profile.get("summary", "Principal-level technical architect with 16+ years building resilient, measurable software platforms.")
+    summary = _sanitize_profile_summary(profile.get("summary", "Principal-level technical architect with 16+ years building resilient, measurable software platforms."))
 
     resume_md = (
         f"# {profile.get('name','Candidate')}\n"
@@ -2282,7 +2324,7 @@ async def get_status(run_id: str):
         "evaluations":      state.get("evaluations", [])[-50:],
         "raw_job_leads_preview": state.get("job_leads", [])[:25],
         "scored_jobs_preview": state.get("scored_jobs", [])[:25],
-        "approved_jobs_preview": state.get("approved_jobs", [])[:25],
+        "approved_jobs_preview": state.get("approved_jobs", [])[:50],
         "resume_scores":    state.get("resume_scores", {}),
         "agent_log":        state["agent_log"][-30:],  # last 30 entries
         "errors":           state["errors"],
@@ -2328,9 +2370,10 @@ async def post_feedback(run_id: str, body: dict):
     if run_id not in _runs:
         raise HTTPException(404, f"Run {run_id} not found")
     state = _runs[run_id]
-    if not str((body or {}).get("text") or "").strip():
-        raise HTTPException(400, "feedback text is required")
-    event = _record_feedback_event(state, body or {})
+    payload = dict(body or {})
+    if not str(payload.get("text") or payload.get("comment") or "").strip():
+        payload["text"] = "No comment"
+    event = _record_feedback_event(state, payload)
     feedback_file = LOGS_DIR / f"feedback_{run_id}.jsonl"
     with feedback_file.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
