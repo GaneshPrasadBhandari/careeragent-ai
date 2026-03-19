@@ -1,65 +1,171 @@
-"""Lightweight fallback shim for environments without pydantic installed.
-This implements only the minimal subset used in unit tests.
+"""Compatibility bridge for :mod:`pydantic`.
+
+This package name exists locally only to keep constrained environments working.
+When a real third-party `pydantic` installation is available, load that package
+instead of shadowing it from `src/`. Fall back to a lightweight shim only when
+the dependency is genuinely unavailable.
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import Any, Callable
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import sys
+from typing import Any
 
 
-@dataclass
-class _FieldSpec:
-    default: Any = None
-    default_factory: Callable[[], Any] | None = None
+def _path_without_local_src() -> list[str]:
+    here = Path(__file__).resolve()
+    src_dir = here.parents[1]
+    repo_dir = src_dir.parent
+
+    filtered: list[str] = []
+    for entry in sys.path:
+        try:
+            resolved = Path(entry or ".").resolve()
+        except Exception:
+            filtered.append(entry)
+            continue
+        if resolved in {src_dir, repo_dir}:
+            continue
+        filtered.append(entry)
+    return filtered
 
 
-def Field(default: Any = None, default_factory: Callable[[], Any] | None = None, **_: Any) -> Any:
-    return _FieldSpec(default=default, default_factory=default_factory)
+def _load_real_pydantic() -> bool:
+    spec = importlib.machinery.PathFinder.find_spec("pydantic", _path_without_local_src())
+    if spec is None or spec.loader is None or spec.origin is None:
+        return False
+    if Path(spec.origin).resolve() == Path(__file__).resolve():
+        return False
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[__name__] = module
+    spec.loader.exec_module(module)
+    globals().update(module.__dict__)
+    return True
 
 
-def ConfigDict(**kwargs: Any) -> dict[str, Any]:
-    """Compatibility shim for pydantic v2 ConfigDict."""
-    return dict(kwargs)
+if not _load_real_pydantic():
+    class _FieldSpec:
+        def __init__(self, default: Any = ..., default_factory: Any = None):
+            self.default = default
+            self.default_factory = default_factory
 
 
-class BaseModel:
-    def __init__(self, **data: Any) -> None:
-        annotations = getattr(self.__class__, "__annotations__", {})
-        for key in annotations:
-            if key in data:
-                setattr(self, key, data[key])
-                continue
-            raw = getattr(self.__class__, key, None)
-            if isinstance(raw, _FieldSpec):
-                if raw.default_factory is not None:
-                    setattr(self, key, raw.default_factory())
+    class _PrivateAttrSpec:
+        def __init__(self, default: Any = ..., default_factory: Any = None):
+            self.default = default
+            self.default_factory = default_factory
+
+
+    def Field(default: Any = ..., *, default_factory: Any = None, **_: Any) -> Any:
+        return _FieldSpec(default=default, default_factory=default_factory)
+
+
+    def PrivateAttr(default: Any = ..., default_factory: Any = None) -> Any:
+        return _PrivateAttrSpec(default=default, default_factory=default_factory)
+
+
+    class ConfigDict(dict):
+        pass
+
+
+    class ValidationError(Exception):
+        pass
+
+
+    class BaseModel:
+        def __init__(self, **data: Any) -> None:
+            annotations = {}
+            for cls in reversed(self.__class__.mro()):
+                annotations.update(getattr(cls, "__annotations__", {}))
+
+            for name in annotations:
+                if name in data:
+                    value = data[name]
+                elif hasattr(self.__class__, name):
+                    raw = getattr(self.__class__, name)
+                    if isinstance(raw, _FieldSpec):
+                        if raw.default_factory is not None:
+                            value = raw.default_factory()
+                        elif raw.default is ...:
+                            value = None
+                        else:
+                            value = deepcopy(raw.default)
+                    else:
+                        value = deepcopy(raw)
                 else:
-                    setattr(self, key, deepcopy(raw.default))
+                    value = None
+                setattr(self, name, value)
+
+            for key, value in data.items():
+                if key not in annotations:
+                    setattr(self, key, value)
+
+            for cls in reversed(self.__class__.mro()):
+                for name, raw in vars(cls).items():
+                    if isinstance(raw, _PrivateAttrSpec) and not hasattr(self, name):
+                        if raw.default_factory is not None:
+                            value = raw.default_factory()
+                        elif raw.default is ...:
+                            value = None
+                        else:
+                            value = deepcopy(raw.default)
+                        setattr(self, name, value)
+
+        @classmethod
+        def model_validate(cls, data: Any):
+            if isinstance(data, cls):
+                return data
+            if not isinstance(data, dict):
+                raise TypeError("model_validate expects dict-like input")
+            return cls(**data)
+
+        def model_dump(self, mode: str | None = None) -> dict[str, Any]:
+            del mode
+
+            def _ser(v: Any) -> Any:
+                if isinstance(v, BaseModel):
+                    return v.model_dump()
+                if isinstance(v, list):
+                    return [_ser(x) for x in v]
+                if isinstance(v, tuple):
+                    return [_ser(x) for x in v]
+                if isinstance(v, dict):
+                    return {k: _ser(x) for k, x in v.items()}
+                return deepcopy(v)
+
+            return {k: _ser(v) for k, v in self.__dict__.items() if not k.startswith("_")}
+
+        def model_copy(self, *, deep: bool = False, update: dict[str, Any] | None = None):
+            payload = self.model_dump()
+            if update:
+                payload.update(update)
+            if deep:
+                payload = deepcopy(payload)
+            return self.__class__(**payload)
+
+        def dict(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            del args, kwargs
+            return self.model_dump()
+
+
+    def create_model(__model_name: str, __base__: type[BaseModel] | None = None, **field_definitions: Any):
+        base_cls = __base__ or BaseModel
+        annotations: dict[str, Any] = {}
+        attrs: dict[str, Any] = {}
+
+        for field_name, field_spec in field_definitions.items():
+            if isinstance(field_spec, tuple) and len(field_spec) == 2:
+                field_type, default = field_spec
             else:
-                setattr(self, key, deepcopy(raw))
+                field_type, default = field_spec, None
 
-    @classmethod
-    def model_validate(cls, value: Any):
-        if isinstance(value, cls):
-            return value
-        if isinstance(value, dict):
-            return cls(**value)
-        raise TypeError("model_validate expects instance or dict")
+            annotations[field_name] = field_type
+            attrs[field_name] = default
 
-    def model_dump(self) -> dict[str, Any]:
-        annotations = getattr(self.__class__, "__annotations__", {})
-        out: dict[str, Any] = {}
-        for key in annotations:
-            val = getattr(self, key)
-            if isinstance(val, BaseModel):
-                out[key] = val.model_dump()
-            elif isinstance(val, list):
-                out[key] = [x.model_dump() if isinstance(x, BaseModel) else x for x in val]
-            else:
-                out[key] = val
-        return out
-
-    def model_copy(self, deep: bool = False):
-        data = self.model_dump()
-        return self.__class__(**(deepcopy(data) if deep else data))
+        attrs["__annotations__"] = annotations
+        return type(__model_name, (base_cls,), attrs)
