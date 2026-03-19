@@ -129,7 +129,7 @@ def sanitize_job_url(url: str) -> str:
         host = (parts.netloc or "").lower()
         path = parts.path or ""
 
-        for key in ("url", "u", "redirect", "redirect_url", "dest", "destination", "target"):
+        for key in ("url", "u", "q", "redirect", "redirect_url", "dest", "destination", "target"):
             value = query.get(key, [""])[0]
             if value.startswith(("http://", "https://")):
                 return sanitize_job_url(unquote(value))
@@ -147,6 +147,28 @@ def sanitize_job_url(url: str) -> str:
     except Exception:
         return raw
 
+
+
+
+def _host_from_url(url: str) -> str:
+    host = (urlsplit(str(url or "")).netloc or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _url_allowed_for_region(url: str, region_code: str) -> bool:
+    host = _host_from_url(url)
+    if not host:
+        return False
+
+    region = str(region_code or "US").upper()
+    blocked_by_region = {
+        "US": ("naukri.com", "monsterindia.com", "foundit.in", "timesjobs.com", "shine.com", ".in"),
+        "EU": ("naukri.com", "monsterindia.com", "foundit.in", "timesjobs.com", "shine.com", ".in"),
+        "AU": ("naukri.com", "monsterindia.com", "foundit.in", "timesjobs.com", "shine.com", ".in"),
+        "UAE": ("naukri.com", "monsterindia.com", "foundit.in", "timesjobs.com", "shine.com", ".in"),
+    }
+    blocked = blocked_by_region.get(region, ())
+    return not any(host == token or host.endswith(token) for token in blocked)
 
 def infer_source_from_url(url: str) -> str:
     host = (urlsplit(str(url or "")).netloc or "").lower()
@@ -213,8 +235,12 @@ class LeadScoutService:
             log.info("  Query[%d]: %s", i, q)
 
         tasks = []
+        provider_region_map: dict[str, str] = {}
         for region in regions:
             providers = self._source_rotation_for_region(region)
+            region_code = str(region.get("code") or "US").upper()
+            for provider in providers:
+                provider_region_map[str(provider.get("label") or "").lower()] = region_code
             for query in queries:
                 for provider in providers:
                     tasks.append(self._search_serper_organic(query, region, remote, provider))
@@ -242,6 +268,10 @@ class LeadScoutService:
                 unique.append(lead)
 
         quota_targets = self._build_source_quota_targets(regions)
+        unique = [
+            lead for lead in unique
+            if _url_allowed_for_region(lead.url, provider_region_map.get((lead.source or "").lower(), "US"))
+        ]
         diversified = self._dedupe_similar_jobs(unique)
         diversified = self._enforce_source_quotas(diversified, quota_targets=quota_targets)
         self.last_search_telemetry = {
@@ -494,6 +524,7 @@ class LeadScoutService:
                 data = resp.json()
 
             leads = []
+            region_code = str(region.get("code") or "US").upper()
             for r in data.get("organic", []):
                 url   = r.get("link", "")
                 title = r.get("title", "")
@@ -504,6 +535,10 @@ class LeadScoutService:
                 if not any(d in url for d in site_domains):
                     continue
                 direct_url = sanitize_job_url(url)
+                if not _url_allowed_for_region(direct_url, region_code):
+                    continue
+                if _host_from_url(direct_url) in {"google.com", "googleusercontent.com"}:
+                    continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
@@ -543,6 +578,7 @@ class LeadScoutService:
                 data = resp.json()
 
             leads = []
+            region_code = str(region.get("code") or "US").upper()
             for r in data.get("results", []):
                 url   = r.get("url", "")
                 title = r.get("title", "")
@@ -553,6 +589,10 @@ class LeadScoutService:
                 if not any(d in url for d in site_domains):
                     continue
                 direct_url = sanitize_job_url(url)
+                if not _url_allowed_for_region(direct_url, region_code):
+                    continue
+                if _host_from_url(direct_url) in {"google.com", "googleusercontent.com"}:
+                    continue
                 leads.append(JobLead(
                     id          = re.sub(r"\W+", "_", title)[:40],
                     title       = title,
