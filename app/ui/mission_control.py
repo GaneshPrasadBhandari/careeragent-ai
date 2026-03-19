@@ -587,16 +587,43 @@ def _api_get_artifacts(api_base: str, run_id: str) -> dict:
 
 
 def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict] = None) -> bool:
-    try:
-        body = {"action": action, "action_type": action}
-        if payload:
-            body.update(payload)
-        r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
-        if r.status_code == 200:
-            return True
-        st.error(f"Action failed ({r.status_code}): {r.text[:200]}")
-    except Exception as exc:
-        st.error(f"Action request failed: {exc}")
+    body = {"action": action, "action_type": action}
+    if payload:
+        body.update(payload)
+
+    last_error = ""
+    for attempt in range(1, 4):
+        try:
+            r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/action", json=body, timeout=20)
+            if r.status_code == 200:
+                return True
+            last_error = f"Action failed ({r.status_code}): {r.text[:200]}"
+            if r.status_code not in {502, 503, 504}:
+                st.error(last_error)
+                return False
+            if attempt < 3:
+                time.sleep(1.0 * attempt)
+                continue
+        except Exception as exc:
+            last_error = f"Action request failed: {exc}"
+            if attempt < 3:
+                time.sleep(1.0 * attempt)
+                continue
+
+    status_after_failure = _api_get_status(api_base, run_id)
+    pending_after_failure = str((status_after_failure or {}).get("pending_action") or "").strip().lower()
+    run_state = str((status_after_failure or {}).get("status") or "").strip().lower()
+    if action == "approve_ranking" and pending_after_failure != "approve_ranking" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"}:
+        st.warning("Approve Ranked Jobs returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+        return True
+    if action == "approve_drafts" and pending_after_failure != "approve_drafts" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"}:
+        st.warning("Approve Drafts returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+        return True
+    if action == "approve_followups" and pending_after_failure != "approve_followups" and run_state in {"running", "completed"}:
+        st.warning("Approve Follow-ups returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+        return True
+
+    st.error(last_error or "Action request failed for an unknown reason.")
     return False
 
 
