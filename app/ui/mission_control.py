@@ -525,7 +525,8 @@ def _api_post_feedback(api_base: str, run_id: str, rating: int, text: str) -> tu
 
 def _api_post_feedback_event(api_base: str, run_id: str, *, source: str, rating: int, text: str, meta: Optional[dict] = None) -> tuple[bool, str]:
     try:
-        payload = {"source": source, "rating": int(rating), "text": text.strip(), "meta": meta or {}}
+        normalized_text = (text or "").strip() or "No comment"
+        payload = {"source": source, "rating": int(rating), "text": normalized_text, "meta": meta or {}}
         r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/feedback", json=payload, timeout=20)
         if r.status_code == 200:
             return True, "Feedback captured — thank you for helping improve the beta."
@@ -536,11 +537,13 @@ def _api_post_feedback_event(api_base: str, run_id: str, *, source: str, rating:
 
 def _api_post_job_feedback(api_base: str, run_id: str, job_id: str, rating: int, comment: str) -> tuple[bool, str]:
     try:
+        normalized_comment = comment.strip() or "No comment"
         payload = {
             "source": "user",
             "job_id": job_id,
             "rating": int(rating),
-            "comment": comment.strip() or ("Thumbs up" if int(rating) > 0 else "Thumbs down"),
+            "text": normalized_comment,
+            "comment": normalized_comment,
             "meta": {"job_id": job_id},
         }
         r = requests.post(f"{api_base.rstrip('/')}/hunt/{run_id}/feedback", json=payload, timeout=20)
@@ -1230,7 +1233,8 @@ def render_executive_summary(status: Optional[dict]) -> None:
 
     if deduped_jobs:
         st.markdown("#### Recommended jobs")
-        for idx, job in enumerate(deduped_jobs[:5], start=1):
+        recommended_limit = min(len(deduped_jobs), 20 if jobs_discovered >= 80 else 5)
+        for idx, job in enumerate(deduped_jobs[:recommended_limit], start=1):
             title = job.get("title", "Role")
             company = job.get("company", "Unknown company")
             summary = _compact_text(job.get("executive_summary") or job.get("match_explanation") or job.get("llm_reasoning") or "No summary available.", limit=220)
@@ -1527,7 +1531,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.caption("TARGET ROLES")
         roles_input = st.text_area(
             "Target Roles",
-            value="Software Engineer\nBackend Developer\nPlatform Engineer",
+            value="Software Engineer\nBackend Developer\nPlatform Engineer\nStaff Engineer\nArchitect\nData Science Lead",
             height=80,
             label_visibility="collapsed",
             help="One role per line",
@@ -1622,20 +1626,18 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                 )
                 sidebar_submit = st.form_submit_button("Send feedback")
             if sidebar_submit:
-                if not sidebar_text.strip():
-                    st.warning("Please write a short feedback note before sending.")
-                else:
-                    source_label = custom_source.strip() if sidebar_source == "Other" and custom_source.strip() else sidebar_source
-                    normalized_source = "employer" if sidebar_source == "Recruiter / Employer" else "user"
-                    ok, msg = _api_post_feedback_event(
-                        api_base,
-                        st.session_state["run_id"],
-                        source=normalized_source,
-                        rating=sidebar_rating,
-                        text=f"[{source_label}] {sidebar_text.strip()}",
-                        meta={"channel": source_label, "source_label": source_label},
-                    )
-                    (st.success if ok else st.error)(msg)
+                source_label = custom_source.strip() if sidebar_source == "Other" and custom_source.strip() else sidebar_source
+                normalized_source = "employer" if sidebar_source == "Recruiter / Employer" else "user"
+                body = sidebar_text.strip() or "No comment"
+                ok, msg = _api_post_feedback_event(
+                    api_base,
+                    st.session_state["run_id"],
+                    source=normalized_source,
+                    rating=sidebar_rating,
+                    text=f"[{source_label}] {body}",
+                    meta={"channel": source_label, "source_label": source_label},
+                )
+                (st.success if ok else st.error)(msg)
 
         st.divider()
 
@@ -1839,11 +1841,8 @@ def main():
                         )
                         submit_feedback = st.form_submit_button("Send beta feedback")
                     if submit_feedback:
-                        if not improve_text.strip():
-                            st.warning("Please include a short note before submitting feedback.")
-                        else:
-                            ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
-                            (st.success if ok else st.error)(msg)
+                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                        (st.success if ok else st.error)(msg)
 
                     feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
                     st.markdown("#### Persisted job feedback review")
