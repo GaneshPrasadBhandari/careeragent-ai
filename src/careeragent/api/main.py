@@ -263,16 +263,25 @@ def _llm_stack_snapshot() -> dict:
             "provider": "openai-compatible",
             "model": ats_model,
             "why": "Best quality/cost default for ATS resume + cover letter drafting.",
+            "options": [ats_model, "gpt-4.1-mini", "gpt-4o"],
         },
         "resume_parser": {
             "provider": "google",
             "model": parser_model,
             "why": "Fast extraction with robust structured parsing fallback.",
+            "options": [parser_model, "gemini-2.0-flash-lite", "gpt-4o-mini"],
         },
         "ranking_reasoner": {
             "provider": "anthropic-compatible",
             "model": reasoning_model,
             "why": "Strong long-context reasoning for match explanations.",
+            "options": [reasoning_model, "gemini-1.5-pro", "gpt-4.1"],
+        },
+        "evaluator_guardrails": {
+            "provider": "hybrid",
+            "model": reasoning_model,
+            "why": "Evaluator agents can fall back across reasoning, parser, and ATS-oriented models.",
+            "options": [reasoning_model, parser_model, ats_model],
         },
     }
 
@@ -749,7 +758,7 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
         job["missing_skills"] = align.missing_jd_skills[:25]
         job["jd_alignment_percent"] = align.jd_alignment_percent
         job["missing_skills_gap_percent"] = align.missing_skills_gap_percent
-        semantic_proxy = round(min(1.0, max(0.0, align.jd_alignment_percent / 100.0)), 4)
+        semantic_proxy = round(min(0.92, max(0.0, align.jd_alignment_percent / 100.0)), 4)
         lexical = float(job.get("score") or 0.0)
         title_bonus = 0.0
         title_low = str(job.get("title") or "").lower()
@@ -760,28 +769,28 @@ def _hybrid_enrich_scores(jobs: list[dict], profile: dict) -> list[dict]:
         if any(term in title_low for term in ("architect", "principal", "lead")) and any(
             term in profile_low for term in ("architect", "principal", "lead")
         ):
-            title_bonus = 0.08
+            title_bonus = 0.05
         equivalence_bonus = 0.0
         normalized_title = re.sub(r"[^a-z0-9+/ ]+", " ", title_low)
         normalized_title = re.sub(r"\s+", " ", normalized_title).strip()
         for family in role_equivalence_sets:
             if any(alias in normalized_title for alias in family) and any(alias in role_titles for alias in family):
-                equivalence_bonus = 0.12
+                equivalence_bonus = 0.08
                 break
         if equivalence_bonus == 0.0 and any(term in normalized_title for term in ("principal", "staff", "architect", "lead")):
             if any(term in role_titles for term in ("principal", "staff", "architect", "lead")):
-                equivalence_bonus = 0.08
+                equivalence_bonus = 0.05
         if equivalence_bonus == 0.0 and any(term in jd_text.lower() for term in ("llm", "genai", "machine learning", "artificial intelligence")):
             if any(term in profile_skills_blob for term in ("llm", "genai", "machine learning", "artificial intelligence", "ml", "ai")):
-                equivalence_bonus = 0.05
+                equivalence_bonus = 0.03
         high_match_floor = 0.0
-        if lexical >= 0.58 and semantic_proxy >= 0.52:
-            high_match_floor = 0.08
-        elif lexical >= 0.48 and semantic_proxy >= 0.45:
-            high_match_floor = 0.04
-        semantic_total = round(min(1.0, semantic_proxy + equivalence_bonus), 4)
-        cognitive_score = round(min(1.0, max(semantic_total, semantic_proxy) + equivalence_bonus + (title_bonus / 2.0)), 4)
-        hybrid = round(min(1.0, (0.42 * lexical) + (0.43 * semantic_proxy) + title_bonus + equivalence_bonus + high_match_floor), 4)
+        if lexical >= 0.68 and semantic_proxy >= 0.68:
+            high_match_floor = 0.03
+        elif lexical >= 0.58 and semantic_proxy >= 0.58:
+            high_match_floor = 0.015
+        semantic_total = round(min(0.96, semantic_proxy + equivalence_bonus), 4)
+        cognitive_score = round(min(0.97, (0.52 * semantic_total) + (0.28 * lexical) + equivalence_bonus + (title_bonus / 2.0)), 4)
+        hybrid = round(min(0.97, (0.40 * lexical) + (0.33 * semantic_proxy) + (0.19 * cognitive_score) + title_bonus + equivalence_bonus + high_match_floor), 4)
         job["keyword_score"] = lexical
         job["semantic_score"] = semantic_total
         job["cognitive_score"] = cognitive_score
@@ -800,12 +809,20 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
 
     deduped = []
     seen = set()
+    seen_identity = set()
     for job in scored:
         clean_url = sanitize_job_url(job.get("direct_job_url") or job.get("url") or job.get("redirect_url") or "")
+        identity = re.sub(
+            r"\s+",
+            " ",
+            f"{str(job.get('title') or '').lower()}|{str(job.get('company') or '').lower()}|{str(job.get('location') or '').lower()}",
+        ).strip()
         key = clean_url or str(job.get("id") or "")
-        if not key or key in seen:
+        if not key or key in seen or (identity and identity in seen_identity):
             continue
         seen.add(key)
+        if identity:
+            seen_identity.add(identity)
         deduped.append({**job, "url": clean_url, "direct_job_url": clean_url})
 
     ranked = sorted(
@@ -813,20 +830,36 @@ def _phase6_qualified_jobs(scored: list[dict], threshold: float) -> list[dict]:
         key=lambda j: (bool((j.get("cognitive_decision") or {}).get("approved")), float(j.get("interview_probability_percent") or 0.0), max(float(j.get("cognitive_score") or 0.0), float(j.get("score") or 0.0))),
         reverse=True,
     )
-    target = max(1, int(math.ceil(len(ranked) * 0.88)))
-    cognitive_yes = [j for j in ranked if bool((j.get("cognitive_decision") or {}).get("approved"))]
-    strict = [j for j in ranked if max(float(j.get("score") or 0.0), float(j.get("cognitive_score") or 0.0)) >= float(threshold)]
+    source_targets: dict[str, int] = {}
+    for job in ranked:
+        source = str(job.get("source") or "unknown").lower()
+        source_targets[source] = source_targets.get(source, 0)
 
     selected: list[dict] = []
-    selected.extend(cognitive_yes)
-    for pool in (strict, ranked):
-        for job in pool:
-            key = str(job.get("direct_job_url") or job.get("url") or job.get("id") or "")
-            if key and all(str(existing.get("direct_job_url") or existing.get("url") or existing.get("id") or "") != key for existing in selected):
-                selected.append(job)
-            if len(selected) >= target:
-                return selected[:target]
-    return selected[:target] if selected else ranked[:target]
+    target = min(max(6, int(math.ceil(len(ranked) * 0.25))), 20) if ranked else 0
+    strong_cutoff = max(float(threshold), 0.55)
+    for job in ranked:
+        score = max(float(job.get("score") or 0.0), float(job.get("cognitive_score") or 0.0))
+        lexical = float(job.get("keyword_score") or 0.0)
+        semantic = float(job.get("semantic_score") or 0.0)
+        cognitive_yes = bool((job.get("cognitive_decision") or {}).get("approved"))
+        if score < strong_cutoff:
+            continue
+        if lexical < 0.35 and semantic < 0.50:
+            continue
+        if not cognitive_yes and semantic < 0.55:
+            continue
+        source = str(job.get("source") or "unknown").lower()
+        if source_targets.get(source, 0) >= max(2, target // 3):
+            continue
+        selected.append(job)
+        source_targets[source] = source_targets.get(source, 0) + 1
+        if len(selected) >= target:
+            break
+
+    if not selected:
+        selected = ranked[: min(5, len(ranked))]
+    return selected
 
 def _gap_analysis(profile: dict, jobs: list[dict], *, threshold: float) -> dict:
     profile_skills = {str(x).strip().lower() for x in (profile.get("skills") or []) if str(x).strip()}
@@ -1345,9 +1378,11 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
 
             state["job_leads"]       = leads[: int(state["config"].get("max_jobs", 100))]
             state["jobs_discovered"] = len(state["job_leads"])
+            source_telemetry = getattr(scout, "last_search_telemetry", {}) if scout else {}
             state["layer_debug"]["L3"] = {
                 "queries_or_sources": sorted(list({j.get("source", "unknown") for j in leads})),
                 "sample_jobs": leads[:5],
+                "source_telemetry": source_telemetry,
             }
             _record_eval(
                 state,
@@ -1361,6 +1396,7 @@ async def run_pipeline(run_id: str, resume_path: Path) -> None:
                 3,
                 f"{len(leads)} raw jobs fetched ✓",
                 raw_jobs=len(leads),
+                sources=source_telemetry.get("source_counts", {}),
                 fallback_mode=("demo" if any(j.get("source") == "demo" for j in leads) else "live"),
             )
             state["layers"][3]["output"] = f"{len(leads)} raw jobs fetched"
@@ -2294,6 +2330,26 @@ async def get_feedback(run_id: str):
         "feedback": state.get("feedback_events", []),
         "self_learning_context": state.get("self_learning_context", ""),
     }
+
+
+@app.get("/admin/feedback")
+@traceable(name="api.admin_feedback")
+async def admin_feedback():
+    rows: list[dict[str, Any]] = []
+    for path in sorted(LOGS_DIR.glob("feedback_*.jsonl")):
+        run_id = path.stem.replace("feedback_", "", 1)
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    payload = json.loads(line)
+                    rows.append({"run_id": run_id, **payload})
+        except Exception as exc:
+            rows.append({"run_id": run_id, "source": "system", "text": f"Failed to parse feedback log: {exc}"})
+    rows.sort(key=lambda item: str(item.get("ts") or ""), reverse=True)
+    return {"feedback": rows}
 
 
 @app.post("/hunt/{run_id}/feedback/sync")
