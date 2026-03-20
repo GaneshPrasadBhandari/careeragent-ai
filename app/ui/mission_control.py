@@ -381,13 +381,29 @@ def normalize_api_base(raw: Optional[str]) -> str:
         return ""
     value = value.replace("tips://", "https://").replace("tip://", "https://")
     if "://" not in value:
-        value = f"https://{value}"
+        local_prefixes = ("127.0.0.1", "localhost", "0.0.0.0", "[::1]")
+        scheme = "http" if value.startswith(local_prefixes) else "https"
+        value = f"{scheme}://{value}"
     return value.rstrip("/")
 
 
 DEFAULT_API_BASE = "https://careeragent-api.onrender.com"
+LOCAL_API_CANDIDATES = (
+    "http://127.0.0.1:10000",
+    "http://127.0.0.1:8000",
+    "http://localhost:10000",
+    "http://localhost:8000",
+)
+
 
 def resolve_default_api_base() -> str:
+    for env_key in ("API_URL", "PUBLIC_API_URL"):
+        candidate = normalize_api_base(os.getenv(env_key))
+        if candidate:
+            return candidate
+    for candidate in LOCAL_API_CANDIDATES:
+        if _api_health(candidate):
+            return candidate
     return DEFAULT_API_BASE
 
 
@@ -1624,8 +1640,14 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         """, unsafe_allow_html=True)
 
         # ── API Base URL ──────────────────────────────────────────────────────
-        st.session_state["api_base"] = DEFAULT_API_BASE
-        api_base = normalize_api_base(st.text_input("Backend URL", value=DEFAULT_API_BASE, key="api_base_input", disabled=True, help="Locked to the production FastAPI backend to keep the UI/API bridge stable."))
+        default_api_base = st.session_state.get("api_base") or resolve_default_api_base()
+        api_base = normalize_api_base(st.text_input(
+            "Backend URL",
+            value=default_api_base,
+            key="api_base_input",
+            disabled=False,
+            help="Auto-detects local backends on ports 10000/8000, otherwise falls back to the deployed API. You can override this manually.",
+        ))
         st.session_state["api_base"] = api_base
 
         # ── Health indicator ──────────────────────────────────────────────────
@@ -1809,7 +1831,12 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         start_clicked = st.button("🚀  Start Hunt", disabled=(resume_bytes is None or not is_healthy))
 
         if not is_healthy:
-            st.caption("⚠ Start backend first:\n`uv run uvicorn careeragent.api.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload`")
+            st.caption(
+                f"⚠ Backend is offline for the current URL `{api_base}`. Try one of these:\n"
+                "`uv run uvicorn careeragent.api.main:app --app-dir src --host 127.0.0.1 --port 10000 --reload`\n"
+                "or\n"
+                "`uv run uvicorn careeragent.api.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload`"
+            )
         elif resume_bytes is None:
             st.caption("Upload your resume to begin.")
 
