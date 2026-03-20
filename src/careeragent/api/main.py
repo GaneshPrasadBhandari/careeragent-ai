@@ -943,6 +943,42 @@ def _read_feedback_ledger() -> list[dict]:
     return _prune_feedback_history(rows)
 
 
+def _build_feedback_summary(rows: list[dict]) -> dict[str, Any]:
+    ordered = sorted(rows, key=lambda item: str(item.get("timestamp") or item.get("ts") or ""))
+    daily_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    genuine_count = 0
+    user_ratings: list[int] = []
+
+    for row in ordered:
+        ts = _parse_event_ts(row.get("timestamp") or row.get("ts"))
+        day = ts.date().isoformat()
+        daily_counts[day] = daily_counts.get(day, 0) + 1
+
+        source = str(row.get("source") or "unknown").strip().lower() or "unknown"
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+        evaluation = row.get("evaluation") or {}
+        if evaluation.get("is_genuine"):
+            genuine_count += 1
+
+        rating = row.get("rating")
+        if source == "user" and isinstance(rating, int):
+            user_ratings.append(rating)
+
+    return {
+        "retention_days": FEEDBACK_HISTORY_DAYS,
+        "total_feedback": len(ordered),
+        "genuine_feedback": genuine_count,
+        "rejected_feedback": max(0, len(ordered) - genuine_count),
+        "avg_user_rating": round(sum(user_ratings) / len(user_ratings), 2) if user_ratings else None,
+        "source_counts": source_counts,
+        "daily_counts": [{"date": day, "count": count} for day, count in sorted(daily_counts.items())],
+        "window_start": _feedback_cutoff_dt().isoformat(),
+        "window_end": _utc_now_dt().isoformat(),
+    }
+
+
 def _sync_feedback_to_agent_brain(state: dict) -> str:
     global _GLOBAL_SELF_LEARNING_CONTEXT
 
@@ -2759,7 +2795,7 @@ async def get_feedback(run_id: str):
 async def admin_feedback():
     rows = _read_feedback_ledger()
     rows.sort(key=lambda item: str(item.get("timestamp") or item.get("ts") or ""), reverse=True)
-    return {"feedback": rows}
+    return {"feedback": rows, "summary": _build_feedback_summary(rows)}
 
 
 @app.post("/hunt/{run_id}/feedback/sync")

@@ -46,10 +46,22 @@ def _normalize_selection_value(value: Any) -> str:
 
 
 def qualified_from_state(state: dict[str, Any]) -> list[dict[str, Any]]:
-    """Resolve jobs for L6/L7, but only from explicitly approved rows."""
+    """Resolve downstream jobs, preserving explicit approval semantics for fresh runs."""
+    if "approved_jobs" not in state:
+        return []
+
     approved = list(state.get("approved_jobs") or [])
     if approved:
         return approved
+
+    ranked = list(((state.get("layer_debug") or {}).get("L5") or {}).get("qualified_jobs") or [])
+    if ranked:
+        return ranked
+
+    scored = list(state.get("scored_jobs") or [])
+    if scored:
+        return scored
+
     return []
 
 
