@@ -16,6 +16,7 @@ from careeragent.api.main import (
     _normalize_config,
     _phase6_qualified_jobs,
     _record_feedback_event,
+    _reset_downstream_state,
     _sync_feedback_to_agent_brain,
     _stub_leads,
 )

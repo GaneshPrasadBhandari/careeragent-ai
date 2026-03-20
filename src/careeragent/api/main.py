@@ -1812,6 +1812,36 @@ def _resolve_action_request(body: dict[str, Any] | None) -> tuple[str, dict[str,
     return action, merged
 
 
+def _reset_downstream_state(state: dict[str, Any], *, from_layer: int) -> None:
+    if from_layer <= 5:
+        state["approved_jobs"] = []
+        state["jobs_approved"] = 0
+    if from_layer <= 6:
+        state["artifacts"] = {}
+        state["resume_scores"] = {}
+        state.get("layer_debug", {}).pop("L6", None)
+        if len(state.get("layers") or []) > 6:
+            state["layers"][6]["status"] = "waiting"
+            state["layers"][6]["output"] = None
+            state["layers"][6]["error"] = None
+    if from_layer <= 7:
+        state["apply_results"] = []
+        state["jobs_applied"] = 0
+        state["interviews"] = []
+        state["followup_queue"] = []
+        state.get("layer_debug", {}).pop("L7", None)
+        if len(state.get("layers") or []) > 7:
+            state["layers"][7]["status"] = "waiting"
+            state["layers"][7]["output"] = None
+            state["layers"][7]["error"] = None
+    if from_layer <= 8:
+        state["notification_log"] = []
+        if len(state.get("layers") or []) > 8:
+            state["layers"][8]["status"] = "waiting"
+            state["layers"][8]["output"] = None
+            state["layers"][8]["error"] = None
+
+
 def _persist_tracking(run_id: str, state: dict) -> None:
     try:
         track_file = LOGS_DIR / f"tracking_{run_id}.json"
@@ -2818,6 +2848,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         return {"ok": True, "message": f"follow-up drafts approved ({len(followups)}); resuming"}
 
     if action == "reject_followups":
+        _reset_downstream_state(state, from_layer=8)
         state["pending_action"] = "approve_followups"
         state["status"] = "pending_human_input"
         _log_agent(state, 7, "Follow-up drafts rejected by reviewer. Edit feedback and re-approve.")
@@ -2825,6 +2856,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         return {"ok": True, "message": "follow-up drafts rejected; awaiting revised approval"}
 
     if action == "reject_ranking":
+        _reset_downstream_state(state, from_layer=5)
         state["pending_action"] = None
         state["status"] = "running"
         state["hitl_rejections"] = int(state.get("hitl_rejections", 0)) + 1
@@ -2837,6 +2869,7 @@ async def run_action(run_id: str, background_tasks: BackgroundTasks, body: dict)
         raise HTTPException(400, "resume path missing; cannot re-run")
 
     if action == "reject_drafts":
+        _reset_downstream_state(state, from_layer=6)
         state["pending_action"] = "approve_ranking"
         state["status"] = "pending_human_input"
         _log_agent(state, 6, "Draft package rejected by reviewer. Returning to ranking gate.")
