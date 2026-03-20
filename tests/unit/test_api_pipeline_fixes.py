@@ -4,6 +4,8 @@ pytest.importorskip("fastapi")
 import math
 import os
 
+from careeragent.api.approval_utils import qualified_from_state
+
 from careeragent.api.main import (
     _augment_scored_jobs,
     _build_cover_letter_text,
@@ -221,3 +223,58 @@ def test_stub_leads_allow_naukri_for_india():
         config={"geo_preferences": {"country_selector": "IN", "locations": ["Bengaluru, India"]}},
     )
     assert any("naukri.com" in str(job["url"]).lower() for job in leads)
+
+
+def test_qualified_from_state_requires_explicit_approval():
+    state = {"layer_debug": {"L5": {"qualified_jobs": [{"id": "job-1"}]}}}
+    assert qualified_from_state(state) == []
+    state["approved_jobs"] = [{"id": "job-1"}]
+    assert qualified_from_state(state) == [{"id": "job-1"}]
+
+
+def test_feedback_event_persists_required_identity_fields(tmp_path, monkeypatch):
+    from careeragent.api import main as api_main
+
+    ledger = tmp_path / "feedback_ledger.jsonl"
+    monkeypatch.setattr(api_main, "FEEDBACK_LEDGER_FILE", ledger)
+    state = {
+        "run_id": "run-123",
+        "profile": {"email": "senior@example.com", "experience": [{"title": "Senior Solution Architect", "years": 16}]},
+        "learning_loop": {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0},
+    }
+    event = _record_feedback_event(state, {"source": "user", "rating": 5, "text": "Great architect-level matches."})
+    assert event["timestamp"]
+    assert event["user_email"] == "senior@example.com"
+    assert event["user_role"] == "Senior Solution Architect"
+    assert event["run_id"] == "run-123"
+    assert event["feedback_text"] == "Great architect-level matches."
+
+
+def test_sync_feedback_to_agent_brain_creates_system_instruction_update(tmp_path, monkeypatch):
+    from careeragent.api import main as api_main
+
+    ledger = tmp_path / "feedback_ledger.jsonl"
+    monkeypatch.setattr(api_main, "FEEDBACK_LEDGER_FILE", ledger)
+    state = {
+        "run_id": "run-123",
+        "feedback_events": [{
+            "timestamp": "2026-03-19T12:00:00+00:00",
+            "source": "user",
+            "rating": 5,
+            "text": "Prefer senior architect roles only",
+            "feedback_text": "Prefer senior architect roles only",
+            "user_role": "Senior Solution Architect",
+            "user_email": "senior@example.com",
+            "run_id": "run-123",
+            "meta": {},
+        }],
+        "learning_loop": {"user_feedback": 1, "employer_feedback": 0, "accepted": 1, "rejected": 0},
+        "feedback_learning_state": {"strictness_mode": "balanced", "targeting_mode": "more_targeted"},
+        "employer_outcomes": {},
+        "apply_results": [],
+        "interviews": [],
+        "followup_queue": [],
+    }
+    _sync_feedback_to_agent_brain(state)
+    assert "ranking_reasoner" in state["system_instruction_update"]
+    assert "evaluator_guardrails" in state["system_instruction_update"]

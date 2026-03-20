@@ -25,7 +25,7 @@ import sys
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Optional
 from urllib.parse import quote_plus
@@ -97,6 +97,8 @@ BASE_DIR      = Path(__file__).resolve().parent.parent.parent.parent  # project 
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 LOGS_DIR      = BASE_DIR / "logs"
 UPLOADS_DIR   = BASE_DIR / "uploads"
+FEEDBACK_LEDGER_FILE = LOGS_DIR / "feedback_ledger.jsonl"
+FEEDBACK_HISTORY_DAYS = 7
 
 for d in [ARTIFACTS_DIR, LOGS_DIR, UPLOADS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
@@ -706,6 +708,98 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
+def _utc_now_dt() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_event_ts(value: Any) -> datetime:
+    raw = str(value or "").strip()
+    if not raw:
+        return _utc_now_dt()
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return _utc_now_dt()
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _feedback_cutoff_dt() -> datetime:
+    return _utc_now_dt() - timedelta(days=FEEDBACK_HISTORY_DAYS)
+
+
+def _prune_feedback_history(events: list[dict]) -> list[dict]:
+    cutoff = _feedback_cutoff_dt()
+    kept = [event for event in events if _parse_event_ts(event.get("timestamp") or event.get("ts")) >= cutoff]
+    return kept
+
+
+def _infer_user_role(state: dict, payload: dict, meta: dict) -> str:
+    profile = state.get("profile") or {}
+    config = state.get("config") or {}
+    for candidate in (
+        payload.get("user_role"),
+        meta.get("user_role"),
+        profile.get("target_role"),
+        next((item.get("title") for item in (profile.get("experience") or []) if isinstance(item, dict) and str(item.get("title") or "").strip()), ""),
+        next((str(role).strip() for role in (config.get("target_roles") or []) if str(role).strip()), ""),
+    ):
+        role = str(candidate or "").strip()
+        if role:
+            return role
+    return "Candidate"
+
+
+def _estimate_experience_years(profile: dict) -> Optional[float]:
+    years = []
+    for item in (profile.get("experience") or []):
+        if isinstance(item, dict):
+            try:
+                val = float(item.get("years"))
+            except (TypeError, ValueError):
+                continue
+            if val > 0:
+                years.append(val)
+    return round(sum(years), 1) if years else None
+
+
+def _resolve_feedback_identity(state: dict, payload: dict, meta: dict) -> tuple[str, str, Optional[float]]:
+    profile = state.get("profile") or {}
+    notifications = ((state.get("config") or {}).get("notifications") or {})
+    user_email = str(
+        payload.get("user_email")
+        or meta.get("user_email")
+        or notifications.get("email")
+        or profile.get("email")
+        or "unknown@careeragent.local"
+    ).strip()
+    user_role = _infer_user_role(state, payload, meta)
+    experience_years = _estimate_experience_years(profile)
+    return user_email, user_role, experience_years
+
+
+def _append_feedback_ledger(entry: dict) -> list[dict]:
+    existing: list[dict] = []
+    if FEEDBACK_LEDGER_FILE.exists():
+        with FEEDBACK_LEDGER_FILE.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    existing.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    existing.append(entry)
+    existing = _prune_feedback_history(existing)
+    with FEEDBACK_LEDGER_FILE.open("w", encoding="utf-8") as fh:
+        for row in existing:
+            fh.write(json.dumps(row) + "\n")
+    return existing
+
+
 def _record_feedback_event(state: dict, payload: dict) -> dict:
     source = str(payload.get("source") or "user").strip().lower()
     text = str(payload.get("text") or payload.get("comment") or "").strip()
@@ -714,12 +808,25 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
     if job_id:
         meta["job_id"] = job_id
     rating = _coerce_int(payload.get("rating"))
+    user_email, user_role, experience_years = _resolve_feedback_identity(state, payload, meta)
+    if user_email:
+        meta.setdefault("user_email", user_email)
+    if user_role:
+        meta.setdefault("user_role", user_role)
+    if experience_years is not None:
+        meta.setdefault("experience_years", experience_years)
+    timestamp = _now()
     is_genuine, confidence, reason = _feedback_is_genuine(source, text)
     event = {
-        "ts": _now(),
+        "ts": timestamp,
+        "timestamp": timestamp,
         "source": source,
         "text": text[:600],
+        "feedback_text": text[:600],
         "rating": rating,
+        "run_id": str(payload.get("run_id") or state.get("run_id") or ""),
+        "user_email": user_email,
+        "user_role": user_role,
         "meta": meta,
         "evaluation": {
             "is_genuine": is_genuine,
@@ -727,7 +834,8 @@ def _record_feedback_event(state: dict, payload: dict) -> dict:
             "reason": reason,
         },
     }
-    state.setdefault("feedback_events", []).append(event)
+    state["feedback_events"] = _prune_feedback_history(list(state.get("feedback_events") or []) + [event])
+    _append_feedback_ledger(event)
     loop = state.setdefault("learning_loop", {"user_feedback": 0, "employer_feedback": 0, "accepted": 0, "rejected": 0})
     loop["employer_feedback" if source == "employer" else "user_feedback"] += 1
     loop["accepted" if is_genuine else "rejected"] += 1
@@ -819,17 +927,39 @@ def _summarize_feedback_to_context(feedback_events: list[dict]) -> str:
     return cleaned or _fallback_self_learning_context(feedback_events)
 
 
+def _read_feedback_ledger() -> list[dict]:
+    if not FEEDBACK_LEDGER_FILE.exists():
+        return []
+    rows: list[dict] = []
+    with FEEDBACK_LEDGER_FILE.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return _prune_feedback_history(rows)
+
+
 def _sync_feedback_to_agent_brain(state: dict) -> str:
     global _GLOBAL_SELF_LEARNING_CONTEXT
 
-    feedback_events = list(state.get("feedback_events") or [])
-    context = _summarize_feedback_to_context(feedback_events)
-    state["self_learning_context"] = context
-    state["self_learning_prompt"] = (
-        "Self-Learning Optimization Prompt: "
-        f"{context} "
-        f"{str(state.get('system_prompt_update') or '').strip()}".strip()
+    feedback_events = _prune_feedback_history(list(state.get("feedback_events") or []))
+    ledger_events = _read_feedback_ledger()
+    merged_events = feedback_events + [event for event in ledger_events if event not in feedback_events]
+    context = _summarize_feedback_to_context(merged_events)
+    system_instruction_update = (
+        "Update ranking_reasoner and evaluator_guardrails using the last 7 days of persisted feedback. "
+        f"Prioritize signals from senior candidates such as {', '.join(sorted({str(e.get('user_role') or 'Candidate') for e in merged_events[:5]})) or 'Candidate'}. "
+        f"Self-learning context: {context}"
     )
+    state["feedback_events"] = feedback_events
+    state["self_learning_context"] = context
+    state["system_instruction_update"] = system_instruction_update
+    state["self_learning_prompt"] = "Self-Learning Optimization Prompt: " + system_instruction_update
+    state["system_prompt_update"] = system_instruction_update
     _GLOBAL_SELF_LEARNING_CONTEXT = context
     os.environ["CAREERAGENT_SELF_LEARNING_CONTEXT"] = context
     state["analytics_summary"] = _build_analytics_summary(state)
@@ -1669,6 +1799,7 @@ def _load_run_state_from_disk(run_id: str) -> dict[str, Any] | None:
     if not state_file.exists():
         return None
     data = json.loads(state_file.read_text())
+    data["feedback_events"] = _prune_feedback_history(list(data.get("feedback_events") or []))
     _runs[run_id] = data
     return data
 
@@ -2596,20 +2727,8 @@ async def get_feedback(run_id: str):
 @app.get("/admin/feedback")
 @traceable(name="api.admin_feedback")
 async def admin_feedback():
-    rows: list[dict[str, Any]] = []
-    for path in sorted(LOGS_DIR.glob("feedback_*.jsonl")):
-        run_id = path.stem.replace("feedback_", "", 1)
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    payload = json.loads(line)
-                    rows.append({"run_id": run_id, **payload})
-        except Exception as exc:
-            rows.append({"run_id": run_id, "source": "system", "text": f"Failed to parse feedback log: {exc}"})
-    rows.sort(key=lambda item: str(item.get("ts") or ""), reverse=True)
+    rows = _read_feedback_ledger()
+    rows.sort(key=lambda item: str(item.get("timestamp") or item.get("ts") or ""), reverse=True)
     return {"feedback": rows}
 
 
@@ -2628,7 +2747,7 @@ async def sync_feedback(run_id: str):
         "self_learning_context": context,
     }, indent=2), encoding="utf-8")
     _persist_state(run_id)
-    return {"ok": True, "self_learning_context": context}
+    return {"ok": True, "self_learning_context": context, "system_instruction_update": state.get("system_instruction_update", "")}
 
 
 @app.post("/hunt/{run_id}/action")

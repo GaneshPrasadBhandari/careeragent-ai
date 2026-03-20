@@ -17,16 +17,10 @@ def test_normalize_api_base_rewrites_tips_scheme() -> None:
     assert normalize_api_base("tips://demo.onrender.com/") == "https://demo.onrender.com"
 
 
-def test_resolve_default_api_base_prefers_configured_api_env(monkeypatch) -> None:
+def test_resolve_default_api_base_is_pinned_to_render_backend(monkeypatch) -> None:
     monkeypatch.setenv("API_URL", "127.0.0.1:10000")
-    assert resolve_default_api_base() == "http://127.0.0.1:10000"
-
-
-def test_resolve_default_api_base_uses_reachable_local_backend(monkeypatch) -> None:
-    monkeypatch.delenv("API_URL", raising=False)
-    monkeypatch.delenv("PUBLIC_API_URL", raising=False)
-    monkeypatch.setattr("app.ui.mission_control._api_health", lambda url: url == "http://127.0.0.1:10000")
-    assert resolve_default_api_base() == "http://127.0.0.1:10000"
+    monkeypatch.setenv("PUBLIC_API_URL", "http://localhost:8000")
+    assert resolve_default_api_base() == "https://careeragent-api.onrender.com"
 
 
 def test_job_url_manager_removes_tracking_and_redirects() -> None:
