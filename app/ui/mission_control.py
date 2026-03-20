@@ -680,9 +680,12 @@ def _api_get_feedback(api_base: str, run_id: str) -> list[dict]:
     return resp.get("feedback", []) if resp else []
 
 
+def _api_get_admin_feedback_bundle(api_base: str) -> dict:
+    return _api_get(api_base, "/admin/feedback", timeout=12) or {"feedback": [], "summary": {}}
+
+
 def _api_get_all_feedback(api_base: str) -> list[dict]:
-    resp = _api_get(api_base, "/admin/feedback", timeout=12)
-    return resp.get("feedback", []) if resp else []
+    return _api_get_admin_feedback_bundle(api_base).get("feedback", [])
 
 
 def _api_sync_feedback(api_base: str, run_id: str) -> tuple[bool, str]:
@@ -1515,10 +1518,47 @@ def render_analytics(status: Optional[dict]) -> None:
         st.warning("**Pipeline Errors:**\n" + "\n".join(f"- {e}" for e in errors))
 
 
-def render_admin_analytics(status: Optional[dict]) -> None:
+def render_admin_analytics(status: Optional[dict], admin_feedback_bundle: Optional[dict] = None) -> None:
     st.markdown("#### 🔐 Executive Analytics")
+    admin_feedback_bundle = admin_feedback_bundle or {"feedback": [], "summary": {}}
+    feedback_summary = admin_feedback_bundle.get("summary") or {}
+    all_feedback_rows = admin_feedback_bundle.get("feedback") or []
+
+    retention_days = int(feedback_summary.get("retention_days") or 7)
+    st.caption(f"Feedback is stored cumulatively for the rolling last {retention_days} days to power self-learning refinement.")
+
+    if feedback_summary:
+        a1, a2, a3, a4 = st.columns(4)
+        with a1:
+            st.metric(f"{retention_days}-day feedback", feedback_summary.get("total_feedback", 0))
+        with a2:
+            st.metric("Valid signals", feedback_summary.get("genuine_feedback", 0))
+        with a3:
+            st.metric("Filtered / low-signal", feedback_summary.get("rejected_feedback", 0))
+        with a4:
+            avg = feedback_summary.get("avg_user_rating")
+            st.metric("Avg user rating", avg if avg is not None else "—")
+
+        daily_counts = feedback_summary.get("daily_counts") or []
+        if daily_counts:
+            st.markdown("#### 7-day cumulative feedback trend")
+            st.dataframe(daily_counts, use_container_width=True, hide_index=True)
+
+        source_counts = feedback_summary.get("source_counts") or {}
+        if source_counts:
+            st.markdown("#### Feedback sources in retention window")
+            st.dataframe(
+                [{"Source": key, "Count": value} for key, value in source_counts.items()],
+                use_container_width=True,
+                hide_index=True,
+            )
+
     if not status:
-        st.info("Start a run to inspect evaluator analytics.")
+        if all_feedback_rows:
+            st.markdown("#### Cross-run feedback ledger")
+            st.dataframe(all_feedback_rows[:100], use_container_width=True, hide_index=True)
+        else:
+            st.info("Start a run to inspect evaluator analytics.")
         return
 
     learning_loop = status.get("learning_loop") or {}
@@ -1556,7 +1596,7 @@ def render_admin_analytics(status: Optional[dict]) -> None:
         st.caption("No evaluator decisions captured yet.")
 
     if feedback_events:
-        st.markdown("#### Beta feedback stream")
+        st.markdown("#### Current run feedback stream")
         st.dataframe(
             [
                 {
@@ -1619,6 +1659,10 @@ def render_admin_analytics(status: Optional[dict]) -> None:
         st.markdown("#### Application outcome ledger")
         st.dataframe(apply_results[-20:], use_container_width=True, hide_index=True)
 
+    if all_feedback_rows:
+        st.markdown("#### Cross-run feedback ledger")
+        st.dataframe(all_feedback_rows[:100], use_container_width=True, hide_index=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -1659,7 +1703,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         st.divider()
 
         st.caption("MISSION NAVIGATION")
-        visible_sections = NAV_SECTIONS[:-1] + (["🛡️ Executive Analytics"] if st.session_state.get("admin_auth") else [])
+        visible_sections = NAV_SECTIONS
         active_section = st.radio(
             "Mission navigation",
             visible_sections,
@@ -1957,10 +2001,10 @@ def main():
             "🎓  Learning Center",
             "📊  Analytics",
         ]
-        if show_admin:
-            tab_labels.append("🛡️  Executive Analytics")
+        tab_labels.append("🛡️  Executive Analytics")
         tabs = st.tabs(tab_labels)
-        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics = tabs[:6]
+        tab_summary, tab_pipeline, tab_jobs, tab_match, tab_learn, tab_analytics, tab_admin = tabs
+        admin_feedback_bundle = _api_get_admin_feedback_bundle(api_base) if run_id else {"feedback": [], "summary": {}}
 
         with tab_summary:
             if active_section == "🧾 Executive Summary":
@@ -2014,37 +2058,32 @@ def main():
         with tab_analytics:
             render_analytics(status)
 
-        if show_admin:
-            with tabs[6]:
-                if st.session_state.get("run_id"):
-                    st.markdown("#### Admin feedback intake")
-                    with st.form("beta_feedback_form", clear_on_submit=True):
-                        rating = st.slider("How useful was this run? (%)", 0, 100, 80, 5, format="%d%%", key="beta_feedback_rating")
-                        improve_text = st.text_area(
-                            "What should we improve?",
-                            height=120,
-                            key="beta_feedback_text",
-                            placeholder="Tell us what felt broken, confusing, or missing.",
-                        )
-                        submit_feedback = st.form_submit_button("Send beta feedback")
-                    if submit_feedback:
-                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], max(1, min(5, round(rating / 20) or 1)), improve_text)
-                        (st.success if ok else st.error)(msg)
+        with tab_admin:
+            if not show_admin:
+                st.info("Executive Analytics is available here after you unlock admin access from the left navigation.")
+            if show_admin and st.session_state.get("run_id"):
+                st.markdown("#### Admin feedback intake")
+                with st.form("beta_feedback_form", clear_on_submit=True):
+                    rating = st.slider("How useful was this run? (%)", 0, 100, 80, 5, format="%d%%", key="beta_feedback_rating")
+                    improve_text = st.text_area(
+                        "What should we improve?",
+                        height=120,
+                        key="beta_feedback_text",
+                        placeholder="Tell us what felt broken, confusing, or missing.",
+                    )
+                    submit_feedback = st.form_submit_button("Send beta feedback")
+                if submit_feedback:
+                    ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], max(1, min(5, round(rating / 20) or 1)), improve_text)
+                    (st.success if ok else st.error)(msg)
 
-                    feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
-                    st.markdown("#### Persisted job feedback review")
-                    if feedback_rows:
-                        st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("No persisted feedback rows yet.")
+                feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
+                st.markdown("#### Persisted job feedback review")
+                if feedback_rows:
+                    st.dataframe(feedback_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No persisted feedback rows yet.")
 
-                    st.markdown("#### All-user feedback ledger")
-                    all_feedback_rows = _api_get_all_feedback(api_base)
-                    if all_feedback_rows:
-                        st.dataframe(all_feedback_rows[-100:], use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("No cross-run feedback rows available yet.")
-                render_admin_analytics(status)
+            render_admin_analytics(status, admin_feedback_bundle if show_admin else None)
         render_quick_nav_rail(api_base, run_id, status, show_admin)
     except Exception as exc:
         st.error(f"Mission Control recovered from a dashboard rendering error: {exc}")
