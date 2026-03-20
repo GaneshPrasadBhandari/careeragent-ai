@@ -388,22 +388,9 @@ def normalize_api_base(raw: Optional[str]) -> str:
 
 
 DEFAULT_API_BASE = "https://careeragent-api.onrender.com"
-LOCAL_API_CANDIDATES = (
-    "http://127.0.0.1:10000",
-    "http://127.0.0.1:8000",
-    "http://localhost:10000",
-    "http://localhost:8000",
-)
 
 
 def resolve_default_api_base() -> str:
-    for env_key in ("API_URL", "PUBLIC_API_URL"):
-        candidate = normalize_api_base(os.getenv(env_key))
-        if candidate:
-            return candidate
-    for candidate in LOCAL_API_CANDIDATES:
-        if _api_health(candidate):
-            return candidate
     return DEFAULT_API_BASE
 
 
@@ -629,14 +616,24 @@ def _api_action(api_base: str, run_id: str, action: str, payload: Optional[dict]
     status_after_failure = _api_get_status(api_base, run_id)
     pending_after_failure = str((status_after_failure or {}).get("pending_action") or "").strip().lower()
     run_state = str((status_after_failure or {}).get("status") or "").strip().lower()
-    if action == "approve_ranking" and pending_after_failure != "approve_ranking" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"}:
-        st.warning("Approve Ranked Jobs returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
-        return True
-    if action == "approve_drafts" and pending_after_failure != "approve_drafts" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"}:
-        st.warning("Approve Drafts returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
-        return True
-    if action == "approve_followups" and pending_after_failure != "approve_followups" and run_state in {"running", "completed"}:
-        st.warning("Approve Follow-ups returned a transient gateway error, but the backend state moved forward. Refreshing the run view.")
+    transient_success_messages = {
+        "approve_ranking": "Approve Ranked Jobs returned a transient gateway error, but the backend state moved forward. Refreshing the run view.",
+        "approve_drafts": "Approve Drafts returned a transient gateway error, but the backend state moved forward. Refreshing the run view.",
+        "approve_followups": "Approve Follow-ups returned a transient gateway error, but the backend state moved forward. Refreshing the run view.",
+        "reject_ranking": "Reject & Re-plan returned a transient gateway error, but the backend state moved forward. Refreshing the run view.",
+        "reject_drafts": "Reject Drafts returned a transient gateway error, but the backend state moved back to ranking review. Refreshing the run view.",
+        "reject_followups": "Reject Follow-ups returned a transient gateway error, but the backend state stayed on follow-up review. Refreshing the run view.",
+    }
+    action_advanced = (
+        (action == "approve_ranking" and pending_after_failure != "approve_ranking" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"})
+        or (action == "approve_drafts" and pending_after_failure != "approve_drafts" and run_state in {"running", "pending_human_input", "needs_human_approval", "completed"})
+        or (action == "approve_followups" and pending_after_failure != "approve_followups" and run_state in {"running", "completed"})
+        or (action == "reject_ranking" and run_state in {"running", "pending_human_input", "needs_human_approval"} and pending_after_failure != "approve_drafts")
+        or (action == "reject_drafts" and pending_after_failure == "approve_ranking" and run_state in {"pending_human_input", "needs_human_approval"})
+        or (action == "reject_followups" and pending_after_failure == "approve_followups" and run_state in {"pending_human_input", "needs_human_approval"})
+    )
+    if action_advanced:
+        st.warning(transient_success_messages.get(action, "Action returned a transient gateway error, but the backend state moved forward. Refreshing the run view."))
         return True
 
     st.error(last_error or "Action request failed for an unknown reason.")
@@ -1193,9 +1190,9 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         return
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
-    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 5, key="job_board_score_filter")
+    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 1, format="%d%%", key="job_board_score_filter")
     min_score = min_score_pct / 100.0
-    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5, key="job_board_interview_filter")
+    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 1, format="%d%%", key="job_board_interview_filter")
     only_remote = st.checkbox("Show remote only in board", value=False, key="job_board_remote_only")
 
     filtered = [
@@ -1641,13 +1638,14 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         # ── API Base URL ──────────────────────────────────────────────────────
         default_api_base = st.session_state.get("api_base") or resolve_default_api_base()
-        api_base = normalize_api_base(st.text_input(
+        api_base = DEFAULT_API_BASE
+        st.text_input(
             "Backend URL",
-            value=default_api_base,
+            value=api_base,
             key="api_base_input",
-            disabled=False,
-            help="Auto-detects local backends on ports 10000/8000, otherwise falls back to the deployed API. You can override this manually.",
-        ))
+            disabled=True,
+            help="All UI API calls are pinned to the Render backend URL for this branch.",
+        )
         st.session_state["api_base"] = api_base
 
         # ── Health indicator ──────────────────────────────────────────────────
@@ -1719,7 +1717,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
         selected_region_code = region_options[selected_region_label]
 
         remote_only = st.checkbox("Remote Only", value=True)
-        threshold_pct = st.slider("Match Threshold (%)", 0, 100, 45, 5,
+        threshold_pct = st.slider("Match Threshold (%)", 0, 100, 45, 5, format="%d%%",
                                   help="Minimum score for a job to qualify")
         threshold = threshold_pct / 100.0
         posted_hours = st.selectbox(
@@ -1786,7 +1784,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                     placeholder="Example: Referral, Friend, Hiring manager",
                     disabled=sidebar_source != "Other",
                 )
-                sidebar_rating = st.slider("Run feedback", 1, 5, 4, 1, key="sidebar_feedback_rating")
+                sidebar_rating = st.slider("Run feedback (%)", 0, 100, 80, 5, format="%d%%", key="sidebar_feedback_rating")
                 sidebar_text = st.text_area(
                     "What should improve?",
                     height=100,
@@ -1802,7 +1800,7 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
                     api_base,
                     st.session_state["run_id"],
                     source=normalized_source,
-                    rating=sidebar_rating,
+                    rating=max(1, min(5, round(sidebar_rating / 20) or 1)),
                     text=f"[{source_label}] {body}",
                     meta={"channel": source_label, "source_label": source_label},
                 )
@@ -2021,7 +2019,7 @@ def main():
                 if st.session_state.get("run_id"):
                     st.markdown("#### Admin feedback intake")
                     with st.form("beta_feedback_form", clear_on_submit=True):
-                        rating = st.slider("How useful was this run?", 1, 5, 4, 1, key="beta_feedback_rating")
+                        rating = st.slider("How useful was this run? (%)", 0, 100, 80, 5, format="%d%%", key="beta_feedback_rating")
                         improve_text = st.text_area(
                             "What should we improve?",
                             height=120,
@@ -2030,7 +2028,7 @@ def main():
                         )
                         submit_feedback = st.form_submit_button("Send beta feedback")
                     if submit_feedback:
-                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], rating, improve_text)
+                        ok, msg = _api_post_feedback(api_base, st.session_state["run_id"], max(1, min(5, round(rating / 20) or 1)), improve_text)
                         (st.success if ok else st.error)(msg)
 
                     feedback_rows = _api_get_feedback(api_base, st.session_state["run_id"])
