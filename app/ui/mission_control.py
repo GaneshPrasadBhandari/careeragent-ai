@@ -388,22 +388,9 @@ def normalize_api_base(raw: Optional[str]) -> str:
 
 
 DEFAULT_API_BASE = "https://careeragent-api.onrender.com"
-LOCAL_API_CANDIDATES = (
-    "http://127.0.0.1:10000",
-    "http://127.0.0.1:8000",
-    "http://localhost:10000",
-    "http://localhost:8000",
-)
 
 
 def resolve_default_api_base() -> str:
-    for env_key in ("API_URL", "PUBLIC_API_URL"):
-        candidate = normalize_api_base(os.getenv(env_key))
-        if candidate:
-            return candidate
-    for candidate in LOCAL_API_CANDIDATES:
-        if _api_health(candidate):
-            return candidate
     return DEFAULT_API_BASE
 
 
@@ -1193,9 +1180,9 @@ def render_job_board(api_base: str, run_id: Optional[str], status: Optional[dict
         return
 
     st.markdown(f'<div class="section-header">{len(jobs)} Jobs Found</div>', unsafe_allow_html=True)
-    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 5, key="job_board_score_filter")
+    min_score_pct = st.slider("Job board score filter (%)", 0, 100, 45, 1, format="%d%%", key="job_board_score_filter")
     min_score = min_score_pct / 100.0
-    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 5, key="job_board_interview_filter")
+    min_interview = st.slider("Interview call prediction filter (%)", 0, 100, 35, 1, format="%d%%", key="job_board_interview_filter")
     only_remote = st.checkbox("Show remote only in board", value=False, key="job_board_remote_only")
 
     filtered = [
@@ -1641,13 +1628,14 @@ def render_sidebar() -> tuple[str, Optional[bytes], Optional[str], Optional[str]
 
         # ── API Base URL ──────────────────────────────────────────────────────
         default_api_base = st.session_state.get("api_base") or resolve_default_api_base()
-        api_base = normalize_api_base(st.text_input(
+        api_base = DEFAULT_API_BASE
+        st.text_input(
             "Backend URL",
-            value=default_api_base,
+            value=api_base,
             key="api_base_input",
-            disabled=False,
-            help="Auto-detects local backends on ports 10000/8000, otherwise falls back to the deployed API. You can override this manually.",
-        ))
+            disabled=True,
+            help="All UI API calls are pinned to the Render backend URL for this branch.",
+        )
         st.session_state["api_base"] = api_base
 
         # ── Health indicator ──────────────────────────────────────────────────

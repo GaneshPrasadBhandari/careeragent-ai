@@ -46,23 +46,10 @@ def _normalize_selection_value(value: Any) -> str:
 
 
 def qualified_from_state(state: dict[str, Any]) -> list[dict[str, Any]]:
-    """Resolve jobs for L6 drafting with resilient fallbacks."""
+    """Resolve jobs for L6/L7, but only from explicitly approved rows."""
     approved = list(state.get("approved_jobs") or [])
     if approved:
         return approved
-
-    qualified = list(state.get("layer_debug", {}).get("L5", {}).get("qualified_jobs") or [])
-    if qualified:
-        return qualified
-
-    scored = list(state.get("scored_jobs") or [])
-    if scored:
-        return scored[:DEFAULT_APPROVAL_FALLBACK_COUNT]
-
-    raw_preview = list(state.get("approved_jobs_preview") or [])
-    if raw_preview:
-        return raw_preview[:DEFAULT_APPROVAL_FALLBACK_COUNT]
-
     return []
 
 
