@@ -22,6 +22,7 @@ Instead of solving one narrow task, the platform orchestrates the end-to-end pro
 
 ### Demo Videos
 - **Recruiter-friendly walkthrough (8–15 min, no voice):** https://youtu.be/_IpHNsKfmmE
+- **Beta_demo_phase6-a walkthrough (13.37 min, no voice):** https://youtu.be/_zx9IwQGjr8
 - **Deep technical walkthrough:** https://www.youtube.com/watch?v=xI3dF-FLsy8&t=2255s
 
 ### Why this project matters
