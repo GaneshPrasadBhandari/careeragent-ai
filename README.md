@@ -18,6 +18,7 @@ CareerAgent-AI Phase 6 is now deployed for live beta testing.
 - **Dashboard UI:** [https://careeragent-dashboard.onrender.com](https://careeragent-dashboard.onrender.com)
 - **API Docs:** [https://careeragent-api.onrender.com/docs](https://careeragent-api.onrender.com/docs)
 - **Health Check:** [https://careeragent-api.onrender.com/health](https://careeragent-api.onrender.com/health)
+- **Watch the full deep dive beta demo here:** (https://youtu.be/_zx9IwQGjr8)
 
 ### What can be tested in this beta
 - Mission Control dashboard
