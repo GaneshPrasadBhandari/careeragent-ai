@@ -35,6 +35,23 @@ Instead of solving one narrow task, the platform orchestrates the full lifecycle
 - **Current production-style API Health:** https://careeragent-ai-api.duckdns.org/health
 - **MLflow Tracking Portal:** https://careeragent-ai-mlflow.duckdns.org
 
+
+### Selected Tech Stack
+- Python
+- FastAPI
+- Streamlit
+- LangGraph
+- LangSmith
+- MLflow
+- DVC
+- DagsHub
+- Docker
+- GitHub Actions
+- SQLite
+- DuckDNS
+- Oracle Cloud
+
+
 ### Why this project matters
 CareerAgent-AI demonstrates my ability to design and build beyond prototypes by combining:
 
@@ -165,7 +182,7 @@ This research artifact highlights my hands-on work in:
 - **Clinical Decision Support Systems (CDSS)**
 
 ### Bone Tumor Detection (YOLOv8) — CDSS Manuscript
-**Status:** Manuscript in revision
+**Status:** Research manuscript in revision, based on YOLOv8-driven bone tumor detection and CDSS-oriented medical imaging workflows.
 
 This research reflects applied depth in:
 - medical imaging AI
@@ -200,6 +217,8 @@ This research reflects applied depth in:
 - model evaluation
 - explainability
 - analytics-oriented AI workflows
+- computer vision
+- medical imaging AI
 
 ### Cloud / MLOps / Productization
 - Docker
