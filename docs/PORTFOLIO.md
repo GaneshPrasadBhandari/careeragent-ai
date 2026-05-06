@@ -86,7 +86,7 @@ CareerAgent-AI demonstrates my ability to design and build beyond prototypes by 
 
 ### Runtime evidence
 See:
-- `docs/runtime_screenshots/`
+- [`docs/runtime_screenshots/`](./runtime_screenshots/)
 - runtime traces
 - evaluator decisions
 - guardrail proof
