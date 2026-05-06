@@ -608,38 +608,38 @@ Privacy masking for **Name, Email, and Phone** is implemented and verified with 
 CareerAgent-AI includes runtime proof artifacts to demonstrate that the system is not just architected on paper, but is observable, governed, and operational in practice.
 
 ### Core Product UI
-![CareerAgent-AI App](docs/runtime_screenshorts/app_screenshot.png)
+![CareerAgent-AI App](docs/runtime_screenshots/app_screenshot.png)
 
 ### LangGraph Agent Orchestration
-![LangGraph Agents Graph](docs/runtime_screenshorts/langgraph_agents_graphs.png)
+![LangGraph Agents Graph](docs/runtime_screenshots/langgraph_agents_graphs.png)
 
 ### LangSmith Tracing and Agent Observability
-![LangSmith Dashboard](docs/runtime_screenshorts/langsmith_dashboard1.png)
+![LangSmith Dashboard](docs/runtime_screenshots/langsmith_dashboard1.png)
 
 ### Evaluator Decision Layer
-![Evaluator Decisions](docs/runtime_screenshorts/evaluators_decisions.png)
+![Evaluator Decisions](docs/runtime_screenshots/evaluators_decisions.png)
 
 ### Guardrails and Data Control
-![DVC Guardrail](docs/runtime_screenshorts/dvc_guardrail.png)
+![DVC Guardrail](docs/runtime_screenshots/dvc_guardrail.png)
 
 ### Bias Auditing
-![Bias Audit](docs/runtime_screenshorts/bias_audit1.png)
+![Bias Audit](docs/runtime_screenshots/bias_audit1.png)
 
 ### Debugger / Self-Healing Proof
-![Debugger Report](docs/runtime_screenshorts/debugger_lab_report1.png)
+![Debugger Report](docs/runtime_screenshots/debugger_lab_report1.png)
 
 ### Human-in-the-Loop Approval Workflow
-![Approval Notification](docs/runtime_screenshorts/email_approval_notification2.png)
+![Approval Notification](docs/runtime_screenshots/email_approval_notification2.png)
 
 ### Live Execution Telemetry
-![Live Apply Telemetry](docs/runtime_screenshorts/liveapply_execution_telematry.png)
+![Live Apply Telemetry](docs/runtime_screenshots/liveapply_execution_telematry.png)
 
 ### Additional Evidence
 For the complete runtime evidence set, including executive analytics, MLflow, DagsHub, CI/CD, self-healing reports, email workflows, and product dashboard screenshots, see:
 
-- [`docs/runtime_screenshorts/`](docs/runtime_screenshorts/)
-- [`docs/runtime_screenshorts/Executive Analytics (Admin).pdf`](docs/runtime_screenshorts/Executive%20Analytics%20(Admin).pdf)
-- [`docs/runtime_screenshorts/product_dashboard_screenshots.pdf`](docs/runtime_screenshorts/product_dashboard_screenshots.pdf)artifacts help demonstrate that CareerAgent-AI is not only architected well, but also **observable, governable, and operational**.
+- [`docs/runtime_screenshots/`](docs/runtime_screenshots/)
+- [`docs/runtime_screenshots/Executive Analytics (Admin).pdf`](docs/runtime_screenshots/Executive%20Analytics%20(Admin).pdf)
+- [`docs/runtime_screenshots/product_dashboard_screenshots.pdf`](docs/runtime_screenshots/product_dashboard_screenshots.pdf)artifacts help demonstrate that CareerAgent-AI is not only architected well, but also **observable, governable, and operational**.
 
 ---
 
