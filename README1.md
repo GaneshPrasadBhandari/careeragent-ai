@@ -15,11 +15,13 @@ This project is not just a capstone or demo. It is a **startup-ready AI platform
 
 ## Live Demo and Beta Validation
 
-CareerAgent-AI has also been demonstrated through public beta deployments and deep-dive walkthroughs.
+CareerAgent-AI has been demonstrated through both **historical public beta deployments** and a **production-refined deployment path**.
+
+This repository includes both historical public beta proof from the earlier Render deployment and the current production-style Oracle Cloud deployment exposed via DuckDNS.
 
 ### Public Proof
-- **Beta Demo Video:** [YouTube Deep Dive](https://youtu.be/_zx9IwQGjr8)
-- **Production Demo Video:** [YouTube Deep Dive](https://www.youtube.com/watch?v=_IpHNsKfmmE&t=14s)
+- **Beta Demo Video:** [Phase 6 Public Beta Walkthrough](https://youtu.be/_zx9IwQGjr8)
+- **Production Demo Video:** [Production Refined Walkthrough](https://www.youtube.com/watch?v=_IpHNsKfmmE&t=14s)
 - **Historical Public Beta UI:** [careeragent-dashboard.onrender.com](https://careeragent-dashboard.onrender.com)
 - **Historical Public Beta API Docs:** [careeragent-api.onrender.com/docs](https://careeragent-api.onrender.com/docs)
 - **Historical Public Beta Health Check:** [careeragent-api.onrender.com/health](https://careeragent-api.onrender.com/health)
