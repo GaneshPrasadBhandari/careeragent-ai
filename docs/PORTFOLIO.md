@@ -14,6 +14,8 @@ My work focuses on turning AI from isolated demos into **operational systems** t
 **Primary Public Repository:**  
 https://github.com/GaneshPrasadBhandari/careeragent-ai
 
+This repository is the public showcase version of CareerAgent-AI, supported by live demos, runtime evidence, and production-style deployment proof.
+
 CareerAgent-AI is a **production-grade, 10-layer agentic AI operating system** designed to transform fragmented job-search tasks into one governed, explainable, and continuously improving workflow.
 
 It addresses a real workflow problem in modern job searching: fragmented tools, repetitive application work, weak tracking, low decision continuity, and very limited governance across the end-to-end process.
@@ -31,7 +33,7 @@ Instead of solving one narrow task, the platform orchestrates the full lifecycle
 - **Historical public beta Health Check:** https://careeragent-api.onrender.com/health
 - **Current production-style UI:** https://careeragent-ai.duckdns.org
 - **Current production-style API Health:** https://careeragent-ai-api.duckdns.org/health
-- **Current MLflow endpoint:** https://careeragent-ai-mlflow.duckdns.org
+- **MLflow Tracking Portal:** https://careeragent-ai-mlflow.duckdns.org
 
 ### Why this project matters
 CareerAgent-AI demonstrates my ability to design and build beyond prototypes by combining:
@@ -41,7 +43,7 @@ CareerAgent-AI demonstrates my ability to design and build beyond prototypes by 
 - **evaluator-driven workflow control**
 - **human-in-the-loop approvals**
 - **governance-first system design**
-- **ATS-aware document and workflow generation**
+- **ATS-aware document generation and governed workflow automation**
 - **runtime observability and tracing**
 - **CI/CD, MLOps, and deployment-oriented engineering**
 - **product analytics, executive visibility, and continuous improvement loops**
