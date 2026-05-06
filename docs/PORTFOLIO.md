@@ -96,6 +96,27 @@ See:
 
 ---
 
+
+### Selected Visual Proof
+
+These selected screenshots provide quick visual proof that CareerAgent-AI is not just a concept or architecture document, but a working, observable, and governed agentic AI system.
+
+#### Main Product UI
+![CareerAgent-AI App](./runtime_screenshots/app_screenshot.png)
+
+#### LangGraph Agent Orchestration
+![LangGraph Agents Graph](./runtime_screenshots/langgraph_agents_graphs.png)
+
+#### LangSmith Tracing and Agent Observability
+![LangSmith Dashboard](./runtime_screenshots/langsmith_dashboard1.png)
+
+#### Evaluator Decision Layer
+![Evaluator Decisions](./runtime_screenshots/evaluators_decisions.png)
+
+#### Bias Audit / Responsible AI View
+![Bias Audit](./runtime_screenshots/bias_audit1.png)
+
+
 ## 2) Published Architecture Artifacts
 
 These published architecture assets reflect my broader focus: **real-world AI systems designed for operational environments, governance, and execution depth** rather than proof-of-concept demos.
