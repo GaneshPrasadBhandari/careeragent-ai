@@ -3,8 +3,8 @@
 **Bhandari, G. P. (2026).**  
 *CareerAgent-AI: A Production-Grade 10-Layer Agentic AI Operating System for Governed Career Automation (v1.0).*  
 
-📘 **Technical Whitepaper (Zenodo/CERN):** **[https://doi.org/10.5281/zenodo.20299197]**  
-📌 **DOI:** **[[https://doi.org/10.5281/zenodo.20320123](https://doi.org/10.5281/zenodo.20299197)]**  
+📘 **Technical Whitepaper (Zenodo/CERN):** **https://doi.org/10.5281/zenodo.20299197**  
+📌 **DOI:** **[https://doi.org/10.5281/zenodo.20320123](https://doi.org/10.5281/zenodo.20299197)**  
 🚀 **Newsletter:** [Join AI Vanguard on LinkedIn](https://www.linkedin.com/newsletters/7220489256505331712/)  
 🧬 **ORCID:** https://orcid.org/0009-0002-7308-4279  
 ▶️ **YouTube:** [AIInovateHub](https://www.youtube.com/@AIINOVATEHUB)  
