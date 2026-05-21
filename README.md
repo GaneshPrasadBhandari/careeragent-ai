@@ -1,7 +1,7 @@
 ## 🎓 Cite this Research & Authority
 
 **Bhandari, G. P. (2026).**  
-*Agentic Legal & Compliance Command Center: A Production-Grade AI Flight Computer for Governed, Auditable, and Self-Healing Enterprise Legal Workflows (v1.0).*  
+*CareerAgent-AI: A Production-Grade 10-Layer Agentic AI Operating System for Governed Career Automation (v1.0).*  
 
 📘 **Technical Whitepaper (Zenodo/CERN):** **[https://doi.org/10.5281/zenodo.20299197]**  
 📌 **DOI:** **[[https://doi.org/10.5281/zenodo.20320123](https://doi.org/10.5281/zenodo.20299197)]**  
