@@ -168,6 +168,8 @@ This makes it suitable for:
 ## 5. System Architecture
 
 ![CareerAgent-AI Architecture](./CareerAgent-AI_Architecture.png)
+![CareerAgent-AI Architecture](./agentic_ai_full_pipeline_flowchart.png)
+
 
 > **Figure 1.** CareerAgent-AI architecture blueprint — a governed, multi-layered agentic AI operating system spanning user entry, orchestration, manager reasoning, execution agents, approvals, analytics, memory/models, and governance/ops.
 
