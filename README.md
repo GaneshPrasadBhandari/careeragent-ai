@@ -168,6 +168,8 @@ This makes it suitable for:
 ## 5. System Architecture
 
 ![CareerAgent-AI Architecture](./CareerAgent-AI_Architecture.png)
+
+## Agentic-AI Pipeline flowchart
 ![CareerAgent-AI Architecture](./agentic_ai_full_pipeline_flowchart.png)
 
 
