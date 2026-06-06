@@ -174,7 +174,7 @@ This makes it suitable for:
 
 
 ## Standard Agentic-AI Pipeline flowchart
-![CareerAgent-AI Architecture](./agentic_ai_full_pipeline_flowchart.png)
+![CareerAgent-AI Architecture](./agentic_ai_full_pipeline_reference.png)
 
 ---
 
